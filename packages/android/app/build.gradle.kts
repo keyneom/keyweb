@@ -5,16 +5,37 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Release signing is configured from a gitignored keystore.properties so the
-// keystore and its password never enter version control.
-val keystoreProperties = Properties().apply {
+/*
+ * Release signing resolves from the environment first so CI can restore the
+ * keystore from GitHub secrets, exactly as easy-bc does. A local
+ * keystore.properties (gitignored) fills in for developer machines. If neither
+ * is complete the release build stays unsigned rather than silently falling
+ * back to the debug key, which would ship an APK nobody can upgrade.
+ */
+private val localKeystore = Properties().apply {
     val file = rootProject.file("keystore.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+private fun signingValue(env: String, local: String): String? =
+    providers.environmentVariable(env).orNull?.takeIf { it.isNotBlank() }
+        ?: localKeystore.getProperty(local)?.takeIf { it.isNotBlank() }
+
+val releaseKeystoreFile = signingValue("ANDROID_KEYSTORE_FILE", "storeFile")
+val releaseKeystorePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassword")
+val releaseKeyAlias = signingValue("ANDROID_KEY_ALIAS", "keyAlias")
+val releaseKeyPassword = signingValue("ANDROID_KEY_PASSWORD", "keyPassword")
+
+val releaseSigningEnabled = listOf(
+    releaseKeystoreFile,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "app.keyweb"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "app.keyweb"
@@ -25,12 +46,12 @@ android {
     }
 
     signingConfigs {
-        if (keystoreProperties.containsKey("storeFile")) {
+        if (releaseSigningEnabled) {
             create("release") {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = rootProject.file(releaseKeystoreFile!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
@@ -38,7 +59,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (keystoreProperties.containsKey("storeFile")) {
+            if (releaseSigningEnabled) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
