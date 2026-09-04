@@ -1,0 +1,348 @@
+/* Keyweb component styles. Every interactive control is at least --tap tall,
+   every icon is paired with a word, and nothing is reachable only by gesture. */
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1rem 6rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1rem 0 0.85rem;
+}
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+  font-size: 1.05em;
+  letter-spacing: -0.01em;
+}
+.topbar .brand svg {
+  width: 1.3em;
+  height: 1.3em;
+  color: var(--brass);
+}
+.topbar .spacer {
+  margin-left: auto;
+}
+
+.iconbtn {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0 0.75rem;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.86em;
+  font-weight: 650;
+  cursor: pointer;
+}
+.iconbtn:hover {
+  border-color: var(--accent);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: var(--tap);
+  background: var(--surface);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0 0.95rem;
+}
+.search:focus-within {
+  border-color: var(--accent);
+}
+.search svg {
+  width: 1.15em;
+  height: 1.15em;
+  color: var(--muted);
+  flex: none;
+}
+.search input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: none;
+  min-height: var(--tap);
+}
+
+.rings {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.85rem 0 0.25rem;
+}
+.ring {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 0.45rem 0.85rem;
+  min-height: calc(var(--tap) - 8px);
+  font-size: 0.88em;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ring[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ring i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.status {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  border-radius: var(--radius);
+  padding: 0.8rem 0.95rem;
+  font-size: 0.9em;
+  border: 1px solid transparent;
+  margin: 0.9rem 0;
+}
+.status svg {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+  margin-top: 0.1em;
+}
+.status b {
+  display: block;
+  font-weight: 650;
+}
+.status em {
+  font-style: normal;
+  display: block;
+  opacity: 0.9;
+  font-size: 0.94em;
+}
+.status[data-tone="safe"] {
+  background: var(--safe-bg);
+  color: var(--safe);
+  border-color: var(--safe);
+}
+.status[data-tone="attn"] {
+  background: var(--attn-bg);
+  color: var(--attn);
+  border-color: var(--attn);
+}
+.status[data-tone="risk"] {
+  background: var(--risk-bg);
+  color: var(--risk);
+  border-color: var(--risk);
+}
+.status[data-tone="calm"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.list {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-height: var(--row);
+  padding: 0.6rem 0.95rem;
+  border-bottom: 1px solid var(--line-soft);
+  width: 100%;
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.row:hover {
+  background: var(--accent-soft);
+}
+.avatar {
+  width: 2.3em;
+  height: 2.3em;
+  border-radius: 10px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.86em;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rowtext {
+  min-width: 0;
+  flex: 1;
+}
+.rowtext b {
+  display: block;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowtext span {
+  display: block;
+  font-size: 0.84em;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  padding: 0 1.25rem;
+  border-radius: var(--radius);
+  font-weight: 650;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.btn svg {
+  width: 1.15em;
+  height: 1.15em;
+}
+.btn.pri {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.btn.sec {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--line);
+}
+.btn.danger {
+  background: var(--surface);
+  color: var(--risk);
+  border-color: var(--risk);
+}
+.btn.big {
+  width: 100%;
+  min-height: calc(var(--tap) + 12px);
+  font-size: 1.05em;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.field {
+  display: block;
+  margin-bottom: 1rem;
+}
+.field > span {
+  display: block;
+  font-size: 0.86em;
+  font-weight: 650;
+  margin-bottom: 0.35rem;
+}
+.field .box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: var(--tap);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0 0.9rem;
+}
+.field .box:focus-within {
+  border-color: var(--accent);
+}
+.field .box input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: none;
+  min-height: var(--tap);
+  min-width: 0;
+}
+.field .hint {
+  display: block;
+  font-size: 0.8em;
+  color: var(--muted);
+  margin-top: 0.35rem;
+}
+.field .hint.warn {
+  color: var(--attn);
+  font-weight: 600;
+}
+
+.stack {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.screen-title {
+  font-size: 1.35em;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin: 0.4rem 0 0.2rem;
+}
+.screen-sub {
+  color: var(--muted);
+  font-size: 0.94em;
+  margin: 0 0 1rem;
+}
+
+.mono {
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--muted);
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 1.25rem;
+  z-index: 20;
+  max-width: min(560px, calc(100% - 2rem));
+  box-shadow: var(--shadow);
+  margin: 0;
+}
+
+.sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to top, var(--paper) 65%, transparent);
+  padding: 1rem 0 1.25rem;
+  margin-top: auto;
+}

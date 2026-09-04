@@ -1,0 +1,145 @@
+/*
+ * Keyweb design tokens — "Brass & Slate".
+ *
+ * Two rules this file exists to enforce:
+ *
+ *  1. The brand accent (steel, brass) and the status colours (safe, attention,
+ *     risk) never share a hue. In a password manager green has to be free to
+ *     mean "safe", so it can never also mean "branded".
+ *
+ *  2. Text size is a setting, not an accessibility afterthought. Everything
+ *     sizes off --base and --tap, which the "Larger text" switch changes; no
+ *     component hard-codes a pixel size.
+ */
+
+:root {
+  color-scheme: light;
+
+  --paper: #f4f2ed;
+  --surface: #ffffff;
+  --surface-sunk: #eae7df;
+  --ink: #16202b;
+  --muted: #5b6672;
+  --line: #dcd8cf;
+  --line-soft: #edeae3;
+
+  --accent: #2b3f53;
+  --on-accent: #ffffff;
+  --accent-soft: #e3eaf1;
+  --brass: #a9832f;
+
+  --safe: #1d6b4f;
+  --safe-bg: #e0f0e7;
+  --attn: #8a4f0b;
+  --attn-bg: #faebd8;
+  --risk: #a32c22;
+  --risk-bg: #f9e2e0;
+
+  --shadow: 0 1px 2px rgba(22, 32, 43, 0.07), 0 8px 24px rgba(22, 32, 43, 0.07);
+
+  --base: 17px;
+  --row: 64px;
+  --tap: 48px;
+  --radius: 14px;
+
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #11161c;
+    --surface: #1a222b;
+    --surface-sunk: #0d1218;
+    --ink: #e9ecef;
+    --muted: #93a0ad;
+    --line: #2c3742;
+    --line-soft: #222b34;
+    --accent: #8fb3d4;
+    --on-accent: #0e151c;
+    --accent-soft: #22303d;
+    --brass: #d7b45e;
+    --safe: #63c79a;
+    --safe-bg: #153029;
+    --attn: #e3a551;
+    --attn-bg: #332714;
+    --risk: #f0857b;
+    --risk-bg: #3a1d1b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #11161c;
+  --surface: #1a222b;
+  --surface-sunk: #0d1218;
+  --ink: #e9ecef;
+  --muted: #93a0ad;
+  --line: #2c3742;
+  --line-soft: #222b34;
+  --accent: #8fb3d4;
+  --on-accent: #0e151c;
+  --accent-soft: #22303d;
+  --brass: #d7b45e;
+  --safe: #63c79a;
+  --safe-bg: #153029;
+  --attn: #e3a551;
+  --attn-bg: #332714;
+  --risk: #f0857b;
+  --risk-bg: #3a1d1b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-text="large"] {
+  --base: 20px;
+  --row: 80px;
+  --tap: 56px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: var(--base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus is visible, brass, and the same everywhere. It is the one place brass
+   appears outside the wordmark. */
+:focus-visible {
+  outline: 3px solid var(--brass);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
