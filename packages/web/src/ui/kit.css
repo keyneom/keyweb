@@ -342,7 +342,19 @@
 .sticky-actions {
   position: sticky;
   bottom: 0;
-  background: linear-gradient(to top, var(--paper) 65%, transparent);
+  /* Solid, not a gradient: a translucent footer lets the text underneath show
+     through the button and read as a rendering fault. */
+  background: var(--paper);
   padding: 1rem 0 1.25rem;
   margin-top: auto;
+  box-shadow: 0 -12px 16px -12px rgba(0, 0, 0, 0.18);
+}
+
+/* With an on-screen keyboard up the viewport is short enough that a pinned
+   footer would sit on top of the last field. Let it scroll instead. */
+@media (max-height: 620px) {
+  .sticky-actions {
+    position: static;
+    box-shadow: none;
+  }
 }

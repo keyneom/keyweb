@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brass and Slate. Brass is identity only and never a status colour. -->
+    <color name="keyweb_steel">#2B3F53</color>
+    <color name="keyweb_paper">#F4F2ED</color>
+    <color name="keyweb_brass">#A9832F</color>
+</resources>
