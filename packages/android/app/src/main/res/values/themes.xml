@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Keyweb" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:statusBarColor">@color/keyweb_steel</item>
-        <item name="android:navigationBarColor">@color/keyweb_paper</item>
+    <!-- Compose paints the app; this only styles the pre-Compose splash window
+         so the launch does not flash a white rectangle before the vault draws. -->
+    <style name="Theme.Keyweb" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/keyweb_paper</item>
     </style>
 </resources>
