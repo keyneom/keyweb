@@ -12,3 +12,7 @@ packages/android/app/src/main/assets/
 *.keystore
 *.jks
 keystore.properties
+
+# Local environment
+.env.local
+.env
