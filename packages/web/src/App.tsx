@@ -4,6 +4,7 @@ import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
+import { Unlock } from "./screens/Unlock";
 import { VaultList } from "./screens/VaultList";
 import { useDisplaySettings } from "./vault/useDisplaySettings";
 import { useVault } from "./vault/useVault";
@@ -27,10 +28,23 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  if (!vault.ready) {
+  if (vault.phase === "checking") {
     return (
       <main className="app">
         <p className="empty">Opening your vault…</p>
+      </main>
+    );
+  }
+
+  if (vault.phase !== "ready") {
+    return (
+      <main className="app">
+        <Unlock
+          phase={vault.phase}
+          firstRun={vault.firstRun}
+          error={vault.error}
+          onUnlock={() => void vault.unlock()}
+        />
       </main>
     );
   }

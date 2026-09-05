@@ -9,7 +9,7 @@ import {
   seqIds,
   VaultSync,
 } from "@keyweb/vault-core";
-import { IndexedDbVaultStorage } from "../src/index.js";
+import { IndexedDbVaultStorage, type VaultCipher } from "../src/index.js";
 
 let factory: IDBFactory;
 let dbName: string;
@@ -20,8 +20,8 @@ beforeEach(() => {
   dbName = `keyweb-test-${++counter}`;
 });
 
-async function openStorage(): Promise<IndexedDbVaultStorage> {
-  return IndexedDbVaultStorage.open(factory, dbName);
+async function openStorage(cipher?: VaultCipher): Promise<IndexedDbVaultStorage> {
+  return IndexedDbVaultStorage.open({ factory, name: dbName, ...(cipher ? { cipher } : {}) });
 }
 
 describe("IndexedDB storage", () => {
@@ -153,5 +153,139 @@ describe("the full engine on IndexedDB", () => {
     expect(Object.keys(idb.items).sort()).toEqual(Object.keys(memory.items).sort());
     expect(idb.items.a!.deleted.value).toBe(memory.items.a!.deleted.value);
     expect(itemField(idb.items.b!, "password")).toBe(itemField(memory.items.b!, "password"));
+  });
+});
+
+/**
+ * A real AES-GCM cipher, so the at-rest tests exercise the same shape the app
+ * uses rather than a stand-in that happens to satisfy the interface.
+ */
+async function testCipher(): Promise<VaultCipher> {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+  const seal = async (value: unknown) => {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify(value));
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+    return { iv: [...iv], ct: [...new Uint8Array(ciphertext)] };
+  };
+  const open = async (stored: unknown) => {
+    const { iv, ct } = stored as { iv: number[]; ct: number[] };
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(iv) },
+      key,
+      new Uint8Array(ct),
+    );
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  };
+  return {
+    sealState: seal,
+    openState: open,
+    sealOp: seal,
+    openOp: open,
+  };
+}
+
+/** Read every stored byte without going through the cipher. */
+async function rawDump(name: string, factory: IDBFactory): Promise<string> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = factory.open(name);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const read = (store: string) =>
+    new Promise<unknown[]>((resolve, reject) => {
+      const req = db.transaction(store, "readonly").objectStore(store).getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  const dump = JSON.stringify({ meta: await read("meta"), outbox: await read("outbox") });
+  db.close();
+  return dump;
+}
+
+describe("encryption at rest", () => {
+  it("writes no plaintext to disk, not in the state and not in the outbox", async () => {
+    const storage = await openStorage(await testCipher());
+    const clock = createClock({ node: "A" });
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock,
+      newId: seqIds("A"),
+    });
+
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.putItem({
+      itemId: "bank",
+      keyringId: "ring",
+      fields: { title: "Credit Union", password: "correct-horse-battery" },
+    });
+
+    const dump = await rawDump(dbName, factory);
+    // The password must not be recoverable by reading the database, and neither
+    // must the queued operation that carries it.
+    expect(dump).not.toContain("correct-horse-battery");
+    expect(dump).not.toContain("Credit Union");
+    expect(dump).not.toContain("Household");
+    // The operation id stays clear so an acknowledgement needs no key.
+    expect(dump).toContain("A-1");
+  });
+
+  it("reads its own ciphertext back correctly", async () => {
+    const cipher = await testCipher();
+    const storage = await openStorage(cipher);
+    const clock = createClock({ node: "A" });
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock,
+      newId: seqIds("A"),
+    });
+
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.putItem({ itemId: "bank", keyringId: "ring", fields: { password: "s3cret" } });
+
+    const reopened = await openStorage(cipher);
+    const state = await reopened.readState();
+    expect(itemField(state.items.bank!, "password")).toBe("s3cret");
+    expect(await reopened.pending()).toHaveLength(2);
+    expect((await reopened.pending())[1]!.opId).toBe("A-2");
+  });
+
+  it("still joins rather than replaces when encrypted", async () => {
+    const cipher = await testCipher();
+    const storage = await openStorage(cipher);
+    const clock = createClock({ node: "A" });
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock,
+      newId: seqIds("A"),
+    });
+
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.putItem({ itemId: "local", keyringId: "ring", fields: { password: "keep-me" } });
+
+    const joined = await storage.applyRemote({ items: {}, keyrings: {} });
+    expect(itemField(joined.items.local!, "password")).toBe("keep-me");
+  });
+
+  it("cannot be read with the wrong key", async () => {
+    const storage = await openStorage(await testCipher());
+    const clock = createClock({ node: "A" });
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock,
+      newId: seqIds("A"),
+    });
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+
+    // A different session, a different key: the bytes must be useless.
+    const wrongKey = await openStorage(await testCipher());
+    await expect(wrongKey.readState()).rejects.toThrow();
   });
 });

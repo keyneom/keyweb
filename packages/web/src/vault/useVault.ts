@@ -11,7 +11,8 @@ import {
   VaultSync,
   visibleItems,
 } from "@keyweb/vault-core";
-import { IndexedDbVaultStorage } from "@keyweb/vault-idb";
+import { IndexedDbVaultStorage, peekSealedState } from "@keyweb/vault-idb";
+import { passkeySupported, unlockVault } from "./crypto";
 
 /**
  * A remote that is not configured yet. Encrypted Drive backup needs a Google
@@ -39,12 +40,27 @@ function deviceNode(): string {
   return created;
 }
 
+export type VaultPhase =
+  /** Working out whether a vault already exists on this device. */
+  | "checking"
+  /** A vault exists and needs the passkey, or none exists and needs creating. */
+  | "locked"
+  | "unlocking"
+  | "ready"
+  /** No passkey support, or an insecure origin. The vault cannot be opened. */
+  | "unsupported";
+
 export type VaultApi = {
-  ready: boolean;
+  phase: VaultPhase;
+  /** True when this device has no vault yet, so unlocking means setting up. */
+  firstRun: boolean;
+  error: string | null;
   state: VaultState;
   status: SyncStatus;
   backupConfigured: boolean;
   items: ItemRecord[];
+  unlock(): Promise<void>;
+  lock(): void;
   saveItem(input: {
     itemId?: string;
     keyringId: string;
@@ -56,7 +72,9 @@ export type VaultApi = {
 };
 
 export function useVault(): VaultApi {
-  const [ready, setReady] = useState(false);
+  const [phase, setPhase] = useState<VaultPhase>("checking");
+  const [firstRun, setFirstRun] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<VaultState>(emptyVault);
   const [status, setStatus] = useState<SyncStatus>({
     pending: 0,
@@ -64,19 +82,41 @@ export function useVault(): VaultApi {
     lastError: null,
     syncing: false,
   });
+
   const syncRef = useRef<VaultSync | null>(null);
+  const lockRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const storage = await IndexedDbVaultStorage.open();
-      const clock = createClock({ node: deviceNode(), resume: await storage.readClock() });
-      const sync = new VaultSync({
-        storage,
-        remote: new UnconfiguredRemote(),
-        clock,
-      });
+      if (!passkeySupported()) {
+        if (!cancelled) setPhase("unsupported");
+        return;
+      }
+      const sealed = await peekSealedState();
       if (cancelled) return;
+      setFirstRun(sealed === null);
+      setPhase("locked");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const unlock = useCallback(async () => {
+    setPhase("unlocking");
+    setError(null);
+    try {
+      const sealed = await peekSealedState();
+      const { cipher, lock } = await unlockVault(sealed);
+      lockRef.current = lock;
+
+      const storage = await IndexedDbVaultStorage.open({ cipher });
+      const clock = createClock({
+        node: deviceNode(),
+        resume: await storage.readClock(),
+      });
+      const sync = new VaultSync({ storage, remote: new UnconfiguredRemote(), clock });
       syncRef.current = sync;
 
       let current = await sync.state();
@@ -87,11 +127,28 @@ export function useVault(): VaultApi {
       }
       setState(current);
       setStatus(sync.status());
-      setReady(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
+      setPhase("ready");
+      setFirstRun(false);
+    } catch (cause) {
+      // A cancelled passkey prompt is the common case and is not an error worth
+      // alarming anyone about.
+      const message =
+        cause instanceof DOMException && cause.name === "NotAllowedError"
+          ? "That was cancelled. Your vault is still locked."
+          : cause instanceof Error
+            ? cause.message
+            : "Keyweb couldn't open your vault.";
+      setError(message);
+      setPhase("locked");
+    }
+  }, []);
+
+  const lock = useCallback(() => {
+    lockRef.current?.();
+    lockRef.current = null;
+    syncRef.current = null;
+    setState(emptyVault());
+    setPhase("locked");
   }, []);
 
   const after = useCallback((next: VaultState) => {
@@ -141,11 +198,15 @@ export function useVault(): VaultApi {
   const items = useMemo(() => visibleItems(state), [state]);
 
   return {
-    ready,
+    phase,
+    firstRun,
+    error,
     state,
     status,
     backupConfigured: BACKUP_CONFIGURED,
     items,
+    unlock,
+    lock,
     saveItem,
     deleteItem,
     moveItem,
