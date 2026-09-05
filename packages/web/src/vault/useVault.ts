@@ -27,7 +27,7 @@ class UnconfiguredRemote implements RemoteVaultStore {
   }
 }
 
-const BACKUP_CONFIGURED = Boolean(import.meta.env["VITE_GOOGLE_CLIENT_ID"]);
+const BACKUP_CONFIGURED = Boolean(import.meta.env["VITE_GOOGLE_WEB_CLIENT_ID"]);
 
 /** A stable per-device id, so causal ordering survives a reload. */
 function deviceNode(): string {

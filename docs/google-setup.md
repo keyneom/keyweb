@@ -66,10 +66,32 @@ Neither of these is a secret — a browser app ships both to every visitor. What
 protects the vault is that Drive only ever holds ciphertext, and that the
 credentials are restricted to Keyweb's own origins.
 
-- **OAuth 2.0 client id**, type *Web application* → `VITE_GOOGLE_CLIENT_ID`.
-  Authorized JavaScript origins must list every origin the app is served from,
-  including the Android WebView's `https://appassets.androidplatform.net`.
+- **OAuth 2.0 client id**, type *Web application* → `VITE_GOOGLE_WEB_CLIENT_ID`.
 - **API key**, restricted to the Drive and Picker APIs → `VITE_GOOGLE_API_KEY`,
   used as Picker's `developerKey`.
+
+In CI these are GitHub repository **variables**, not secrets, matching easy-bc:
+`GOOGLE_WEB_CLIENT_ID`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT_NUMBER`.
+
+### Authorized JavaScript origins
+
+An origin is `scheme://host[:port]` with **no path**, so the production entry is
+the whole Pages origin:
+
+```
+https://keyneom.github.io      production (GitHub Pages)
+http://localhost:5173          Vite dev server
+http://localhost:4173          Vite preview
+```
+
+Note what that implies: `https://keyneom.github.io` covers *every* project site
+on that account, not just `/keyweb/`. Any page served from that origin could
+use this client id. easy-bc has the same property. A dedicated domain would
+narrow it if that ever matters.
+
+Android does not appear here. Google blocks OAuth inside embedded WebViews, and
+the native app authenticates through `com.keyneom:sync-kit-android`, which needs
+its own client of type *Android* registered against the package name
+`app.keyweb` and the release certificate SHA-1.
 
 See `packages/web/.env.example`.
