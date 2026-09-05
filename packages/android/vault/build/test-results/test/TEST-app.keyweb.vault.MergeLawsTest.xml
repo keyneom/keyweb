@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="app.keyweb.vault.MergeLawsTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-05T01:00:41.270Z" hostname="Micaels-MacBook-Air.local" time="0.002">
+  <properties/>
+  <testcase name="is commutative()" classname="app.keyweb.vault.MergeLawsTest" time="0.0"/>
+  <testcase name="keeps every item from both sides()" classname="app.keyweb.vault.MergeLawsTest" time="0.0"/>
+  <testcase name="is associative()" classname="app.keyweb.vault.MergeLawsTest" time="0.0"/>
+  <testcase name="is idempotent()" classname="app.keyweb.vault.MergeLawsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

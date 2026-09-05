@@ -6,10 +6,12 @@
   "main": "./src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "fixture": "vite-node scripts/emit-wire-fixture.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "vite-node": "^6.0.0"
   }
 }

@@ -1,0 +1,74 @@
+{
+  "state": {
+    "items": {
+      "chase": {
+        "id": "chase",
+        "keyring": {
+          "value": "ring",
+          "ts": "001700000000000-00002-fixture"
+        },
+        "fields": {
+          "title": {
+            "value": "Chase Bank",
+            "ts": "001700000000000-00001-fixture"
+          },
+          "username": {
+            "value": "maria@example.com",
+            "ts": "001700000000000-00001-fixture"
+          },
+          "password": {
+            "value": "rotated",
+            "ts": "001700000000000-00002-fixture"
+          }
+        },
+        "deleted": {
+          "value": false,
+          "ts": "001700000000000-00002-fixture"
+        },
+        "history": [
+          {
+            "field": "password",
+            "value": "original",
+            "ts": "001700000000000-00001-fixture"
+          }
+        ]
+      },
+      "netflix": {
+        "id": "netflix",
+        "keyring": {
+          "value": "ring",
+          "ts": "001700000000000-00003-fixture"
+        },
+        "fields": {
+          "title": {
+            "value": "Netflix",
+            "ts": "001700000000000-00003-fixture"
+          },
+          "password": {
+            "value": "shared-one",
+            "ts": "001700000000000-00003-fixture"
+          }
+        },
+        "deleted": {
+          "value": true,
+          "ts": "001700000000000-00004-fixture"
+        },
+        "history": []
+      }
+    },
+    "keyrings": {
+      "ring": {
+        "id": "ring",
+        "name": {
+          "value": "Household",
+          "ts": "001700000000000-00000-fixture"
+        },
+        "deleted": {
+          "value": false,
+          "ts": "000000000000000-00000-"
+        }
+      }
+    }
+  },
+  "fingerprint": "v1:chase|001700000000000-00002-fixture:ring|001700000000000-00002-fixture:false|password=001700000000000-00002-fixture:rotated,title=001700000000000-00001-fixture:Chase Bank,username=001700000000000-00001-fixture:maria@example.com;netflix|001700000000000-00003-fixture:ring|001700000000000-00004-fixture:true|password=001700000000000-00003-fixture:shared-one,title=001700000000000-00003-fixture:Netflix#ring|001700000000000-00000-fixture:Household|000000000000000-00000-:false"
+}

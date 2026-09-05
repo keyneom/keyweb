@@ -12,4 +12,5 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "keyweb"
+include(":vault")
 include(":app")
