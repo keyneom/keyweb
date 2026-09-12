@@ -6,8 +6,8 @@ dist/
 # Android
 packages/android/local.properties
 packages/android/.gradle/
-packages/android/build/
-packages/android/app/build/
+# Every Gradle module's output, not just the ones that existed at the time.
+packages/android/**/build/
 packages/android/app/src/main/assets/
 *.keystore
 *.jks
