@@ -89,9 +89,45 @@ on that account, not just `/keyweb/`. Any page served from that origin could
 use this client id. easy-bc has the same property. A dedicated domain would
 narrow it if that ever matters.
 
-Android does not appear here. Google blocks OAuth inside embedded WebViews, and
-the native app authenticates through `com.keyneom:sync-kit-android`, which needs
-its own client of type *Android* registered against the package name
-`app.keyweb` and the release certificate SHA-1.
+Android does not appear here, and does not need to. See below.
+
+## Two OAuth clients, one project, one API key
+
+This is the part that looks wrong until you see why it works.
+
+| | Used by | Configured as |
+| --- | --- | --- |
+| **Web client** | The web app's sign-in, **and the Picker** | `VITE_GOOGLE_WEB_CLIENT_ID` |
+| **Android client** | Native Drive calls from the app | Registered by package name + SHA-1 only; **never referenced in code** |
+| **API key** | The Picker, and nothing else | `VITE_GOOGLE_API_KEY`, restricted to Websites |
+
+**The Picker always runs in a browser, even for Android.** `drive.file` has no
+native Android picker UI, so the app hands off to the web app's picker page.
+easy-bc's own error copy says it plainly: *"Tap 'Grant folder access' to allow
+it in your browser (sign in with this same Google account), then try joining
+again."* That is why the API key carries a *Websites* restriction rather than an
+Android one — an Android restriction would break the only place the key is used.
+
+**A grant made in the browser reaches the Android client because `drive.file`
+grants are scoped to the Cloud project, not to an individual OAuth client.**
+That is exactly what Picker's `setAppId` expresses: it takes the **project
+number**, not a client id. Same project, so a file picked under the web client
+becomes visible to the Android client.
+
+**The Android client is never named in code.** easy-bc's Android app calls
+`Identity.getAuthorizationClient(activity).authorize(...)` from Play Services,
+which identifies the app by its package name and signing certificate. The client
+must exist in the project so Google can match it; no id string is ever compiled
+in. That is why searching easy-bc's `android/` tree for a client id finds
+nothing.
+
+Keyweb's Android client will register `app.keyweb` with the release certificate
+SHA-1 `12:E5:14:DA:EB:AD:D4:78:99:0A:FD:9A:95:D0:F3:20:60:DD:96:9F`.
+
+One caveat worth carrying into testing: sync-kit lists live Google OAuth and
+Picker validation as an open release gate, and easy-bc keeps a runtime probe
+whose hypotheses include "grant never reached this OAuth client". So the
+cross-client grant is the first thing to verify on a real device rather than
+assume.
 
 See `packages/web/.env.example`.
