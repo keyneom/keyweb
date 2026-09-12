@@ -162,9 +162,16 @@ class VaultSync(
                     return offline(error)
                 }
 
-                // Rule 3: only now is the work provably published.
                 storage.applyRemote(merged)
-                storage.ack(pendingIds)
+
+                // Rule 3: acknowledge only work we have *seen* in a published
+                // revision, never work we merely uploaded. Google Drive offers
+                // no compare-and-set, so a competing device can land a revision
+                // between our freshness check and our upload. Acking on our own
+                // write alone would let the loser of that race drop edits it had
+                // already marked safe -- silent data loss, the exact failure
+                // this engine exists to prevent. One extra read closes it.
+                if (published(pending)) storage.ack(pendingIds)
                 statusValue = statusValue.copy(lastPublishedAtMs = nowMs(), lastError = null)
                 return SyncOutcome.Published(version, refreshPending())
             }
@@ -175,6 +182,24 @@ class VaultSync(
             return SyncOutcome.ConflictExhausted(refreshPending())
         } finally {
             statusValue = statusValue.copy(syncing = false)
+        }
+    }
+
+    /**
+     * Is every pending operation reflected in what the remote now holds?
+     *
+     * Uses the CRDT's idempotence: re-applying operations already present
+     * cannot change the state, so an unchanged fingerprint proves they
+     * survived. A failed read counts as unproven, keeping the work queued
+     * rather than risking its loss.
+     */
+    private suspend fun published(pending: List<VaultOp>): Boolean {
+        if (pending.isEmpty()) return true
+        return try {
+            val confirmed = remote.read() ?: return false
+            fingerprint(applyOps(confirmed.state, pending)) == fingerprint(confirmed.state)
+        } catch (error: Exception) {
+            false
         }
     }
 

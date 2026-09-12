@@ -12,12 +12,16 @@ export function Unlock({
   phase,
   firstRun,
   error,
+  backupConfigured,
   onUnlock,
+  onRestore,
 }: {
   phase: VaultPhase;
   firstRun: boolean;
   error: string | null;
+  backupConfigured: boolean;
   onUnlock: () => void;
+  onRestore: () => void;
 }) {
   if (phase === "unsupported") {
     return (
@@ -64,6 +68,19 @@ export function Unlock({
       <button type="button" className="btn pri big" onClick={onUnlock} disabled={busy}>
         {busy ? "Waiting for you…" : firstRun ? "Set up Keyweb" : "Unlock"}
       </button>
+
+      {firstRun && backupConfigured && (
+        <>
+          <p className="unlock-or">or</p>
+          <button type="button" className="btn sec big" onClick={onRestore} disabled={busy}>
+            I already use Keyweb — restore my passwords
+          </button>
+          <p className="unlock-note">
+            Sign in with the same Google account and unlock with the same face, fingerprint or
+            PIN you used before.
+          </p>
+        </>
+      )}
 
       {firstRun && (
         <p className="status" data-tone="calm" style={{ marginTop: "1.25rem" }}>

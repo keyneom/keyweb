@@ -43,7 +43,9 @@ export function App() {
           phase={vault.phase}
           firstRun={vault.firstRun}
           error={vault.error}
+          backupConfigured={vault.backupConfigured}
           onUnlock={() => void vault.unlock()}
+          onRestore={() => void vault.restore()}
         />
       </main>
     );

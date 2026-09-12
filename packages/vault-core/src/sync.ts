@@ -255,9 +255,18 @@ export class VaultSync {
           return this.#offline(error);
         }
 
-        // Rule 3: only now is the work provably published.
         await this.#storage.applyRemote(merged);
-        await this.#storage.ack(pendingIds);
+
+        // Rule 3: acknowledge only work we have *seen* in a published
+        // revision, never work we merely uploaded. Google Drive offers no
+        // compare-and-set, so a competing device can land a revision between
+        // our freshness check and our upload. Acking on our own write alone
+        // would let the loser of that race drop edits it had already marked
+        // safe -- silent data loss, the exact failure this engine exists to
+        // prevent. One extra read closes it.
+        if (await this.#published(pending)) {
+          await this.#storage.ack(pendingIds);
+        }
         this.#lastPublishedAt = this.#now();
         this.#lastError = null;
         return { status: "published", version, pending: await this.#refreshPending() };
@@ -267,6 +276,27 @@ export class VaultSync {
       return { status: "conflict-exhausted", pending: await this.#refreshPending() };
     } finally {
       this.#syncing = false;
+    }
+  }
+
+  /**
+   * Is every pending operation reflected in what the remote now holds?
+   *
+   * Uses the CRDT's idempotence: re-applying operations that are already
+   * present cannot change the state, so an unchanged fingerprint proves they
+   * survived. A failed read is treated as unproven, which keeps the work
+   * queued rather than risking its loss.
+   */
+  async #published(pending: readonly VaultOp[]): Promise<boolean> {
+    if (pending.length === 0) return true;
+    try {
+      const confirmed = await this.#remote.read();
+      if (!confirmed) return false;
+      return (
+        fingerprint(applyOps(confirmed.state, pending)) === fingerprint(confirmed.state)
+      );
+    } catch {
+      return false;
     }
   }
 
