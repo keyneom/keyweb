@@ -44,15 +44,15 @@ class WireFormatTest {
         val state = fixture.state
 
         val chase = assertNotNull(state.items["chase"], "expected the chase item")
-        assertEquals("Chase Bank", chase.field(ItemField.TITLE))
-        assertEquals("maria@example.com", chase.field(ItemField.USERNAME))
-        assertEquals("rotated", chase.field(ItemField.PASSWORD))
+        assertEquals("Chase Bank", chase.field(Fields.TITLE))
+        assertEquals("maria@example.com", chase.field(Fields.USERNAME))
+        assertEquals("rotated", chase.field(Fields.PASSWORD))
         assertEquals("ring", chase.keyring.value)
         assertEquals(false, chase.deleted.value)
 
         // The superseded password must survive the round trip; it is the undo
         // window for an accidental overwrite.
-        val previous = chase.history.firstOrNull { it.field == ItemField.PASSWORD }
+        val previous = chase.history.firstOrNull { it.field == Fields.PASSWORD }
         assertEquals("original", assertNotNull(previous).value)
 
         val netflix = assertNotNull(state.items["netflix"])

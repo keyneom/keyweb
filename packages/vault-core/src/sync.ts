@@ -136,7 +136,7 @@ export class VaultSync {
   putItem(input: {
     itemId?: string;
     keyringId: string;
-    fields: Partial<Record<ItemField, string>>;
+    fields: Record<ItemField, string | undefined>;
   }): Promise<VaultState> {
     return this.commit({
       kind: "item.put",

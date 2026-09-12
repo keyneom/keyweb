@@ -172,7 +172,9 @@ private fun ExistingCode(
         modifier = Modifier.fillMaxWidth(),
     )
     Text(
-        "Dashes and capitals don't matter.",
+        "Dashes and capitals don't matter. There is no letter O, I, L or U in a " +
+            "recovery code, so anything that looks like one is a 0 or a 1 — and " +
+            "Keyweb takes it either way.",
         color = muted,
         style = MaterialTheme.typography.bodyMedium,
         modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
@@ -220,15 +222,16 @@ private fun ShowCode(
         Text(
             // Four groups a line, so it can be copied onto paper without
             // losing your place.
-            code.split("-").chunked(4).joinToString("\n") { it.joinToString("-") },
+            codeGlyphs(code.split("-").chunked(4).joinToString("\n") { it.joinToString("-") }),
             fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 20.sp,
-            lineHeight = 34.sp,
+            fontSize = 22.sp,
+            lineHeight = 36.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp, horizontal = 12.dp),
         )
     }
+
+    CodeLegend(Modifier.padding(top = 10.dp))
 
     StatusLine(
         Tone.RISK,

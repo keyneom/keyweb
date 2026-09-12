@@ -37,24 +37,43 @@ fun <T> pickReg(a: Reg<T>?, b: Reg<T>?): Reg<T>? {
  * undifferentiated list. They are plain fields, so they inherit the same
  * per-field merge as everything else.
  */
-@Serializable
-enum class ItemField {
-    @SerialName("title") TITLE,
-    @SerialName("username") USERNAME,
-    @SerialName("password") PASSWORD,
-    @SerialName("url") URL,
-    @SerialName("note") NOTE,
-    @SerialName("folder") FOLDER,
-    @SerialName("tags") TAGS;
+/**
+ * A field key, as it appears on the wire.
+ *
+ * A plain string, deliberately. This was an enum, and that was a
+ * forward-compatibility hazard rather than a safety feature: kotlinx
+ * serialization enforces enum membership at parse time, so one field key from a
+ * newer client made the **entire vault** fail to deserialize on an older
+ * device. Not "the unknown field is hidden" — every password in it, unreadable.
+ *
+ * Open keys also make the feature possible: a crypto wallet's seed phrase, a
+ * card's expiry, a field someone typed a name for themselves. The CRDT never
+ * cared what the key was — each one is an independent register — so nothing in
+ * the merge needed to change to allow this.
+ */
+typealias ItemField = String
 
-    /** The wire name, which is what the TypeScript side uses as its map key. */
-    val wire: String
-        get() = name.lowercase()
+/** The keys Keyweb gives special presentation to. Not the only keys allowed. */
+object Fields {
+    const val TITLE = "title"
+    const val USERNAME = "username"
+    const val PASSWORD = "password"
+    const val URL = "url"
+    const val NOTE = "note"
 
-    companion object {
-        fun fromWire(value: String): ItemField? =
-            entries.firstOrNull { it.wire == value }
-    }
+    /** The TOTP shared secret, base32 as the site issues it. */
+    const val OTP = "otp"
+    const val FOLDER = "folder"
+    const val TAGS = "tags"
+
+    /** True for a field whose value must never be shown without asking. */
+    fun isSecret(field: ItemField): Boolean =
+        field == PASSWORD ||
+            field == OTP ||
+            field == "seedPhrase" ||
+            field == "privateKey" ||
+            field == "pin" ||
+            field.startsWith("secret:")
 }
 
 @Serializable
@@ -129,10 +148,10 @@ fun fingerprint(state: VaultState): String {
     val items = state.items.keys.sorted().joinToString(";") { id ->
         val item = state.items[id] ?: return@joinToString ""
         val fields = item.fields.keys
-            .sortedBy { it.wire }
+            .sorted()
             .joinToString(",") { name ->
                 val reg = item.fields[name]
-                if (reg == null) "" else "${name.wire}=${reg.ts}:${reg.value}"
+                if (reg == null) "" else "$name=${reg.ts}:${reg.value}"
             }
         "$id|${item.keyring.ts}:${item.keyring.value}|${item.deleted.ts}:${item.deleted.value}|$fields"
     }

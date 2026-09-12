@@ -100,7 +100,9 @@ export function Unlock({
                   />
                 </div>
                 <span className="hint">
-                  Capital letters, lower case and missing dashes are all fine.
+                  Capital letters, lower case and missing dashes are all fine. There is no letter{" "}
+                  <b>O</b>, <b>I</b>, <b>L</b> or <b>U</b> in a recovery code, so anything that
+                  looks like one is a <b>0</b> or a <b>1</b> — and Keyweb accepts it either way.
                 </span>
               </label>
               <button

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import app.keyweb.vault.Fields
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.SyncStatus
@@ -107,12 +108,12 @@ fun VaultListScreen(
         .filter { item ->
             val needle = query.trim().lowercase()
             needle.isEmpty() || listOfNotNull(
-                item.field(ItemField.TITLE),
-                item.field(ItemField.USERNAME),
-                item.field(ItemField.URL),
+                item.field(Fields.TITLE),
+                item.field(Fields.USERNAME),
+                item.field(Fields.URL),
             ).joinToString(" ").lowercase().contains(needle)
         }
-        .sortedBy { it.field(ItemField.TITLE).orEmpty().lowercase() }
+        .sortedBy { it.field(Fields.TITLE).orEmpty().lowercase() }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp)) {
@@ -197,10 +198,10 @@ fun VaultListScreen(
                     ) {
                         LazyColumn {
                             items(shown, key = { it.id }) { item ->
-                                val title = item.field(ItemField.TITLE) ?: "Untitled"
+                                val title = item.field(Fields.TITLE) ?: "Untitled"
                                 val ringName = state.keyrings[item.keyring.value]?.name?.value
                                     ?: "No keyring"
-                                val user = item.field(ItemField.USERNAME)
+                                val user = item.field(Fields.USERNAME)
                                 VaultRow(
                                     initials = initials(title),
                                     title = title,
@@ -239,7 +240,7 @@ fun ItemDetailScreen(
 ) {
     var revealed by remember { mutableStateOf(false) }
     val statusColors = LocalKeywebStatus.current
-    val title = item.field(ItemField.TITLE) ?: "Untitled"
+    val title = item.field(Fields.TITLE) ?: "Untitled"
     val ringName = state.keyrings[item.keyring.value]?.name?.value
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -255,7 +256,7 @@ fun ItemDetailScreen(
                 modifier = Modifier.padding(bottom = 12.dp),
             )
 
-            item.field(ItemField.USERNAME)?.takeIf { it.isNotBlank() }?.let { user ->
+            item.field(Fields.USERNAME)?.takeIf { it.isNotBlank() }?.let { user ->
                 ReadOnlyField("Username", user, trailing = {
                     IconButton(onClick = { onCopy(user, "Username") }) {
                         Icon(Icons.Filled.ContentCopy, contentDescription = "Copy username")
@@ -263,7 +264,7 @@ fun ItemDetailScreen(
                 })
             }
 
-            val password = item.field(ItemField.PASSWORD).orEmpty()
+            val password = item.field(Fields.PASSWORD).orEmpty()
             ReadOnlyField(
                 label = "Password",
                 value = password,
@@ -290,10 +291,10 @@ fun ItemDetailScreen(
                 modifier = Modifier.padding(bottom = 12.dp),
             )
 
-            item.field(ItemField.URL)?.takeIf { it.isNotBlank() }?.let {
+            item.field(Fields.URL)?.takeIf { it.isNotBlank() }?.let {
                 ReadOnlyField("Website", it)
             }
-            item.field(ItemField.NOTE)?.takeIf { it.isNotBlank() }?.let {
+            item.field(Fields.NOTE)?.takeIf { it.isNotBlank() }?.let {
                 ReadOnlyField("Note", it)
             }
 
@@ -322,6 +323,10 @@ private fun ReadOnlyField(
         shape = RoundedCornerShape(14.dp),
         visualTransformation = if (mask) {
             PasswordVisualTransformation()
+        } else if (mono) {
+            // Revealed to be read off the screen and typed elsewhere, which is
+            // where a zero gets copied down as a letter O.
+            rememberGlyphColors()
         } else {
             VisualTransformation.None
         },
@@ -352,11 +357,11 @@ fun ItemEditScreen(
     onBack: () -> Unit,
     onSave: (String?, String, Map<ItemField, String>) -> Unit,
 ) {
-    var title by remember { mutableStateOf(item?.field(ItemField.TITLE).orEmpty()) }
-    var username by remember { mutableStateOf(item?.field(ItemField.USERNAME).orEmpty()) }
-    var password by remember { mutableStateOf(item?.field(ItemField.PASSWORD).orEmpty()) }
-    var url by remember { mutableStateOf(item?.field(ItemField.URL).orEmpty()) }
-    var note by remember { mutableStateOf(item?.field(ItemField.NOTE).orEmpty()) }
+    var title by remember { mutableStateOf(item?.field(Fields.TITLE).orEmpty()) }
+    var username by remember { mutableStateOf(item?.field(Fields.USERNAME).orEmpty()) }
+    var password by remember { mutableStateOf(item?.field(Fields.PASSWORD).orEmpty()) }
+    var url by remember { mutableStateOf(item?.field(Fields.URL).orEmpty()) }
+    var note by remember { mutableStateOf(item?.field(Fields.NOTE).orEmpty()) }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
     val statusColors = LocalKeywebStatus.current
 
@@ -439,11 +444,11 @@ fun ItemEditScreen(
                         item?.id,
                         keyringId,
                         mapOf(
-                            ItemField.TITLE to title.trim(),
-                            ItemField.USERNAME to username,
-                            ItemField.PASSWORD to password,
-                            ItemField.URL to url,
-                            ItemField.NOTE to note,
+                            Fields.TITLE to title.trim(),
+                            Fields.USERNAME to username,
+                            Fields.PASSWORD to password,
+                            Fields.URL to url,
+                            Fields.NOTE to note,
                         ),
                     )
                 },

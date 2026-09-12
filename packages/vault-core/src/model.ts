@@ -41,10 +41,48 @@ export const ITEM_FIELDS = [
   "password",
   "url",
   "note",
+  /**
+   * The TOTP shared secret, base32 as the site issues it.
+   *
+   * A secret like the password, stored and sealed identically. Keeping it on
+   * the item rather than in a separate store is what lets one unlock produce
+   * both halves of a sign-in; the security argument for that is in
+   * `docs/two-factor.md`.
+   */
+  "otp",
   "folder",
   "tags",
 ] as const;
-export type ItemField = (typeof ITEM_FIELDS)[number];
+/**
+ * A field key.
+ *
+ * Deliberately open rather than a union of [ITEM_FIELDS]. Those are the keys
+ * Keyweb knows how to present nicely; they are not the only keys that may
+ * appear. A newer client — or a different item kind, or a custom field someone
+ * added — will write keys this version has never heard of, and the merge must
+ * carry them through untouched.
+ *
+ * Closing this type was a forward-compatibility hazard rather than a safety
+ * feature: the Kotlin port enforced it at parse time, so a single unrecognised
+ * key made the *entire vault* unreadable on an older device rather than merely
+ * hiding one field.
+ */
+export type ItemField = string;
+
+/** The keys Keyweb gives special presentation to. */
+export type KnownItemField = (typeof ITEM_FIELDS)[number];
+
+/** True for a field whose value must never be shown without asking. */
+export function isSecretField(field: ItemField): boolean {
+  return (
+    field === "password" ||
+    field === "otp" ||
+    field === "seedPhrase" ||
+    field === "privateKey" ||
+    field === "pin" ||
+    field.startsWith("secret:")
+  );
+}
 
 export type HistoryEntry = {
   field: ItemField;
@@ -60,7 +98,12 @@ export type ItemRecord = {
   id: string;
   /** Which keyring the item lives on. Moving is itself a LWW register. */
   keyring: Reg<string>;
-  fields: Partial<Record<ItemField, Reg<string>>>;
+  /**
+   * Open-keyed: an index yields `Reg<string> | undefined` under
+   * `noUncheckedIndexedAccess`, so absence is already in the type and `Partial`
+   * would only make it doubly optional.
+   */
+  fields: Record<ItemField, Reg<string>>;
   /** Tombstone. Deletion is a register, not a removal, so a delete can lose
    *  to a later edit and an edit can lose to a later delete — deterministically. */
   deleted: Reg<boolean>;

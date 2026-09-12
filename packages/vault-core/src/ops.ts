@@ -14,7 +14,12 @@ export type VaultOp =
       ts: Hlc;
       itemId: string;
       keyringId: string;
-      fields: Partial<Record<ItemField, string>>;
+      /**
+       * Open-keyed, so a client can write a field this version has never heard
+       * of. `undefined` is possible on an index and is skipped rather than
+       * stored, since a register holding undefined is not a value.
+       */
+      fields: Record<ItemField, string | undefined>;
     }
   | { kind: "item.delete"; opId: string; ts: Hlc; itemId: string }
   | { kind: "item.restore"; opId: string; ts: Hlc; itemId: string }
@@ -57,8 +62,8 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
       const existing = state.items[op.itemId] ?? newItem(op.itemId, op.keyringId, op.ts);
       const fields = { ...existing.fields };
       let history = existing.history;
-      for (const [name, value] of Object.entries(op.fields)) {
-        const field = name as ItemField;
+      for (const [field, value] of Object.entries(op.fields)) {
+        if (value === undefined) continue;
         const incoming = reg(value, op.ts);
         const current = fields[field];
         const winner = pickReg(current, incoming) ?? incoming;

@@ -1,5 +1,6 @@
 package app.keyweb.data
 
+import app.keyweb.vault.Fields
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.RecoveryCode
 import app.keyweb.vault.VaultEnvelopeCipher
@@ -93,7 +94,7 @@ private fun vaultWith(password: String): VaultState {
             ts = "001700000000001-00000-t",
             itemId = "bank",
             keyringId = "ring",
-            fields = mapOf(ItemField.TITLE to "Credit Union", ItemField.PASSWORD to password),
+            fields = mapOf(Fields.TITLE to "Credit Union", Fields.PASSWORD to password),
         ),
     )
 }
@@ -131,7 +132,7 @@ class DriveVaultRemoteTest {
         val existing = assertNotNull(remoteOn(drive, secret).fetchRecoverySealed())
         val second = DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret, existing))
         val revision = assertNotNull(second.read())
-        assertEquals("the-one-that-matters", revision.state.items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("the-one-that-matters", revision.state.items["bank"]?.field(Fields.PASSWORD))
     }
 
     @Test
@@ -163,7 +164,7 @@ class DriveVaultRemoteTest {
         )
         // And the copy this device *is* responsible for did move on.
         val reread = assertNotNull(phone.read())
-        assertEquals("second", reread.state.items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("second", reread.state.items["bank"]?.field(Fields.PASSWORD))
     }
 
     @Test

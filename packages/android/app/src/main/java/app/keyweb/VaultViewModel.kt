@@ -17,6 +17,7 @@ import app.keyweb.data.VaultUnlock
 import app.keyweb.data.needsAuthentication
 import app.keyweb.vault.Clock
 import app.keyweb.vault.InvalidRecoveryCode
+import app.keyweb.vault.Fields
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.RecoveryCode

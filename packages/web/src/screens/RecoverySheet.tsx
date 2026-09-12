@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CodeLegend, CodeText } from "../ui/CodeText";
 import { AlertIcon, ShieldIcon } from "../ui/icons";
 
 /**
@@ -33,9 +34,14 @@ export function RecoverySheet({
       <article className="sheet" aria-label="Keyweb recovery sheet">
         <h2>Keyweb Recovery Sheet</h2>
         <p className="sheet-sub">Created {new Date().toLocaleDateString()}</p>
-        <p className="sheet-code">{code}</p>
+        <CodeText value={code} className="sheet-code" />
+        <CodeLegend />
         <ol>
           <li>Keep this on paper. Don't photograph it or save it on a computer.</li>
+          <li>
+            Copy it exactly, including the dashes. Capital letters and small letters mean the same
+            thing, so don't worry about those.
+          </li>
           <li>Store it where you keep your passport or birth certificate.</li>
           <li>
             Anyone holding this sheet can read all of your passwords. Treat it like a spare house

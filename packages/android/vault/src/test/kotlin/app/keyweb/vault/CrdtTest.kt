@@ -64,8 +64,8 @@ class HlcTest {
 }
 
 class MergeLawsTest {
-    private val a = build(listOf(put("one", mapOf(ItemField.TITLE to "One")), put("two", mapOf(ItemField.TITLE to "Two"))))
-    private val b = build(listOf(put("two", mapOf(ItemField.TITLE to "Two edited")), put("three", mapOf(ItemField.TITLE to "Three"))))
+    private val a = build(listOf(put("one", mapOf(Fields.TITLE to "One")), put("two", mapOf(Fields.TITLE to "Two"))))
+    private val b = build(listOf(put("two", mapOf(Fields.TITLE to "Two edited")), put("three", mapOf(Fields.TITLE to "Three"))))
 
     @Test
     fun `is idempotent`() {
@@ -79,7 +79,7 @@ class MergeLawsTest {
 
     @Test
     fun `is associative`() {
-        val c = build(listOf(put("four", mapOf(ItemField.TITLE to "Four"))))
+        val c = build(listOf(put("four", mapOf(Fields.TITLE to "Four"))))
         assertEquals(
             fingerprint(mergeVaults(mergeVaults(a, b), c)),
             fingerprint(mergeVaults(a, mergeVaults(b, c))),
@@ -101,25 +101,25 @@ class OpsTest {
                 put(
                     "chase",
                     mapOf(
-                        ItemField.TITLE to "Chase",
-                        ItemField.USERNAME to "old",
-                        ItemField.PASSWORD to "old",
+                        Fields.TITLE to "Chase",
+                        Fields.USERNAME to "old",
+                        Fields.PASSWORD to "old",
                     ),
                 ),
             ),
         )
-        val withUser = applyOp(base, put("chase", mapOf(ItemField.USERNAME to "new-user")))
-        val withPass = applyOp(base, put("chase", mapOf(ItemField.PASSWORD to "new-pass")))
+        val withUser = applyOp(base, put("chase", mapOf(Fields.USERNAME to "new-user")))
+        val withPass = applyOp(base, put("chase", mapOf(Fields.PASSWORD to "new-pass")))
         val merged = mergeVaults(withUser, withPass)
         val item = assertNotNull(merged.items["chase"])
-        assertEquals("new-user", item.field(ItemField.USERNAME))
-        assertEquals("new-pass", item.field(ItemField.PASSWORD))
-        assertEquals("Chase", item.field(ItemField.TITLE))
+        assertEquals("new-user", item.field(Fields.USERNAME))
+        assertEquals("new-pass", item.field(Fields.PASSWORD))
+        assertEquals("Chase", item.field(Fields.TITLE))
     }
 
     @Test
     fun `is idempotent when the same operation is replayed`() {
-        val op = put("chase", mapOf(ItemField.PASSWORD to "abc"))
+        val op = put("chase", mapOf(Fields.PASSWORD to "abc"))
         val once = applyOp(emptyVault(), op)
         val twice = applyOp(once, op)
         assertEquals(fingerprint(once), fingerprint(twice))
@@ -127,9 +127,9 @@ class OpsTest {
 
     @Test
     fun `a later edit beats an earlier delete, and a later delete beats an earlier edit`() {
-        val base = build(listOf(put("a", mapOf(ItemField.TITLE to "A")), put("b", mapOf(ItemField.TITLE to "B"))))
+        val base = build(listOf(put("a", mapOf(Fields.TITLE to "A")), put("b", mapOf(Fields.TITLE to "B"))))
         val afterDelete = applyOp(base, VaultOp.ItemDelete(nextId(), clock.now(), "a"))
-        val revived = applyOp(afterDelete, put("a", mapOf(ItemField.TITLE to "A again")))
+        val revived = applyOp(afterDelete, put("a", mapOf(Fields.TITLE to "A again")))
         assertEquals(false, revived.items["a"]?.deleted?.value)
 
         val gone = applyOp(revived, VaultOp.ItemDelete(nextId(), clock.now(), "b"))
@@ -138,7 +138,7 @@ class OpsTest {
 
     @Test
     fun `hides items whose keyring was deleted without destroying them`() {
-        var state = build(listOf(put("x", mapOf(ItemField.TITLE to "X"))))
+        var state = build(listOf(put("x", mapOf(Fields.TITLE to "X"))))
         state = applyOp(state, VaultOp.KeyringPut(nextId(), clock.now(), "ring", "Household"))
         assertEquals(1, visibleItems(state).size)
         state = applyOp(state, VaultOp.KeyringDelete(nextId(), clock.now(), "ring"))
@@ -148,20 +148,20 @@ class OpsTest {
 
     @Test
     fun `retains a superseded password so an accidental overwrite is recoverable`() {
-        var state = build(listOf(put("chase", mapOf(ItemField.PASSWORD to "original"))))
-        state = applyOp(state, put("chase", mapOf(ItemField.PASSWORD to "overwritten")))
-        assertEquals("overwritten", state.items["chase"]?.field(ItemField.PASSWORD))
-        val previous = state.items["chase"]?.history?.firstOrNull { it.field == ItemField.PASSWORD }
+        var state = build(listOf(put("chase", mapOf(Fields.PASSWORD to "original"))))
+        state = applyOp(state, put("chase", mapOf(Fields.PASSWORD to "overwritten")))
+        assertEquals("overwritten", state.items["chase"]?.field(Fields.PASSWORD))
+        val previous = state.items["chase"]?.history?.firstOrNull { it.field == Fields.PASSWORD }
         assertEquals("original", previous?.value)
     }
 
     @Test
     fun `caps retained history so a long-lived item cannot grow without bound`() {
         var state = emptyVault()
-        repeat(40) { i -> state = applyOp(state, put("chase", mapOf(ItemField.PASSWORD to "pw-$i"))) }
+        repeat(40) { i -> state = applyOp(state, put("chase", mapOf(Fields.PASSWORD to "pw-$i"))) }
         val item = assertNotNull(state.items["chase"])
         assertTrue(item.history.size <= HISTORY_LIMIT)
-        assertEquals("pw-39", item.field(ItemField.PASSWORD))
+        assertEquals("pw-39", item.field(Fields.PASSWORD))
     }
 }
 
@@ -169,15 +169,15 @@ class FingerprintTest {
 
     @Test
     fun `changes when a register advances`() {
-        val before = build(listOf(put("a", mapOf(ItemField.TITLE to "A"))))
-        val after = applyOp(before, put("a", mapOf(ItemField.TITLE to "A2")))
+        val before = build(listOf(put("a", mapOf(Fields.TITLE to "A"))))
+        val after = applyOp(before, put("a", mapOf(Fields.TITLE to "A2")))
         assertNotEquals(fingerprint(before), fingerprint(after))
     }
 
     @Test
     fun `does not depend on insertion order`() {
-        val one = build(listOf(put("a", mapOf(ItemField.TITLE to "A"))))
-        val two = build(listOf(put("b", mapOf(ItemField.TITLE to "B"))))
+        val one = build(listOf(put("a", mapOf(Fields.TITLE to "A"))))
+        val two = build(listOf(put("b", mapOf(Fields.TITLE to "B"))))
         assertEquals(fingerprint(mergeVaults(one, two)), fingerprint(mergeVaults(two, one)))
     }
 }

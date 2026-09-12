@@ -23,7 +23,7 @@ private suspend fun Harness.seed() {
     sync.putItem(
         itemId = "chase",
         keyringId = "ring",
-        fields = mapOf(ItemField.TITLE to "Chase Bank", ItemField.PASSWORD to "old-password"),
+        fields = mapOf(Fields.TITLE to "Chase Bank", Fields.PASSWORD to "old-password"),
     )
     sync.sync()
 }
@@ -45,7 +45,7 @@ class EditDuringSyncTest {
                 h.sync.putItem(
                     itemId = "bank",
                     keyringId = "ring",
-                    fields = mapOf(ItemField.PASSWORD to "the-one-that-matters"),
+                    fields = mapOf(Fields.PASSWORD to "the-one-that-matters"),
                 )
             }
         }
@@ -53,13 +53,13 @@ class EditDuringSyncTest {
         h.sync.putItem(
             itemId = "chase",
             keyringId = "ring",
-            fields = mapOf(ItemField.PASSWORD to "rotated"),
+            fields = mapOf(Fields.PASSWORD to "rotated"),
         )
         h.sync.sync()
 
         // It must still be on the device.
         val local = h.sync.state()
-        assertEquals("the-one-that-matters", local.items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("the-one-that-matters", local.items["bank"]?.field(Fields.PASSWORD))
 
         // It must NOT have been acknowledged: it was not in that revision.
         assertEquals(1, h.storage.pending().size)
@@ -69,7 +69,7 @@ class EditDuringSyncTest {
         h.sync.sync()
         assertEquals(
             "the-one-that-matters",
-            h.remote.snapshot().items["bank"]?.field(ItemField.PASSWORD),
+            h.remote.snapshot().items["bank"]?.field(Fields.PASSWORD),
         )
         assertTrue(h.sync.isFullyBackedUp())
     }
@@ -88,19 +88,19 @@ class EditDuringSyncTest {
                     h.sync.putItem(
                         itemId = "site-$i",
                         keyringId = "ring",
-                        fields = mapOf(ItemField.PASSWORD to "pw-$i"),
+                        fields = mapOf(Fields.PASSWORD to "pw-$i"),
                     )
                 }
             }
         }
 
-        h.sync.putItem("chase", "ring", mapOf(ItemField.PASSWORD to "rotated"))
+        h.sync.putItem("chase", "ring", mapOf(Fields.PASSWORD to "rotated"))
         h.sync.sync()
         h.sync.sync()
 
         val published = h.remote.snapshot()
         repeat(25) { i ->
-            assertEquals("pw-$i", published.items["site-$i"]?.field(ItemField.PASSWORD))
+            assertEquals("pw-$i", published.items["site-$i"]?.field(Fields.PASSWORD))
         }
         assertTrue(h.sync.isFullyBackedUp())
     }
@@ -114,14 +114,14 @@ class OfflineTest {
         h.seed()
 
         h.remote.offline = true
-        h.sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "offline-save"))
+        h.sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "offline-save"))
         val outcome = h.sync.sync()
         assertTrue(outcome is SyncOutcome.Offline)
         assertEquals(1, outcome.pending)
         assertFalse(h.sync.isFullyBackedUp())
 
         // Durable on the device even though the cloud never saw it.
-        assertEquals("offline-save", h.sync.state().items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("offline-save", h.sync.state().items["bank"]?.field(Fields.PASSWORD))
 
         h.remote.offline = false
         val reconnected = h.sync.sync()
@@ -129,7 +129,7 @@ class OfflineTest {
         assertEquals(0, h.storage.pending().size)
         assertEquals(
             "offline-save",
-            h.remote.snapshot().items["bank"]?.field(ItemField.PASSWORD),
+            h.remote.snapshot().items["bank"]?.field(Fields.PASSWORD),
         )
     }
 }
@@ -145,8 +145,8 @@ class TwoDevicesTest {
         a.seed()
         b.sync.sync() // B adopts the baseline
 
-        a.sync.putItem("netflix", "ring", mapOf(ItemField.PASSWORD to "from-A"))
-        b.sync.putItem("costco", "ring", mapOf(ItemField.PASSWORD to "from-B"))
+        a.sync.putItem("netflix", "ring", mapOf(Fields.PASSWORD to "from-A"))
+        b.sync.putItem("costco", "ring", mapOf(Fields.PASSWORD to "from-B"))
 
         // B publishes during A's read-to-write window, so A's write is rejected
         // and must re-merge rather than clobber.
@@ -163,8 +163,8 @@ class TwoDevicesTest {
         assertTrue(remote.rejectedWrites > 0)
 
         val published = remote.snapshot()
-        assertEquals("from-A", published.items["netflix"]?.field(ItemField.PASSWORD))
-        assertEquals("from-B", published.items["costco"]?.field(ItemField.PASSWORD))
+        assertEquals("from-A", published.items["netflix"]?.field(Fields.PASSWORD))
+        assertEquals("from-B", published.items["costco"]?.field(Fields.PASSWORD))
     }
 
     @Test
@@ -176,16 +176,16 @@ class TwoDevicesTest {
         a.seed()
         b.sync.sync()
 
-        a.sync.putItem("chase", "ring", mapOf(ItemField.USERNAME to "maria@x.com"))
-        b.sync.putItem("chase", "ring", mapOf(ItemField.PASSWORD to "rotated-by-B"))
+        a.sync.putItem("chase", "ring", mapOf(Fields.USERNAME to "maria@x.com"))
+        b.sync.putItem("chase", "ring", mapOf(Fields.PASSWORD to "rotated-by-B"))
 
         a.sync.sync()
         b.sync.sync()
         a.sync.sync()
 
         val item = assertNotNull(remote.snapshot().items["chase"])
-        assertEquals("maria@x.com", item.field(ItemField.USERNAME))
-        assertEquals("rotated-by-B", item.field(ItemField.PASSWORD))
+        assertEquals("maria@x.com", item.field(Fields.USERNAME))
+        assertEquals("rotated-by-B", item.field(Fields.PASSWORD))
     }
 
     @Test
@@ -193,7 +193,7 @@ class TwoDevicesTest {
         val h = Harness()
         h.seed()
 
-        h.sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "x"))
+        h.sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "x"))
         h.remote.forceConflicts = 99
         val outcome = h.sync.sync()
         assertTrue(outcome is SyncOutcome.ConflictExhausted)
@@ -225,7 +225,7 @@ class CrashSafetyTest {
         val sync = VaultSync(brittle, remote, Clock("A"), newId = seqIds("A"))
 
         sync.putKeyring(keyringId = "ring", name = "Household")
-        sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "s3cret"))
+        sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "s3cret"))
 
         assertFailsWith<IllegalStateException> { sync.sync() }
 
@@ -238,7 +238,7 @@ class CrashSafetyTest {
         assertTrue(outcome is SyncOutcome.Unchanged)
         assertEquals(0, inner.pending().size)
         assertEquals(1, visibleItems(remote.snapshot()).size)
-        assertEquals("s3cret", remote.snapshot().items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("s3cret", remote.snapshot().items["bank"]?.field(Fields.PASSWORD))
     }
 
     @Test
@@ -249,7 +249,7 @@ class CrashSafetyTest {
 
         sync.putKeyring(keyringId = "ring", name = "Household")
         remote.offline = true
-        sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "s3cret"))
+        sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "s3cret"))
         sync.sync()
 
         // Restart: durable state and queue survive, engine and clock are new.
@@ -260,7 +260,7 @@ class CrashSafetyTest {
         remote.offline = false
         val outcome = sync2.sync()
         assertTrue(outcome is SyncOutcome.Published)
-        assertEquals("s3cret", remote.snapshot().items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("s3cret", remote.snapshot().items["bank"]?.field(Fields.PASSWORD))
         assertEquals(0, restarted.pending().size)
     }
 }
@@ -275,19 +275,19 @@ class ClockSkewTest {
         val b = Harness(remote, node = "B", physical = { 1_700_000_000_000 - 3_600_000 })
 
         a.sync.putKeyring(keyringId = "ring", name = "Household")
-        a.sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "from-A"))
+        a.sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "from-A"))
         a.sync.sync()
 
         // B pulls A's revision, then makes a genuinely later edit.
         b.sync.sync()
-        b.sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "from-B"))
+        b.sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "from-B"))
         b.sync.sync()
 
         // With naive wall-clock LWW, B's edit would lose and vanish.
-        assertEquals("from-B", remote.snapshot().items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("from-B", remote.snapshot().items["bank"]?.field(Fields.PASSWORD))
 
         a.sync.sync()
-        assertEquals("from-B", a.sync.state().items["bank"]?.field(ItemField.PASSWORD))
+        assertEquals("from-B", a.sync.state().items["bank"]?.field(Fields.PASSWORD))
     }
 }
 
@@ -304,7 +304,7 @@ class BackedUpReportingTest {
         assertTrue(h.sync.isFullyBackedUp())
 
         h.remote.offline = true
-        h.sync.putItem("bank", "ring", mapOf(ItemField.PASSWORD to "x"))
+        h.sync.putItem("bank", "ring", mapOf(Fields.PASSWORD to "x"))
         assertFalse(h.sync.isFullyBackedUp())
         h.sync.sync()
         assertFalse(h.sync.isFullyBackedUp())
@@ -321,11 +321,11 @@ class StorageContractTest {
     fun `applyRemote joins rather than replaces`() = runTest {
         val h = Harness()
         h.sync.putKeyring(keyringId = "ring", name = "Household")
-        h.sync.putItem("local-only", "ring", mapOf(ItemField.PASSWORD to "keep-me"))
+        h.sync.putItem("local-only", "ring", mapOf(Fields.PASSWORD to "keep-me"))
 
         // An incoming revision that knows nothing about the local item must not
         // erase it. A blind assignment here is the easy-bc bug.
         val joined = h.storage.applyRemote(emptyVault())
-        assertEquals("keep-me", joined.items["local-only"]?.field(ItemField.PASSWORD))
+        assertEquals("keep-me", joined.items["local-only"]?.field(Fields.PASSWORD))
     }
 }

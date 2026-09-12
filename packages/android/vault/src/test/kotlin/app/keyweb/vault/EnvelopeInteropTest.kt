@@ -57,12 +57,12 @@ class EnvelopeInteropTest {
         val state = cipher.open(fixture.envelope)
 
         val chase = assertNotNull(state.items["chase"])
-        assertEquals("Chase Bank", chase.field(ItemField.TITLE))
-        assertEquals("the-one-that-matters", chase.field(ItemField.PASSWORD))
-        assertEquals("maria@example.com", chase.field(ItemField.USERNAME))
+        assertEquals("Chase Bank", chase.field(Fields.TITLE))
+        assertEquals("the-one-that-matters", chase.field(Fields.PASSWORD))
+        assertEquals("maria@example.com", chase.field(Fields.USERNAME))
         // Imported structure has to survive the round trip too, not just secrets.
-        assertEquals("Banking / Personal", chase.field(ItemField.FOLDER))
-        assertEquals("finance, important", chase.field(ItemField.TAGS))
+        assertEquals("Banking / Personal", chase.field(Fields.FOLDER))
+        assertEquals("finance, important", chase.field(Fields.TAGS))
         assertEquals("Household", state.keyrings["ring"]?.name?.value)
         // A deleted item stays deleted rather than being resurrected by a restore.
         assertTrue(state.items["netflix"]?.deleted?.value == true)
@@ -96,9 +96,9 @@ class EnvelopeInteropTest {
                 itemId = "chase",
                 keyringId = "ring",
                 fields = mapOf(
-                    ItemField.TITLE to "Chase Bank",
-                    ItemField.PASSWORD to "sealed-on-android",
-                    ItemField.FOLDER to "Banking / Personal",
+                    Fields.TITLE to "Chase Bank",
+                    Fields.PASSWORD to "sealed-on-android",
+                    Fields.FOLDER to "Banking / Personal",
                 ),
             ),
         )

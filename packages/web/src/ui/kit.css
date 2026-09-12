@@ -436,6 +436,8 @@
   margin: 0 0 1.15rem;
 }
 .sheet-code {
+  /* A span now, so the code can be drawn glyph by glyph. */
+  display: block;
   font-family: var(--mono);
   font-size: clamp(1.15rem, 4.5vw, 1.7rem);
   letter-spacing: 0.1em;
@@ -447,6 +449,53 @@
   margin: 0 0 1.1rem;
   text-align: center;
   word-break: break-word;
+}
+
+/*
+ * Digits and letters, told apart at a glance.
+ *
+ * Colour alone would fail anyone who cannot see it and every black-and-white
+ * printout, so weight carries the same distinction: digits are heavier. The
+ * pair is legible in monochrome, which is exactly how this sheet gets printed.
+ */
+.glyph.digit {
+  color: #8a5a00;
+  font-weight: 800;
+}
+
+.glyph.letter {
+  color: #1f2a37;
+  font-weight: 500;
+}
+
+.code-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+  align-items: baseline;
+  font-size: 0.85em;
+  color: var(--muted);
+  margin: 0 0 1.1rem;
+}
+
+.code-legend .glyph {
+  font-family: var(--mono);
+}
+
+.code-legend-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+@media print {
+  /* Printed in grey rather than colour, so the weight does the work. */
+  .glyph.digit {
+    color: #000;
+  }
+
+  .glyph.letter {
+    color: #444;
+  }
 }
 .sheet ol {
   margin: 0;

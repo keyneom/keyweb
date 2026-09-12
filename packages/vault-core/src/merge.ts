@@ -21,7 +21,7 @@ function mergeHistory(a: HistoryEntry[], b: HistoryEntry[]): HistoryEntry[] {
 }
 
 function mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
-  const fields: Partial<Record<ItemField, Reg<string>>> = {};
+  const fields: Record<ItemField, Reg<string>> = {};
   const names = new Set([...Object.keys(a.fields), ...Object.keys(b.fields)] as ItemField[]);
   for (const name of names) {
     const winner = pickReg(a.fields[name], b.fields[name]);
