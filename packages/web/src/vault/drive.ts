@@ -55,6 +55,31 @@ type BackupPayload = {
   recovery?: unknown;
 };
 
+/**
+ * The `updatedAt` an envelope was sealed at, or null if it is not one.
+ *
+ * Comparing the two envelopes' timestamps is how any device can tell whether
+ * the recovery copy has fallen behind the real one *without* being able to open
+ * either. Nothing else in the file can answer that: the fingerprint would, but
+ * it embeds raw field values and must never leave the device.
+ */
+function sealedAt(envelope: unknown): string | null {
+  if (!envelope || typeof envelope !== "object") return null;
+  const value = (envelope as { updatedAt?: unknown }).updatedAt;
+  return typeof value === "string" ? value : null;
+}
+
+/** True when the recovery copy is older than the vault it is supposed to restore. */
+export function recoveryIsStale(payload: {
+  passkey: unknown;
+  recovery?: unknown;
+}): boolean {
+  const primary = sealedAt(payload.passkey);
+  const recovery = sealedAt(payload.recovery);
+  if (primary === null || recovery === null) return false;
+  return recovery < primary;
+}
+
 function parsePayload(content: string): BackupPayload | null {
   const parsed = JSON.parse(content) as BackupPayload | Record<string, unknown>;
   if (parsed && typeof parsed === "object" && "passkey" in parsed) {
@@ -77,7 +102,7 @@ export type DriveRemoteOptions = {
 export class GoogleDriveRemote implements RemoteVaultStore {
   readonly #store: GoogleDriveFileStore;
   readonly #cipher: VaultCipher;
-  readonly #recoveryCipher: VaultCipher | null;
+  #recoveryCipher: VaultCipher | null;
   readonly #authorize: () => Promise<Authorization>;
   #fileId: string | null = null;
   #folderId: string | null = null;
@@ -98,6 +123,17 @@ export class GoogleDriveRemote implements RemoteVaultStore {
   }
 
   /** Translate transport failures into the calm offline state. */
+  /**
+   * Start keeping the recovery copy current from now on.
+   *
+   * Used when a device adopts a code it did not mint. Until this is called the
+   * device carries the existing recovery envelope forward untouched rather than
+   * rewriting or dropping it.
+   */
+  setRecoveryCipher(cipher: VaultCipher): void {
+    this.#recoveryCipher = cipher;
+  }
+
   async #auth(): Promise<Authorization> {
     try {
       return await this.#authorize();
@@ -194,14 +230,6 @@ export class GoogleDriveRemote implements RemoteVaultStore {
 
   async write(state: VaultState, expectedVersion: string | null): Promise<string> {
     const authorization = await this.#auth();
-    const payload: BackupPayload = {
-      v: 1,
-      passkey: await this.#cipher.sealState(state),
-      ...(this.#recoveryCipher
-        ? { recovery: await this.#recoveryCipher.sealState(state) }
-        : {}),
-    };
-    const sealed = JSON.stringify(payload);
 
     let fileId: string | null;
     try {
@@ -212,7 +240,8 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       );
     }
 
-    // First publish: create the folder and the file.
+    // First publish: create the folder and the file. Nothing exists yet, so
+    // there is no recovery copy to preserve.
     if (!fileId) {
       if (expectedVersion !== null) {
         // We were told to expect a revision but the file is gone. Refusing is
@@ -220,6 +249,7 @@ export class GoogleDriveRemote implements RemoteVaultStore {
         // to this session rather than actually deleted.
         throw new VersionConflictError("The backup file could not be found.");
       }
+      const sealed = JSON.stringify(await this.#payload(state, undefined));
       const folderId = await this.#ensureFolder(authorization);
       const createdId = await this.#store.create(FILE_NAME, sealed, authorization, {
         parentId: folderId,
@@ -243,8 +273,57 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       }
     }
 
+    const sealed = JSON.stringify(
+      await this.#payload(state, await this.#carriedRecovery(fileId, authorization)),
+    );
     await this.#store.write(fileId, sealed, authorization, { contentType: CONTENT_TYPE });
     return this.#version(fileId, authorization);
+  }
+
+  async #payload(state: VaultState, carried: unknown): Promise<BackupPayload> {
+    const recovery = this.#recoveryCipher
+      ? await this.#recoveryCipher.sealState(state)
+      : carried;
+    return {
+      v: 1,
+      passkey: await this.#cipher.sealState(state),
+      ...(recovery === undefined ? {} : { recovery }),
+    };
+  }
+
+  /**
+   * The recovery envelope this device cannot rewrite, read back so the write
+   * carries it forward instead of deleting it.
+   *
+   * A second device unlocks with the same passkey but has no copy of the
+   * printed code, so it cannot reseal the recovery envelope. Omitting it would
+   * delete the only thing that opens the backup without a passkey, and the
+   * sheet in someone's filing cabinet would stop working with no indication
+   * until the day they needed it. Carrying it forward leaves it stale instead,
+   * which `recoveryIsStale` reports so the app can ask for the code rather than
+   * let it quietly rot.
+   *
+   * A device that *can* reseal skips the extra round trip entirely.
+   */
+  async #carriedRecovery(fileId: string, authorization: Authorization): Promise<unknown> {
+    if (this.#recoveryCipher) return undefined;
+    let existing: string;
+    try {
+      existing = await this.#store.readText(fileId, authorization);
+    } catch (cause) {
+      // Not knowing what is there must not escalate into deleting it.
+      throw new RemoteUnavailableError(
+        cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
+      );
+    }
+    if (!existing.trim()) return undefined;
+    try {
+      return parsePayload(existing)?.recovery;
+    } catch {
+      // Unreadable content holds no recovery envelope worth preserving, and
+      // refusing to write would strand this device permanently.
+      return undefined;
+    }
   }
 
   async #ensureFolder(authorization: Authorization): Promise<string> {

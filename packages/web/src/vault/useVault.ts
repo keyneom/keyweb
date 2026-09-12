@@ -16,6 +16,7 @@ import { createRecoveryCipher, passkeySupported, unlockVault } from "./crypto";
 import {
   formatRecoveryCode,
   generateRecoverySecret,
+  InvalidRecoveryCode,
   parseRecoveryCode,
 } from "./recovery";
 import { GoogleDriveRemote } from "./drive";
@@ -71,6 +72,15 @@ export type VaultApi = {
    */
   newRecoveryCode: string | null;
   dismissRecoveryCode(): void;
+  /**
+   * True when this backup is already protected by a code this device does not
+   * hold — a second device, or a reinstall. Until the code is supplied, this
+   * device cannot keep the recovery copy current, so the copy in Drive stays
+   * frozen at whatever the code-holding device last published.
+   */
+  recoveryNeedsCode: boolean;
+  /** Prove the existing code, then keep the recovery copy current from here. */
+  adoptRecoveryCode(code: string): Promise<void>;
   lock(): void;
   syncNow(): Promise<void>;
   saveItem(input: {
@@ -85,6 +95,31 @@ export type VaultApi = {
   importKeePass(preview: ImportPreview): Promise<number>;
 };
 
+/**
+ * Moves sealed envelopes around without decrypting them.
+ *
+ * The probe paths need the raw envelope — to read its salt, or to hand it to a
+ * recovery cipher — and must not hold a key capable of opening it.
+ */
+const passthroughCipher: VaultCipher = {
+  sealState: async (value) => value,
+  openState: async (value) => value as VaultState,
+  sealOp: async (value) => value,
+  openOp: async (value) => value as never,
+};
+
+/** Does the backup already carry a recovery copy someone may have printed? */
+async function backupAlreadyHasRecovery(): Promise<boolean> {
+  try {
+    const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+    return (await probe.fetchRecoverySealed()) !== null;
+  } catch {
+    // Unreachable Drive must not be read as "no code exists", because that
+    // would mint a new one and retire the printed sheet.
+    return true;
+  }
+}
+
 export function useVault(): VaultApi {
   const [phase, setPhase] = useState<VaultPhase>("checking");
   const [firstRun, setFirstRun] = useState(false);
@@ -98,8 +133,13 @@ export function useVault(): VaultApi {
   });
 
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
+  /** This backup already has a recovery code, and it is not on this device. */
+  const [recoveryNeedsCode, setRecoveryNeedsCode] = useState(false);
   const syncRef = useRef<VaultSync | null>(null);
   const lockRef = useRef<(() => void) | null>(null);
+  const storageRef = useRef<IndexedDbVaultStorage | null>(null);
+  const cipherRef = useRef<VaultCipher | null>(null);
+  const remoteRef = useRef<GoogleDriveRemote | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +178,9 @@ export function useVault(): VaultApi {
   const start = useCallback(
     async (cipher: VaultCipher, lock: () => void, seedFromRemote: boolean) => {
       lockRef.current = lock;
+      cipherRef.current = cipher;
       const storage = await IndexedDbVaultStorage.open({ cipher });
+      storageRef.current = storage;
       const clock = createClock({ node: deviceNode(), resume: await storage.readClock() });
 
       // The recovery secret is kept sealed under the vault key, so every
@@ -154,6 +196,17 @@ export function useVault(): VaultApi {
             Uint8Array.from(raw as unknown as number[]),
             await storage.readMeta("recovery-envelope"),
           );
+        } else if (await backupAlreadyHasRecovery()) {
+          // A second device, or a reinstall. There is already a code written
+          // down somewhere, and this device cannot derive it.
+          //
+          // Minting a fresh one here would look harmless — a new sheet to
+          // print — but it would reseal the backup under a different key and
+          // silently retire the sheet already in someone's filing cabinet.
+          // They would discover that only on the day they needed it. So this
+          // device leaves the recovery copy alone and asks for the existing
+          // code instead.
+          setRecoveryNeedsCode(true);
         } else {
           const secret = generateRecoverySecret();
           recoveryCipher = await createRecoveryCipher(secret);
@@ -172,6 +225,7 @@ export function useVault(): VaultApi {
             ...(recoveryCipher ? { recoveryCipher } : {}),
           })
         : new UnconfiguredRemote();
+      remoteRef.current = remote instanceof GoogleDriveRemote ? remote : null;
       const sync = new VaultSync({ storage, remote, clock });
       syncRef.current = sync;
 
@@ -193,6 +247,40 @@ export function useVault(): VaultApi {
       if (!seedFromRemote) backgroundSync();
     },
     [backgroundSync],
+  );
+
+  /**
+   * Adopt the recovery code that already protects this backup.
+   *
+   * Verified by actually opening the remote recovery envelope with it, not by
+   * shape: accepting an unverified code would leave the device believing it can
+   * keep the recovery copy current when it cannot.
+   */
+  const adoptRecoveryCode = useCallback(
+    async (code: string) => {
+      const sync = syncRef.current;
+      if (!sync) throw new Error("Unlock Keyweb first.");
+      const secret = parseRecoveryCode(code);
+      const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+      const sealed = await probe.fetchRecoverySealed();
+      if (!sealed) throw new InvalidRecoveryCode("This backup has no recovery copy yet.");
+      const viaCode = await createRecoveryCipher(secret, sealed);
+      // Throws if the code is wrong, which is the whole point of the check.
+      await viaCode.openState(sealed);
+
+      const storage = storageRef.current;
+      const cipher = cipherRef.current;
+      if (storage && cipher) {
+        await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
+        await storage.writeMeta("recovery-envelope", sealed);
+      }
+      setRecoveryNeedsCode(false);
+      // Reseal the recovery copy now rather than at the next unlock, so the
+      // window where it is stale closes immediately.
+      remoteRef.current?.setRecoveryCipher(viaCode);
+      await sync.sync();
+    },
+    [],
   );
 
   const describe = useCallback((cause: unknown): string => {
@@ -229,16 +317,8 @@ export function useVault(): VaultApi {
     setPhase("unlocking");
     setError(null);
     try {
-      const probe = new GoogleDriveRemote({
-        clientId: CLIENT_ID,
-        // Only the raw envelope is needed here, and fetching it never decrypts.
-        cipher: {
-          sealState: async (value) => value,
-          openState: async (value) => value as VaultState,
-          sealOp: async (value) => value,
-          openOp: async (value) => value as never,
-        },
-      });
+      // Only the raw envelope is needed here, and fetching it never decrypts.
+      const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
       const sealed = await probe.fetchSealedState();
       if (!sealed) {
         setError("There's no Keyweb backup in that Google account yet.");
@@ -266,15 +346,7 @@ export function useVault(): VaultApi {
       setError(null);
       try {
         const secret = parseRecoveryCode(code);
-        const probe = new GoogleDriveRemote({
-          clientId: CLIENT_ID,
-          cipher: {
-            sealState: async (value) => value,
-            openState: async (value) => value as VaultState,
-            sealOp: async (value) => value,
-            openOp: async (value) => value as never,
-          },
-        });
+        const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
         const sealed = await probe.fetchRecoverySealed();
         if (!sealed) {
           setError("That Google account has no Keyweb backup that a code can open.");
@@ -416,6 +488,8 @@ export function useVault(): VaultApi {
     restore,
     restoreWithCode,
     newRecoveryCode,
+    recoveryNeedsCode,
+    adoptRecoveryCode,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,
     syncNow,

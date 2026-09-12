@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -137,6 +138,26 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                 }
 
                 val firstKeyring = ui.vault.keyrings.keys.firstOrNull() ?: "personal"
+
+                /**
+                 * One definition of "back", used by both the arrow and the
+                 * system gesture.
+                 *
+                 * They were not the same thing before: the arrow moved the
+                 * route, the gesture fell through to the activity and closed
+                 * the app mid-task. Anything that is not the list goes back to
+                 * where it was opened from; on the list itself, back is left
+                 * alone so it still leaves the app.
+                 */
+                fun goBack() {
+                    route = when (val current = route) {
+                        is Route.Edit ->
+                            current.itemId?.let { Route.Detail(it) } ?: Route.List
+                        else -> Route.List
+                    }
+                }
+                BackHandler(enabled = route != Route.List) { goBack() }
+
                 when (val current = route) {
                     is Route.List -> VaultListScreen(
                         state = ui.vault,
@@ -157,7 +178,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             ItemDetailScreen(
                                 item = item,
                                 state = ui.vault,
-                                onBack = { route = Route.List },
+                                onBack = ::goBack,
                                 onEdit = { route = Route.Edit(item.id) },
                                 onDelete = {
                                     viewModel.deleteItem(item.id) { route = Route.List }
@@ -171,7 +192,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         item = current.itemId?.let { ui.vault.items[it] },
                         state = ui.vault,
                         defaultKeyringId = firstKeyring,
-                        onBack = { route = Route.List },
+                        onBack = ::goBack,
                         onSave = { itemId, keyringId, fields ->
                             viewModel.saveItem(itemId, keyringId, fields) { route = Route.List }
                         },
@@ -180,7 +201,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     is Route.Keyrings -> KeyringsScreen(
                         state = ui.vault,
                         items = ui.items,
-                        onBack = { route = Route.List },
+                        onBack = ::goBack,
                         onAdd = viewModel::addKeyring,
                     )
 
@@ -197,7 +218,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                                 if (it == null) remove("dark") else putBoolean("dark", it)
                             }.apply()
                         },
-                        onBack = { route = Route.List },
+                        onBack = ::goBack,
                     )
                 }
             }

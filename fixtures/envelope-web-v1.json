@@ -1,0 +1,17 @@
+{
+  "note": "Sealed by the TypeScript implementation. Kotlin must open it with the code below.",
+  "recoveryCode": "7A8G-RZF2-8PW1-DW19-BJHQ-3N38-1EF3-FGJG",
+  "fingerprint": "v1:chase|001700000000000-00001-fixture:ring|001700000000000-00001-fixture:false|folder=001700000000000-00001-fixture:Banking / Personal,password=001700000000000-00001-fixture:the-one-that-matters,tags=001700000000000-00001-fixture:finance, important,title=001700000000000-00001-fixture:Chase Bank,username=001700000000000-00001-fixture:maria@example.com;netflix|001700000000000-00002-fixture:ring|001700000000000-00003-fixture:true|password=001700000000000-00002-fixture:shared-one,title=001700000000000-00002-fixture:Netflix#ring|001700000000000-00000-fixture:Household|000000000000000-00000-:false",
+  "envelope": {
+    "schemaVersion": 1,
+    "algorithm": "AES-256-GCM+HKDF-SHA-256",
+    "compression": "gzip",
+    "credentialId": "recovery",
+    "rpId": "keyweb",
+    "prfInput": "bX_GuptK4UGdAbTmp4tbJ3punVGMvGeAmQCyZcrhHUI",
+    "kdfSalt": "dWVspMTEk7sW6h-uJib2gCr9va7OgxyOugZOmDZfenA",
+    "nonce": "ADD_kieBVzStI8sB",
+    "ciphertext": "GErcUaiWYcq7ZYK9QA047wgCF8rrVrj1Q9XmXDdi6sVKjWUif0Tvh4-mUqZ91CE9lMd0QdRV2KQsVH6qVn-GKOYbPyZFOhwNr_VQRrED6bEnxfK2rqJBdEwYYUXWEEsjXTw6crjVr5sk1LXFL6llnArYd4tqbl0tHJyO-GBIqfe1qcrfM94FqwtOyvDwbjIVGuYioQf_1t8Mcb1ndzfVEPeyiYiqJUX_wZFqn3F5Mq5aaiPe8yq9AJhsVSLnGfGWeoId2zwV8aP3iDn_1bYVqBbMhkxIq7KY0PVcCP4PI2BEw8Ev_rW98CyJDtU_xlZztfbQTIkPUZFqifNQMYeEvrODqFRjSJHLxgfdD5GQJJ4L8akDCiCXl9gzHMELDXm4dmu_2WYi18cfCbQ_8DS0yFC9PO4Ke3BTAkxA6FF9Rwc0xpJ7OA",
+    "updatedAt": "2026-09-12T21:55:57.068Z"
+  }
+}
