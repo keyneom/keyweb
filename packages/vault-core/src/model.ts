@@ -28,7 +28,22 @@ export function pickReg<T>(a: Reg<T> | undefined, b: Reg<T> | undefined): Reg<T>
 }
 
 /** Fields we store on a login. Free-form so a schema change needs no migration. */
-export const ITEM_FIELDS = ["title", "username", "password", "url", "note"] as const;
+/**
+ * `folder` and `tags` exist to preserve structure brought in from elsewhere.
+ * KeePass and KeeWeb organise entries into nested groups and tag them, and
+ * dropping that on import would turn an organised vault into an undifferentiated
+ * list. They are plain fields so they inherit the same per-field merge as
+ * everything else, with no CRDT machinery of their own.
+ */
+export const ITEM_FIELDS = [
+  "title",
+  "username",
+  "password",
+  "url",
+  "note",
+  "folder",
+  "tags",
+] as const;
 export type ItemField = (typeof ITEM_FIELDS)[number];
 
 export type HistoryEntry = {

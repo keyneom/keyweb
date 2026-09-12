@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="app.keyweb.vault.TwoDevicesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-12T04:01:08.582Z" hostname="Micaels-MacBook-Air.local" time="0.004">
+<testsuite name="app.keyweb.vault.TwoDevicesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-12T05:46:40.075Z" hostname="Micaels-MacBook-Air.local" time="0.004">
   <properties/>
   <testcase name="gives up cleanly rather than looping forever under permanent contention()" classname="app.keyweb.vault.TwoDevicesTest" time="0.001"/>
   <testcase name="merges both sides when a competing revision lands mid-flight()" classname="app.keyweb.vault.TwoDevicesTest" time="0.002"/>

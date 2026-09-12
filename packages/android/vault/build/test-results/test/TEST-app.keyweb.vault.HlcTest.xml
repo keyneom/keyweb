@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="app.keyweb.vault.HlcTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-12T04:01:08.571Z" hostname="Micaels-MacBook-Air.local" time="0.002">
+<testsuite name="app.keyweb.vault.HlcTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-12T05:46:40.063Z" hostname="Micaels-MacBook-Air.local" time="0.002">
   <properties/>
   <testcase name="round-trips and sorts lexicographically in causal order()" classname="app.keyweb.vault.HlcTest" time="0.0"/>
-  <testcase name="sorts a local edit after a remote one it has observed()" classname="app.keyweb.vault.HlcTest" time="0.0"/>
+  <testcase name="sorts a local edit after a remote one it has observed()" classname="app.keyweb.vault.HlcTest" time="0.001"/>
   <testcase name="resumes causal time across a restart()" classname="app.keyweb.vault.HlcTest" time="0.001"/>
   <testcase name="advances monotonically even when the wall clock stalls or goes backwards()" classname="app.keyweb.vault.HlcTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>

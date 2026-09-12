@@ -30,13 +30,22 @@ fun <T> pickReg(a: Reg<T>?, b: Reg<T>?): Reg<T>? {
     return if (a.ts > b.ts) a else b
 }
 
+/**
+ * `FOLDER` and `TAGS` exist to preserve structure brought in from elsewhere.
+ * KeePass and KeeWeb organise entries into nested groups and tag them, and
+ * dropping that on import would turn an organised vault into an
+ * undifferentiated list. They are plain fields, so they inherit the same
+ * per-field merge as everything else.
+ */
 @Serializable
 enum class ItemField {
     @SerialName("title") TITLE,
     @SerialName("username") USERNAME,
     @SerialName("password") PASSWORD,
     @SerialName("url") URL,
-    @SerialName("note") NOTE;
+    @SerialName("note") NOTE,
+    @SerialName("folder") FOLDER,
+    @SerialName("tags") TAGS;
 
     /** The wire name, which is what the TypeScript side uses as its map key. */
     val wire: String
