@@ -2,9 +2,16 @@
   "name": "keyweb",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "overrides": {
+    "kdbxweb": {
+      "@xmldom/xmldom": "0.8.15"
+    }
   }
 }
