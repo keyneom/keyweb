@@ -41,9 +41,34 @@ const CONTENT_TYPE = "application/json";
 
 export const KEYWEB_SCOPES = `${GOOGLE_DRIVE_FILE_SCOPE} ${GOOGLE_DRIVE_APPDATA_SCOPE}`;
 
+/**
+ * What actually sits in the Drive file.
+ *
+ * The same vault sealed twice: once under the passkey-derived key and once
+ * under the recovery-code-derived key. Both are written in the same request,
+ * so the recovery copy can never lag behind the real one -- a stale recovery
+ * copy would be worse than none, because it would restore silently wrong.
+ */
+type BackupPayload = {
+  v: 1;
+  passkey: unknown;
+  recovery?: unknown;
+};
+
+function parsePayload(content: string): BackupPayload | null {
+  const parsed = JSON.parse(content) as BackupPayload | Record<string, unknown>;
+  if (parsed && typeof parsed === "object" && "passkey" in parsed) {
+    return parsed as BackupPayload;
+  }
+  // A backup written before the recovery copy existed is a bare envelope.
+  return { v: 1, passkey: parsed };
+}
+
 export type DriveRemoteOptions = {
   clientId: string;
   cipher: VaultCipher;
+  /** Seals the second, recovery-code-openable copy. */
+  recoveryCipher?: VaultCipher;
   /** Injectable for tests; defaults to a real Drive-backed store. */
   store?: GoogleDriveFileStore;
   authorize?: () => Promise<Authorization>;
@@ -52,6 +77,7 @@ export type DriveRemoteOptions = {
 export class GoogleDriveRemote implements RemoteVaultStore {
   readonly #store: GoogleDriveFileStore;
   readonly #cipher: VaultCipher;
+  readonly #recoveryCipher: VaultCipher | null;
   readonly #authorize: () => Promise<Authorization>;
   #fileId: string | null = null;
   #folderId: string | null = null;
@@ -59,6 +85,7 @@ export class GoogleDriveRemote implements RemoteVaultStore {
   constructor(options: DriveRemoteOptions) {
     this.#store = options.store ?? new GoogleDriveFileStore();
     this.#cipher = options.cipher;
+    this.#recoveryCipher = options.recoveryCipher ?? null;
     this.#authorize =
       options.authorize ??
       (() => {
@@ -119,7 +146,24 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       const fileId = await this.#findFile(authorization);
       if (!fileId) return null;
       const content = await this.#store.readText(fileId, authorization);
-      return content.trim() ? JSON.parse(content) : null;
+      return content.trim() ? (parsePayload(content)?.passkey ?? null) : null;
+    } catch (cause) {
+      if (cause instanceof RemoteUnavailableError) throw cause;
+      throw new RemoteUnavailableError(
+        cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
+      );
+    }
+  }
+
+  /** The recovery-code-sealed copy, for opening a backup without the passkey. */
+  async fetchRecoverySealed(): Promise<unknown | null> {
+    const authorization = await this.#auth();
+    try {
+      const fileId = await this.#findFile(authorization);
+      if (!fileId) return null;
+      const content = await this.#store.readText(fileId, authorization);
+      if (!content.trim()) return null;
+      return parsePayload(content)?.recovery ?? null;
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
       throw new RemoteUnavailableError(
@@ -136,7 +180,9 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       const version = await this.#version(fileId, authorization);
       const content = await this.#store.readText(fileId, authorization);
       if (!content.trim()) return null;
-      const state = await this.#cipher.openState(JSON.parse(content));
+      const payload = parsePayload(content);
+      if (!payload) return null;
+      const state = await this.#cipher.openState(payload.passkey);
       return { state, version };
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
@@ -148,7 +194,14 @@ export class GoogleDriveRemote implements RemoteVaultStore {
 
   async write(state: VaultState, expectedVersion: string | null): Promise<string> {
     const authorization = await this.#auth();
-    const sealed = JSON.stringify(await this.#cipher.sealState(state));
+    const payload: BackupPayload = {
+      v: 1,
+      passkey: await this.#cipher.sealState(state),
+      ...(this.#recoveryCipher
+        ? { recovery: await this.#recoveryCipher.sealState(state) }
+        : {}),
+    };
+    const sealed = JSON.stringify(payload);
 
     let fileId: string | null;
     try {

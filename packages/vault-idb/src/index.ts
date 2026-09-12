@@ -246,6 +246,24 @@ export class IndexedDbVaultStorage implements VaultStorage {
     });
   }
 
+  /**
+   * Small named values that sit beside the vault.
+   *
+   * Used for the sealed recovery secret: it must survive restarts so every
+   * publish can reseal the recovery copy, and it is stored already encrypted
+   * under the vault key, so this store never holds it in the clear.
+   */
+  async readMeta(key: string): Promise<unknown | undefined> {
+    const tx = this.#db.transaction(META, "readonly");
+    return request<unknown | undefined>(tx.objectStore(META).get(`meta:${key}`));
+  }
+
+  async writeMeta(key: string, value: unknown): Promise<void> {
+    const tx = this.#db.transaction(META, "readwrite");
+    tx.objectStore(META).put(value, `meta:${key}`);
+    await committed(tx);
+  }
+
   async readClock(): Promise<Hlc | undefined> {
     const tx = this.#db.transaction(META, "readonly");
     return request<Hlc | undefined>(tx.objectStore(META).get(CLOCK_KEY));

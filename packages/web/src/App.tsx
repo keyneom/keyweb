@@ -4,6 +4,7 @@ import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
+import { RecoverySheet } from "./screens/RecoverySheet";
 import { Unlock } from "./screens/Unlock";
 import { VaultList } from "./screens/VaultList";
 import { useDisplaySettings } from "./vault/useDisplaySettings";
@@ -46,7 +47,19 @@ export function App() {
           backupConfigured={vault.backupConfigured}
           onUnlock={() => void vault.unlock()}
           onRestore={() => void vault.restore()}
+          onRestoreWithCode={(code) => void vault.restoreWithCode(code)}
         />
+      </main>
+    );
+  }
+
+  // A newly minted recovery code takes precedence over everything: it exists
+  // in readable form exactly once, so it must not be possible to navigate past
+  // it by accident.
+  if (vault.newRecoveryCode) {
+    return (
+      <main className="app">
+        <RecoverySheet code={vault.newRecoveryCode} onDone={vault.dismissRecoveryCode} />
       </main>
     );
   }

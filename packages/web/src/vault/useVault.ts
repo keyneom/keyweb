@@ -12,7 +12,12 @@ import {
   visibleItems,
 } from "@keyweb/vault-core";
 import { IndexedDbVaultStorage, peekSealedState, type VaultCipher } from "@keyweb/vault-idb";
-import { passkeySupported, unlockVault } from "./crypto";
+import { createRecoveryCipher, passkeySupported, unlockVault } from "./crypto";
+import {
+  formatRecoveryCode,
+  generateRecoverySecret,
+  parseRecoveryCode,
+} from "./recovery";
 import { GoogleDriveRemote } from "./drive";
 
 /**
@@ -56,6 +61,15 @@ export type VaultApi = {
   unlock(): Promise<void>;
   /** Open a vault that already exists in Drive, onto a device that has none. */
   restore(): Promise<void>;
+  /** Open a backup with the printed code, when the passkey is gone. */
+  restoreWithCode(code: string): Promise<void>;
+  /**
+   * The printed recovery code, surfaced once just after setup so it can be
+   * written down. Null at every other time: it is never re-derivable for
+   * display, because holding it ready would defeat the point of printing it.
+   */
+  newRecoveryCode: string | null;
+  dismissRecoveryCode(): void;
   lock(): void;
   syncNow(): Promise<void>;
   saveItem(input: {
@@ -80,6 +94,7 @@ export function useVault(): VaultApi {
     syncing: false,
   });
 
+  const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
   const syncRef = useRef<VaultSync | null>(null);
   const lockRef = useRef<(() => void) | null>(null);
 
@@ -122,8 +137,37 @@ export function useVault(): VaultApi {
       lockRef.current = lock;
       const storage = await IndexedDbVaultStorage.open({ cipher });
       const clock = createClock({ node: deviceNode(), resume: await storage.readClock() });
+
+      // The recovery secret is kept sealed under the vault key, so every
+      // publish can reseal the recovery copy and it never drifts out of date.
+      // It is minted once, shown once, and after that only ever used, never
+      // displayed again.
+      let recoveryCipher: VaultCipher | undefined;
+      if (BACKUP_CONFIGURED) {
+        const storedSecret = await storage.readMeta("recovery-secret");
+        if (storedSecret) {
+          const raw = await cipher.openOp(storedSecret);
+          recoveryCipher = await createRecoveryCipher(
+            Uint8Array.from(raw as unknown as number[]),
+            await storage.readMeta("recovery-envelope"),
+          );
+        } else {
+          const secret = generateRecoverySecret();
+          recoveryCipher = await createRecoveryCipher(secret);
+          await storage.writeMeta(
+            "recovery-secret",
+            await cipher.sealOp([...secret] as never),
+          );
+          setNewRecoveryCode(formatRecoveryCode(secret));
+        }
+      }
+
       const remote = BACKUP_CONFIGURED
-        ? new GoogleDriveRemote({ clientId: CLIENT_ID, cipher })
+        ? new GoogleDriveRemote({
+            clientId: CLIENT_ID,
+            cipher,
+            ...(recoveryCipher ? { recoveryCipher } : {}),
+          })
         : new UnconfiguredRemote();
       const sync = new VaultSync({ storage, remote, clock });
       syncRef.current = sync;
@@ -206,6 +250,51 @@ export function useVault(): VaultApi {
     }
   }, [describe, start]);
 
+  /**
+   * Last resort: open the backup using the printed code.
+   *
+   * This path exists precisely because the passkey is unavailable, so it must
+   * not require one. It rebuilds the vault locally under a fresh passkey once
+   * the code has proved itself.
+   */
+  const restoreWithCode = useCallback(
+    async (code: string) => {
+      setPhase("unlocking");
+      setError(null);
+      try {
+        const secret = parseRecoveryCode(code);
+        const probe = new GoogleDriveRemote({
+          clientId: CLIENT_ID,
+          cipher: {
+            sealState: async (value) => value,
+            openState: async (value) => value as VaultState,
+            sealOp: async (value) => value,
+            openOp: async (value) => value as never,
+          },
+        });
+        const sealed = await probe.fetchRecoverySealed();
+        if (!sealed) {
+          setError("That Google account has no Keyweb backup that a code can open.");
+          setPhase("locked");
+          return;
+        }
+        const viaCode = await createRecoveryCipher(secret, sealed);
+        const recovered = await viaCode.openState(sealed);
+
+        // Re-establish this device with a new passkey, then seed it with what
+        // the code just opened.
+        const { cipher, lock } = await unlockVault(null);
+        const storage = await IndexedDbVaultStorage.open({ cipher });
+        await storage.applyRemote(recovered);
+        await start(cipher, lock, false);
+      } catch (cause) {
+        setError(describe(cause));
+        setPhase("locked");
+      }
+    },
+    [describe, start],
+  );
+
   const lock = useCallback(() => {
     lockRef.current?.();
     lockRef.current = null;
@@ -276,6 +365,9 @@ export function useVault(): VaultApi {
     items,
     unlock,
     restore,
+    restoreWithCode,
+    newRecoveryCode,
+    dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,
     syncNow,
     saveItem,

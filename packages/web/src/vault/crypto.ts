@@ -1,8 +1,10 @@
 import {
   createV1EnvelopeCrypto,
   createWebCryptoBackend,
+  deriveContentKey,
   parseSyncEnvelopeV1,
   type SyncEnvelopeV1,
+  type V1KeyMetadata,
 } from "@keyneom/sync-kit/crypto";
 import { createWebPasskeyProvider } from "@keyneom/sync-kit/keys/web-passkey";
 import type { SyncCodec } from "@keyneom/sync-kit/core";
@@ -125,4 +127,44 @@ function asEnvelope(value: unknown): SyncEnvelopeV1 {
     typeof value === "string" ? value : JSON.stringify(value),
     keywebV1Profile,
   );
+}
+
+
+/**
+ * A cipher keyed by the printed recovery code rather than the passkey.
+ *
+ * Pass the existing recovery envelope to reuse its salt, so the same code keeps
+ * opening the same backup. Omit it at setup, when a fresh salt is minted.
+ */
+export async function createRecoveryCipher(
+  secret: Uint8Array,
+  existing?: unknown,
+  rpId: string = keywebRpId(),
+): Promise<VaultCipher> {
+  let metadata: V1KeyMetadata;
+  if (existing) {
+    metadata = stateCrypto.metadataFromEnvelope(asEnvelope(existing));
+  } else {
+    metadata = {
+      // The credential fields are meaningless on this path -- there is no
+      // passkey involved -- but the envelope format requires them, and naming
+      // the path makes a stored envelope self-describing.
+      credentialId: "recovery",
+      rpId,
+      prfInput: backend.randomBytes(32),
+      kdfSalt: backend.randomBytes(32),
+    };
+  }
+  const key = await deriveContentKey(
+    keywebV1Profile,
+    secret,
+    metadata.kdfSalt,
+    backend,
+  );
+  return {
+    sealState: (state) => stateCrypto.encrypt(state, key, metadata),
+    openState: (stored) => stateCrypto.decrypt(asEnvelope(stored), key),
+    sealOp: (op) => opCrypto.encrypt(op, key, metadata),
+    openOp: (stored) => opCrypto.decrypt(asEnvelope(stored), key),
+  };
 }
