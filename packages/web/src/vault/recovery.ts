@@ -26,14 +26,31 @@
  * mistakes.
  */
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const RECOVERY_BYTES = 15; // 120 bits, encoding to exactly 24 characters.
+
+/**
+ * 20 bytes: 160 bits, encoding to exactly 32 characters with no padding waste.
+ *
+ * The size matters more here than it looks. sync-kit derives the content key
+ * with HKDF, which is deliberately fast and offers no brute-force resistance of
+ * its own — unlike a user-chosen passphrase run through Argon2, the code's own
+ * entropy is the entire defence. That is fine, because this code is uniformly
+ * random rather than chosen, so there is nothing to guess cleverly.
+ *
+ * 120 bits would already be unreachable classically. 160 is chosen because this
+ * protects a vault that may sit in Drive for decades, and Grover's algorithm
+ * halves the effective search: 120 bits would leave ~60, which is not a margin
+ * worth defending for a password manager's last line. 160 leaves ~80, at a cost
+ * of eight more characters on a printed sheet.
+ */
+const RECOVERY_BYTES = 20;
 const GROUP = 4;
+const CODE_LENGTH = (RECOVERY_BYTES * 8) / 5; // 32, exactly.
 
 export function generateRecoverySecret(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(RECOVERY_BYTES));
 }
 
-/** `H7K2-9MNP-...`, six groups of four. */
+/** `H7K2-9MNP-...`, eight groups of four. */
 export function formatRecoveryCode(secret: Uint8Array): string {
   let bits = 0;
   let value = 0;
@@ -81,7 +98,7 @@ export function parseRecoveryCode(code: string): Uint8Array {
   }
   if (bytes.length !== RECOVERY_BYTES) {
     throw new InvalidRecoveryCode(
-      `A recovery code is ${RECOVERY_BYTES * 8 / 5 | 0} characters. That one has ${cleaned.length}.`,
+      `A recovery code is ${CODE_LENGTH} characters. That one has ${cleaned.length}.`,
     );
   }
   return new Uint8Array(bytes);

@@ -94,7 +94,7 @@ export function Unlock({
                     className="mono"
                     value={code}
                     onChange={(event) => setCode(event.target.value)}
-                    placeholder="H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F"
+                    placeholder="H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F-P2TM-6BKX"
                     autoComplete="off"
                     spellCheck={false}
                   />

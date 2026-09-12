@@ -18,10 +18,12 @@ describe("recovery code", () => {
     }
   });
 
-  it("prints as six groups of four, with no ambiguous characters", () => {
+  it("prints as eight groups of four, with no ambiguous characters", () => {
     const code = formatRecoveryCode(generateRecoverySecret());
-    expect(code.split("-")).toHaveLength(6);
+    expect(code.split("-")).toHaveLength(8);
     for (const group of code.split("-")) expect(group).toHaveLength(4);
+    // 160 bits, so the recovery path is not the weak link in the vault.
+    expect(code.replace(/-/g, "")).toHaveLength(32);
     // I, L, O and U are absent, so 1/l and 0/O cannot be confused.
     expect(code).not.toMatch(/[ILOU]/);
   });
