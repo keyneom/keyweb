@@ -121,8 +121,19 @@ must exist in the project so Google can match it; no id string is ever compiled
 in. That is why searching easy-bc's `android/` tree for a client id finds
 nothing.
 
-Keyweb's Android client will register `app.keyweb` with the release certificate
-SHA-1 `12:E5:14:DA:EB:AD:D4:78:99:0A:FD:9A:95:D0:F3:20:60:DD:96:9F`.
+Keyweb's Android client registers `app.keyweb` with the release certificate
+SHA-1 `12:E5:14:DA:EB:AD:D4:78:99:0A:FD:9A:95:D0:F3:20:60:DD:96:9F` — confirmed
+against the shipped APK with `apksigner verify --print-certs`.
+
+**Until that client exists, Android backup stops at Google's own sign-in
+screen.** The app handles it as a plain error ("Keyweb couldn't reach your
+Google account") and stays fully usable offline, but no Drive call can succeed:
+Play Services has nothing to match the package and certificate against. This is
+the single outstanding prerequisite for backup on the phone.
+
+Because the app is identified by its signature, **a debug build cannot reach
+Drive** — debug is signed with the Android debug key, which is not the
+registered SHA-1. Backup must be tested from a release build.
 
 One caveat worth carrying into testing: sync-kit lists live Google OAuth and
 Picker validation as an open release gate, and easy-bc keeps a runtime probe

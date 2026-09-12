@@ -1,0 +1,183 @@
+package app.keyweb.data
+
+import app.keyweb.vault.RemoteRevision
+import app.keyweb.vault.RemoteUnavailableException
+import app.keyweb.vault.RemoteVaultStore
+import app.keyweb.vault.SyncEnvelopeV1
+import app.keyweb.vault.VaultEnvelopeCipher
+import app.keyweb.vault.VaultState
+import app.keyweb.vault.VersionConflictException
+import java.io.IOException
+import java.time.Instant
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
+
+/**
+ * Encrypted backup in the user's own Google Drive.
+ *
+ * Drive holds the same sealed bytes the phone holds. Google cannot read them
+ * and neither can Keyweb, which has no server: if both the passkey and the
+ * printed code are lost, the backup is gone, and the app says so rather than
+ * implying a rescue that does not exist.
+ *
+ * ## What this device can and cannot rewrite
+ *
+ * The file holds the vault sealed twice — once under the web's passkey-derived
+ * key, once under the printed recovery code. Android cannot derive the passkey
+ * key: that comes from a WebAuthn PRF the phone has no equivalent of. So this
+ * device works through the recovery envelope, and carries the `passkey`
+ * envelope forward byte for byte on every write.
+ *
+ * Carrying it forward is not politeness, it is the data-loss rule. Dropping an
+ * envelope this device cannot rewrite would silently remove the browser's way
+ * into the backup, discovered only by someone trying to use it.
+ */
+class DriveVaultRemote(
+    private val drive: DriveFiles,
+    private val cipher: VaultEnvelopeCipher,
+) : RemoteVaultStore {
+
+    private val json = Json { ignoreUnknownKeys = true }
+    private var fileId: String? = null
+    private var folderId: String? = null
+
+    /**
+     * What sits in the Drive file: `{ v, passkey, recovery }`.
+     *
+     * Parsed as raw JSON rather than typed fields, because the point is to
+     * preserve members this version does not understand. A future envelope
+     * added by another client must survive a write from this one.
+     */
+    private data class Payload(val raw: JsonObject) {
+        val passkey: JsonElement? get() = raw["passkey"]
+        val recovery: JsonElement? get() = raw["recovery"]
+    }
+
+    private fun parse(content: String): Payload? {
+        if (content.isBlank()) return null
+        return try {
+            val element = json.parseToJsonElement(content).jsonObject
+            if (element.containsKey("passkey") || element.containsKey("recovery")) {
+                Payload(element)
+            } else {
+                // A backup written before the recovery copy existed is a bare
+                // envelope rather than a wrapper.
+                Payload(buildJsonObject { put("passkey", element) })
+            }
+        } catch (cause: Exception) {
+            null
+        }
+    }
+
+    private suspend fun locate(): String? = fileId ?: drive.findFile(DriveClient.VAULT_MARKER).also {
+        fileId = it
+    }
+
+    private suspend fun version(id: String): String {
+        val head = drive.writeHead(id)
+        return head.headRevisionId ?: head.etag
+    }
+
+    /** The recovery envelope alone, for opening a backup on a replacement phone. */
+    suspend fun fetchRecoverySealed(): SyncEnvelopeV1? = reachable {
+        val id = locate() ?: return@reachable null
+        val recovery = parse(drive.readText(id))?.recovery ?: return@reachable null
+        json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
+    }
+
+    override suspend fun read(): RemoteRevision? = reachable {
+        val id = locate() ?: return@reachable null
+        val current = version(id)
+        val payload = parse(drive.readText(id)) ?: return@reachable null
+        val recovery = payload.recovery ?: return@reachable null
+        val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
+        RemoteRevision(cipher.open(envelope), current)
+    }
+
+    override suspend fun write(state: VaultState, expectedVersion: String?): String {
+        val id = try {
+            locate()
+        } catch (cause: IOException) {
+            throw RemoteUnavailableException(cause.message ?: "Keyweb couldn't reach your backup.")
+        }
+
+        if (id == null) {
+            if (expectedVersion != null) {
+                // Told to expect a revision but the file is gone. Refusing beats
+                // recreating: the file may simply be invisible to this session.
+                throw VersionConflictException("The backup file could not be found.")
+            }
+            return reachable {
+                val parent = ensureFolder()
+                val created = drive.create(
+                    name = DriveClient.VAULT_FILE_NAME,
+                    content = sealed(state, existing = null),
+                    parentId = parent,
+                    appProperties = DriveClient.VAULT_MARKER,
+                )
+                fileId = created
+                version(created)
+            }
+        }
+
+        return reachable {
+            // Preflight: refuse if the remote moved since it was read. Drive has
+            // no compare-and-set, so a narrow window remains between this check
+            // and the upload; the CRDT join is what makes losing that race an
+            // extra round trip rather than a lost edit.
+            if (expectedVersion != null) {
+                val current = version(id)
+                if (current != expectedVersion) {
+                    throw VersionConflictException(
+                        "Expected revision $expectedVersion but the backup is at $current.",
+                    )
+                }
+            }
+            // Read before write, so the passkey envelope is carried rather than
+            // dropped. Not knowing what is in the file must never escalate into
+            // replacing it with less.
+            val existing = parse(drive.readText(id))
+            drive.write(id, sealed(state, existing))
+            version(id)
+        }
+    }
+
+    private fun sealed(state: VaultState, existing: Payload?): String {
+        val envelope = cipher.seal(state, updatedAt = Instant.now().toString())
+        val next = buildJsonObject {
+            put("v", 1)
+            // Every member of the existing payload survives except the one this
+            // device is authoritative for.
+            existing?.raw?.forEach { (key, value) -> if (key != "recovery") put(key, value) }
+            put("recovery", json.encodeToJsonElement(SyncEnvelopeV1.serializer(), envelope))
+        }
+        return next.toString()
+    }
+
+    private suspend fun ensureFolder(): String {
+        folderId?.let { return it }
+        val existing = drive.findFile(DriveClient.FOLDER_MARKER)
+        val id = existing
+            ?: drive.createFolder(DriveClient.FOLDER_NAME, DriveClient.FOLDER_MARKER)
+        folderId = id
+        return id
+    }
+
+    /**
+     * Transport failures become the calm offline state; everything else keeps
+     * its own meaning. A [VersionConflictException] in particular must not be
+     * flattened into "offline", because the engine handles the two differently.
+     */
+    private suspend fun <T> reachable(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (cause: VersionConflictException) {
+            throw cause
+        } catch (cause: IOException) {
+            throw RemoteUnavailableException(cause.message ?: "Keyweb couldn't reach your backup.")
+        }
+}

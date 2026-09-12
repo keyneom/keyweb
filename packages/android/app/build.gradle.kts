@@ -101,6 +101,14 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // Drive authorization. AuthorizationClient asks Google for an access token
+    // scoped to the two Drive scopes; the app never sees a client secret.
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
+    implementation("androidx.activity:activity-ktx:1.9.3")
+
+    testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+
     debugImplementation(composeBom)
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

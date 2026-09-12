@@ -95,6 +95,7 @@ fun VaultListScreen(
     onAdd: () -> Unit,
     onKeyrings: () -> Unit,
     onSettings: () -> Unit,
+    onSetUpBackup: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
@@ -171,7 +172,12 @@ fun VaultListScreen(
                 }
             }
 
-            BackupStatusLine(status, backupConfigured, Modifier.padding(bottom = 10.dp))
+            BackupStatusLine(
+                status,
+                backupConfigured,
+                Modifier.padding(bottom = 10.dp),
+                onSetUpBackup = onSetUpBackup,
+            )
 
             Box(Modifier.weight(1f)) {
                 if (shown.isEmpty()) {
@@ -536,6 +542,7 @@ fun SettingsScreen(
     onLargeText: (Boolean) -> Unit,
     onDarkMode: (Boolean?) -> Unit,
     onBack: () -> Unit,
+    onBackup: () -> Unit,
 ) {
     val statusColors = LocalKeywebStatus.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -551,6 +558,17 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 20.dp),
             )
 
+            Text("Backup", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Keep a copy of your passwords in your own Google Drive, so a lost " +
+                    "phone doesn't mean lost passwords.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Backup and recovery", onBackup)
+
+            Spacer(Modifier.height(24.dp))
             Text("Text size", style = MaterialTheme.typography.labelLarge)
             Text(
                 "Makes everything in Keyweb bigger, including the buttons.",

@@ -49,6 +49,9 @@ fun StatusLine(
     headline: String,
     detail: String,
     modifier: Modifier = Modifier,
+    /** Text for an action inside the card. Null leaves it as a plain sentence. */
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
     val status = LocalKeywebStatus.current
     val (fg, bg, icon) = when (tone) {
@@ -77,6 +80,15 @@ fun StatusLine(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(detail, style = MaterialTheme.typography.bodyMedium)
+                // Telling someone what is wrong without telling them where to
+                // go is the same as not telling them.
+                if (actionLabel != null && onAction != null) {
+                    PrimaryButton(
+                        actionLabel,
+                        onAction,
+                        Modifier.padding(top = 10.dp),
+                    )
+                }
             }
         }
     }
@@ -88,15 +100,19 @@ fun BackupStatusLine(
     status: SyncStatus,
     backupConfigured: Boolean,
     modifier: Modifier = Modifier,
+    onSetUpBackup: (() -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
     when {
         !backupConfigured -> StatusLine(
-            Tone.CALM,
-            "Saved on this phone.",
-            "Encrypted backup isn't set up yet, so nothing leaves this device.",
+            Tone.ATTENTION,
+            "Saved on this phone only.",
+            "If you lose this phone, these passwords go with it. Backing up to " +
+                "your Google Drive keeps a copy only you can open.",
             modifier,
+            actionLabel = "Set up backup",
+            onAction = onSetUpBackup,
         )
 
         status.pending > 0 -> StatusLine(
@@ -131,7 +147,7 @@ fun BackupStatusLine(
 
 private fun changes(n: Int) = if (n == 1) "1 change" else "$n changes"
 
-private fun relativeTime(thenMs: Long): String {
+fun relativeTime(thenMs: Long): String {
     val seconds = ((System.currentTimeMillis() - thenMs) / 1000).coerceAtLeast(0)
     return when {
         seconds < 60 -> "just now"

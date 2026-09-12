@@ -6,7 +6,10 @@ import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -31,10 +34,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.KeyringsScreen
 import app.keyweb.ui.KeywebTheme
+import app.keyweb.ui.relativeTime
 import app.keyweb.ui.SettingsScreen
 import app.keyweb.ui.UnlockScreen
 import app.keyweb.ui.VaultListScreen
@@ -45,6 +50,7 @@ private sealed interface Route {
     data class Edit(val itemId: String?) : Route
     data object Keyrings : Route
     data object Settings : Route
+    data object Backup : Route
 }
 
 class MainActivity : FragmentActivity() {
@@ -85,12 +91,14 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         is Route.Edit -> "edit:${it.itemId.orEmpty()}"
                         is Route.Keyrings -> "keyrings"
                         is Route.Settings -> "settings"
+                        is Route.Backup -> "backup"
                     }
                 },
                 restore = {
                     when {
                         it == "keyrings" -> Route.Keyrings
                         it == "settings" -> Route.Settings
+                        it == "backup" -> Route.Backup
                         it.startsWith("detail:") -> Route.Detail(it.removePrefix("detail:"))
                         it.startsWith("edit:") ->
                             Route.Edit(it.removePrefix("edit:").ifEmpty { null })
@@ -99,6 +107,17 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                 },
             ),
         ) { mutableStateOf<Route>(Route.List) }
+
+        // Google's consent screen arrives as an IntentSender the ViewModel
+        // cannot launch itself. Whatever it returns -- approved, declined, or
+        // dismissed -- setup simply tries again and reports what it finds.
+        val consent by viewModel.consent.collectAsStateWithLifecycle()
+        val consentLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.StartIntentSenderForResult(),
+        ) { viewModel.consentHandled() }
+        LaunchedEffect(consent) {
+            consent?.let { consentLauncher.launch(IntentSenderRequest.Builder(it).build()) }
+        }
 
         val snackbar = remember { SnackbarHostState() }
         LaunchedEffect(ui.toast) {
@@ -168,6 +187,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onAdd = { route = Route.Edit(null) },
                         onKeyrings = { route = Route.Keyrings },
                         onSettings = { route = Route.Settings },
+                        onSetUpBackup = { route = Route.Backup },
                     )
 
                     is Route.Detail -> {
@@ -219,6 +239,22 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             }.apply()
                         },
                         onBack = ::goBack,
+                        onBackup = { route = Route.Backup },
+                    )
+
+                    is Route.Backup -> BackupScreen(
+                        backup = ui.backup,
+                        lastBackedUp = ui.status.lastPublishedAtMs?.let(::relativeTime),
+                        onBack = {
+                            viewModel.dismissBackupError()
+                            goBack()
+                        },
+                        onStart = viewModel::setUpBackup,
+                        onUseExistingCode = viewModel::useExistingCode,
+                        onCodeWrittenDown = {
+                            viewModel.codeWrittenDown()
+                            route = Route.List
+                        },
                     )
                 }
             }
