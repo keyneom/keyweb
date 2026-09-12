@@ -7,7 +7,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "fixture": "vite-node scripts/emit-wire-fixture.ts"
+    "fixture": "vite-node scripts/emit-wire-fixture.ts",
+    "fixture:kinds": "vite-node scripts/emit-kinds-fixture.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

@@ -52,6 +52,13 @@ export const ITEM_FIELDS = [
   "otp",
   "folder",
   "tags",
+  /**
+   * Which template presents this item: "login", "card", "wallet", and so on.
+   *
+   * A field rather than a column, so an item whose kind this version does not
+   * recognise still merges and still shows every value it carries.
+   */
+  "kind",
 ] as const;
 /**
  * A field key.

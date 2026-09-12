@@ -1,0 +1,306 @@
+{
+  "note": "Generated from packages/vault-core/src/kinds.ts. Kotlin must match.",
+  "kinds": [
+    {
+      "id": "login",
+      "name": "password",
+      "summary": "A website or app you sign in to.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "username",
+          "label": "Username or email",
+          "shape": "text"
+        },
+        {
+          "key": "password",
+          "label": "Password",
+          "shape": "secret"
+        },
+        {
+          "key": "otp",
+          "label": "Six-digit code",
+          "shape": "otp"
+        },
+        {
+          "key": "url",
+          "label": "Website",
+          "shape": "url"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "card",
+      "name": "card",
+      "summary": "A credit or debit card.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "cardholder",
+          "label": "Name on the card",
+          "shape": "text"
+        },
+        {
+          "key": "cardNumber",
+          "label": "Card number",
+          "shape": "secret"
+        },
+        {
+          "key": "expiry",
+          "label": "Expires",
+          "shape": "month"
+        },
+        {
+          "key": "cvv",
+          "label": "Security code",
+          "shape": "secret"
+        },
+        {
+          "key": "pin",
+          "label": "PIN",
+          "shape": "secret"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "bank",
+      "name": "bank account",
+      "summary": "Account and routing numbers.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "bankName",
+          "label": "Bank",
+          "shape": "text"
+        },
+        {
+          "key": "accountNumber",
+          "label": "Account number",
+          "shape": "secret"
+        },
+        {
+          "key": "routingNumber",
+          "label": "Routing number",
+          "shape": "text"
+        },
+        {
+          "key": "iban",
+          "label": "IBAN",
+          "shape": "text"
+        },
+        {
+          "key": "swift",
+          "label": "SWIFT or BIC",
+          "shape": "text"
+        },
+        {
+          "key": "pin",
+          "label": "PIN",
+          "shape": "secret"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "wallet",
+      "name": "crypto wallet",
+      "summary": "A recovery phrase or private key.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "seedPhrase",
+          "label": "Recovery phrase",
+          "shape": "phrase"
+        },
+        {
+          "key": "walletPassphrase",
+          "label": "Extra passphrase",
+          "shape": "secret"
+        },
+        {
+          "key": "privateKey",
+          "label": "Private key",
+          "shape": "secret"
+        },
+        {
+          "key": "publicAddress",
+          "label": "Public address",
+          "shape": "text"
+        },
+        {
+          "key": "network",
+          "label": "Network",
+          "shape": "text"
+        },
+        {
+          "key": "derivationPath",
+          "label": "Derivation path",
+          "shape": "text"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "identity",
+      "name": "ID document",
+      "summary": "A passport, licence, or national ID.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "fullName",
+          "label": "Full name",
+          "shape": "text"
+        },
+        {
+          "key": "documentNumber",
+          "label": "Document number",
+          "shape": "secret"
+        },
+        {
+          "key": "issuedBy",
+          "label": "Issued by",
+          "shape": "text"
+        },
+        {
+          "key": "expiry",
+          "label": "Expires",
+          "shape": "month"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "server",
+      "name": "server or API key",
+      "summary": "A machine login, key, or token.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "host",
+          "label": "Host or address",
+          "shape": "text"
+        },
+        {
+          "key": "username",
+          "label": "Username",
+          "shape": "text"
+        },
+        {
+          "key": "password",
+          "label": "Password",
+          "shape": "secret"
+        },
+        {
+          "key": "privateKey",
+          "label": "Private key",
+          "shape": "note"
+        },
+        {
+          "key": "apiToken",
+          "label": "API key or token",
+          "shape": "secret"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "licence",
+      "name": "software licence",
+      "summary": "A product key.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "product",
+          "label": "Product",
+          "shape": "text"
+        },
+        {
+          "key": "licenceKey",
+          "label": "Licence key",
+          "shape": "secret"
+        },
+        {
+          "key": "licensedTo",
+          "label": "Licensed to",
+          "shape": "text"
+        },
+        {
+          "key": "note",
+          "label": "Notes",
+          "shape": "note"
+        }
+      ]
+    },
+    {
+      "id": "note",
+      "name": "secure note",
+      "summary": "Anything else you want kept private.",
+      "fields": [
+        {
+          "key": "title",
+          "label": "Name",
+          "shape": "text"
+        },
+        {
+          "key": "note",
+          "label": "Note",
+          "shape": "note"
+        }
+      ]
+    }
+  ]
+}
