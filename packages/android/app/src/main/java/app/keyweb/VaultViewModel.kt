@@ -20,7 +20,10 @@ import app.keyweb.vault.InvalidRecoveryCode
 import app.keyweb.vault.Fields
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
+import app.keyweb.vault.PasswordGenerator
+import app.keyweb.vault.PasswordRules
 import app.keyweb.vault.RecoveryCode
+import app.keyweb.vault.SavedRules
 import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultEnvelopeCipher
 import app.keyweb.vault.VaultState
@@ -90,6 +93,10 @@ data class VaultUiState(
     val items: List<ItemRecord> = emptyList(),
     val backupConfigured: Boolean = false,
     val backup: BackupUiState = BackupUiState(),
+    /** Rule sets someone named and kept, alongside the built-in presets. */
+    val savedRules: List<SavedRules> = emptyList(),
+    /** What the generator opens with: whatever was used last. */
+    val lastRules: PasswordRules = PasswordRules(),
     val toast: String? = null,
 )
 
@@ -124,7 +131,57 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             phase = VaultPhase.LOCKED,
             firstRun = !VaultKeystore.exists(),
+            savedRules = readSavedRules(),
+            lastRules = readLastRules(),
         )
+    }
+
+    // ---- Password generator rules ----------------------------------------
+    //
+    // Kept in this device's own preferences rather than in the vault. They are
+    // a convenience, not a secret, and putting them in the synced document
+    // would mean a merge conflict over a slider position. The trade is that
+    // they do not follow you to another device yet.
+
+    private val rulesJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    private fun readSavedRules(): List<SavedRules> =
+        prefs.getString("generator-rules", null)?.let {
+            runCatching {
+                rulesJson.decodeFromString(
+                    kotlinx.serialization.builtins.ListSerializer(SavedRules.serializer()),
+                    it,
+                )
+            }.getOrNull()
+        } ?: emptyList()
+
+    private fun readLastRules(): PasswordRules =
+        prefs.getString("generator-last", null)?.let {
+            runCatching {
+                rulesJson.decodeFromString(PasswordRules.serializer(), it)
+            }.getOrNull()
+        } ?: PasswordGenerator.presets.first().rules
+
+    fun saveRules(name: String, rules: PasswordRules) {
+        // Re-saving under an existing name replaces it, rather than stacking up
+        // near-identical entries nobody can tell apart.
+        val next = _state.value.savedRules.filterNot { it.name.equals(name, ignoreCase = true) } +
+            SavedRules(id = UUID.randomUUID().toString(), name = name, rules = rules)
+        prefs.edit().putString(
+            "generator-rules",
+            rulesJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(SavedRules.serializer()),
+                next,
+            ),
+        ).apply()
+        _state.value = _state.value.copy(savedRules = next, toast = "Saved \"$name\".")
+    }
+
+    fun rememberLastRules(rules: PasswordRules) {
+        prefs.edit()
+            .putString("generator-last", rulesJson.encodeToString(PasswordRules.serializer(), rules))
+            .apply()
+        _state.value = _state.value.copy(lastRules = rules)
     }
 
     /**

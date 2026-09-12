@@ -9,6 +9,7 @@ import { RecoverySheet } from "./screens/RecoverySheet";
 import { Unlock } from "./screens/Unlock";
 import { VaultList } from "./screens/VaultList";
 import { useDisplaySettings } from "./vault/useDisplaySettings";
+import { useGeneratorRules } from "./vault/useGeneratorRules";
 import { useVault } from "./vault/useVault";
 
 type Route =
@@ -22,6 +23,7 @@ type Route =
 export function App() {
   const vault = useVault();
   const display = useDisplaySettings();
+  const generator = useGeneratorRules();
   const [route, setRoute] = useState<Route>({ name: "list" });
   const [toast, setToast] = useState<string | null>(null);
 
@@ -108,6 +110,10 @@ export function App() {
           item={current}
           state={vault.state}
           defaultKeyringId={firstKeyring}
+          savedRules={generator.savedRules}
+          lastRules={generator.lastRules}
+          onSaveRules={generator.saveRules}
+          onRulesUsed={generator.rememberLastRules}
           onBack={() => setRoute({ name: "list" })}
           onSave={async (input) => {
             await vault.saveItem(input);

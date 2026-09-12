@@ -212,10 +212,14 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         item = current.itemId?.let { ui.vault.items[it] },
                         state = ui.vault,
                         defaultKeyringId = firstKeyring,
+                        savedRules = ui.savedRules,
+                        lastRules = ui.lastRules,
                         onBack = ::goBack,
                         onSave = { itemId, keyringId, fields ->
                             viewModel.saveItem(itemId, keyringId, fields) { route = Route.List }
                         },
+                        onSaveRules = viewModel::saveRules,
+                        onRulesUsed = viewModel::rememberLastRules,
                     )
 
                     is Route.Keyrings -> KeyringsScreen(

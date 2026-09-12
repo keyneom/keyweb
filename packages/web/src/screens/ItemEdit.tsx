@@ -1,38 +1,36 @@
 import { useState } from "react";
-import { itemField, type ItemField, type ItemRecord, type VaultState } from "@keyweb/vault-core";
+import {
+  itemField,
+  PRESETS,
+  type ItemField,
+  type ItemRecord,
+  type PasswordRules,
+  type SavedRules,
+  type VaultState,
+} from "@keyweb/vault-core";
+import { Generator } from "./Generator";
 import { BackIcon } from "../ui/icons";
 
-/**
- * Readable and strong.
- *
- * The alphabet drops the characters with no shape of their own — `l`, `1`, `O`,
- * `0` — and keeps everything else, including the case pairs that differ only in
- * size (`c/C`, `s/S`, `u/U`, `v/V`, `w/W`, `x/X`, `z/Z`, `k/K`). Removing those
- * would cost real entropy to solve a display problem, so the display solves it:
- * see `CodeText`, which colours each character by category and prints a legend
- * saying which is which.
- */
-export function generatePassword(groups = 4, size = 4): string {
-  const alphabet = "abcdefghijkmnopqrstuvwxyz23456789ACDEFGHJKLMNPQRSTUVWXYZ";
-  const bytes = new Uint32Array(groups * size);
-  crypto.getRandomValues(bytes);
-  const chars = Array.from(bytes, (n) => alphabet[n % alphabet.length]!);
-  const out: string[] = [];
-  for (let i = 0; i < groups; i += 1) out.push(chars.slice(i * size, (i + 1) * size).join(""));
-  return out.join("-");
-}
 
 export function ItemEdit({
   item,
   state,
   defaultKeyringId,
+  savedRules,
+  lastRules,
   onBack,
   onSave,
+  onSaveRules,
+  onRulesUsed,
 }: {
   item: ItemRecord | null;
   state: VaultState;
   defaultKeyringId: string;
+  savedRules: SavedRules[];
+  lastRules: PasswordRules;
   onBack: () => void;
+  onSaveRules: (name: string, rules: PasswordRules) => void;
+  onRulesUsed: (rules: PasswordRules) => void;
   onSave: (input: {
     itemId?: string;
     keyringId: string;
@@ -46,6 +44,23 @@ export function ItemEdit({
   const [note, setNote] = useState(item ? (itemField(item, "note") ?? "") : "");
   const [keyringId, setKeyringId] = useState(item ? item.keyring.value : defaultKeyringId);
   const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  if (generating) {
+    return (
+      <Generator
+        initial={lastRules}
+        saved={savedRules}
+        onUse={(made, rules) => {
+          setPassword(made);
+          onRulesUsed(rules);
+          setGenerating(false);
+        }}
+        onSaveRules={onSaveRules}
+        onClose={() => setGenerating(false)}
+      />
+    );
+  }
 
   const rings = Object.values(state.keyrings).filter((r) => !r.deleted.value);
   const canSave = title.trim().length > 0 && password.length > 0 && !saving;
@@ -109,15 +124,13 @@ export function ItemEdit({
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="off"
           />
-          <button
-            type="button"
-            className="iconbtn"
-            onClick={() => setPassword(generatePassword())}
-          >
-            Suggest one
+          <button type="button" className="iconbtn" onClick={() => setGenerating(true)}>
+            Make one
           </button>
         </div>
-        <span className="hint">A suggested password is easy to read aloud over the phone.</span>
+        <span className="hint">
+          Keyweb can make one to whatever rules the site demands.
+        </span>
       </label>
 
       <label className="field">

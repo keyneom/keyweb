@@ -487,6 +487,45 @@
   padding: 0.55rem 0;
 }
 
+/*
+ * The recovery sheet is paper-coloured in both themes, deliberately, because it
+ * is a print artefact. So the glyph colours inside it stay on the light palette
+ * whatever the page theme is: the dark-mode values are chosen for a dark
+ * surface and would be nearly invisible on cream.
+ */
+.sheet .glyph.upper {
+  color: #16202b;
+}
+.sheet .glyph.lower {
+  color: #5a6b62;
+}
+.sheet .glyph.digit {
+  color: #a35200;
+}
+.sheet .glyph.symbol {
+  color: #00639c;
+}
+.sheet .code-legend,
+.sheet .code-legend-note {
+  color: #5b6672;
+}
+
+/* The generator's own box is a screen element, so it follows the theme. */
+.generator-code {
+  display: block;
+  font-family: var(--mono);
+  font-size: clamp(1.05rem, 4vw, 1.5rem);
+  letter-spacing: 0.08em;
+  background: var(--surface);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 0 0 0.75rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .code-legend {
   margin: 0 0 1.1rem;
   font-size: 0.85em;
@@ -601,4 +640,57 @@
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--line);
+}
+
+/* ---------- Password generator ---------- */
+.generator {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.generator .ring.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.generator-sets {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.generator-sets legend {
+  font-weight: 650;
+  font-size: 0.95em;
+  padding: 0;
+  margin-bottom: 0.15rem;
+}
+.generator-sets .hint {
+  flex-basis: 100%;
+  font-size: 0.8em;
+  color: var(--muted);
+  margin: 0 0 0.3rem;
+}
+
+.generator-strength {
+  margin: 0 0 0.75rem;
+  font-size: 0.92em;
+}
+.generator-strength b {
+  color: var(--safe);
+}
+.generator-strength b[data-weak="true"] {
+  color: var(--attn);
+}
+.generator-strength span {
+  color: var(--muted);
+}
+
+.generator input[type="range"] {
+  width: 100%;
+  min-height: var(--tap);
+  accent-color: var(--accent);
 }

@@ -1,6 +1,7 @@
 export * from "./hlc.js";
 export * from "./model.js";
 export * from "./kinds.js";
+export * from "./generator.js";
 export * from "./ops.js";
 export * from "./merge.js";
 export * from "./storage.js";

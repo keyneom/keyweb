@@ -50,6 +50,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.keyweb.vault.Fields
+import app.keyweb.vault.PasswordRules
+import app.keyweb.vault.SavedRules
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.SyncStatus
@@ -341,31 +343,18 @@ private fun ReadOnlyField(
     )
 }
 
-/**
- * Readable and strong.
- *
- * The alphabet drops the characters with no shape of their own — `l`, `1`, `O`,
- * `0` — and keeps everything else, including the case pairs that differ only in
- * size (`c/C`, `s/S`, `u/U`, `v/V`, `w/W`, `x/X`, `z/Z`, `k/K`). Removing those
- * would cost real entropy to solve a display problem, so the display solves it:
- * see `CodeText`, which colours each character by category and prints a legend
- * saying which is which.
- */
-fun generatePassword(groups: Int = 4, size: Int = 4): String {
-    val alphabet = "abcdefghijkmnopqrstuvwxyz23456789ACDEFGHJKLMNPQRSTUVWXYZ"
-    val random = java.security.SecureRandom()
-    return (0 until groups).joinToString("-") {
-        (0 until size).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
-    }
-}
 
 @Composable
 fun ItemEditScreen(
     item: ItemRecord?,
     state: VaultState,
     defaultKeyringId: String,
+    savedRules: List<SavedRules>,
+    lastRules: PasswordRules,
     onBack: () -> Unit,
     onSave: (String?, String, Map<ItemField, String>) -> Unit,
+    onSaveRules: (String, PasswordRules) -> Unit,
+    onRulesUsed: (PasswordRules) -> Unit,
 ) {
     var title by remember { mutableStateOf(item?.field(Fields.TITLE).orEmpty()) }
     var username by remember { mutableStateOf(item?.field(Fields.USERNAME).orEmpty()) }
@@ -373,6 +362,21 @@ fun ItemEditScreen(
     var url by remember { mutableStateOf(item?.field(Fields.URL).orEmpty()) }
     var note by remember { mutableStateOf(item?.field(Fields.NOTE).orEmpty()) }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
+    var generating by remember { mutableStateOf(false) }
+
+    if (generating) {
+        GeneratorSheet(
+            initial = lastRules,
+            saved = savedRules,
+            onDismiss = { generating = false },
+            onUse = { made, rules ->
+                password = made
+                onRulesUsed(rules)
+                generating = false
+            },
+            onSaveRules = onSaveRules,
+        )
+    }
     val statusColors = LocalKeywebStatus.current
 
     val rings = state.keyrings.values.filter { !it.deleted.value }
@@ -408,12 +412,12 @@ fun ItemEditScreen(
                 ),
                 keyboardOptions = KeyboardOptions.Default,
                 trailingIcon = {
-                    TextButton(onClick = { password = generatePassword() }) { Text("Suggest") }
+                    TextButton(onClick = { generating = true }) { Text("Make one") }
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "A suggested password is easy to read aloud over the phone.",
+                "Keyweb can make one to whatever rules the site demands.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = statusColors.muted,
                 modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
@@ -616,7 +620,7 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun ChoiceButton(text: String, selected: Boolean, onClick: () -> Unit) {
+internal fun ChoiceButton(text: String, selected: Boolean, onClick: () -> Unit) {
     if (selected) {
         PrimaryButton(text, onClick, Modifier.padding(bottom = 8.dp))
     } else {
