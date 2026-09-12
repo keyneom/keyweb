@@ -452,68 +452,90 @@
 }
 
 /*
- * Digits and letters, told apart at a glance.
+ * Character categories, told apart at a glance.
  *
- * Colour alone would fail anyone who cannot see it and every black-and-white
- * printout, so weight carries the same distinction: digits are heavier. The
- * pair is legible in monochrome, which is exactly how this sheet gets printed.
+ * Colour carries the category, weight carries the case, and lightness backs up
+ * both -- the palette is chosen so no two categories collapse together under
+ * any common colour blindness. See `CodeText.tsx` for the measurements.
  */
-.glyph.digit {
-  color: #8a5a00;
-  font-weight: 800;
-}
-
-/*
- * Case, told apart as well as kind.
- *
- * A generated password no longer contains a pair that differs only in size, but
- * an imported or hand-typed one still can, and `c` beside `C` is genuinely
- * unreadable in isolation. Upper case takes its own hue rather than only extra
- * weight, since weight alone reads as emphasis rather than as a category.
- */
-.glyph.letter.upper {
-  color: #1f2a37;
+.glyph.upper {
+  color: var(--glyph-upper);
   font-weight: 700;
 }
 
-.glyph.letter.lower {
-  color: #4a6070;
+.glyph.lower {
+  color: var(--glyph-lower);
   font-weight: 500;
 }
 
+.glyph.digit {
+  color: var(--glyph-digit);
+  font-weight: 800;
+}
+
+.glyph.symbol {
+  color: var(--glyph-symbol);
+  font-weight: 700;
+}
+
+.secret-value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  /* One tap selects the whole secret, since it is no longer an input. */
+  user-select: all;
+  padding: 0.55rem 0;
+}
+
 .code-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1.1rem;
-  align-items: baseline;
+  margin: 0 0 1.1rem;
   font-size: 0.85em;
   color: var(--muted);
-  margin: 0 0 1.1rem;
+}
+
+.code-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  margin: 0 0 0.4rem;
 }
 
 .code-legend .glyph {
   font-family: var(--mono);
+  letter-spacing: 0.02em;
 }
 
 .code-legend-note {
-  flex-basis: 100%;
   margin: 0;
 }
 
 @media print {
-  /* Printed in grey rather than colour, so the weight does the work. */
+  /*
+   * Printed, usually in black and white, so the categories fall back to
+   * lightness and weight alone. The recovery sheet is the one artefact that
+   * routinely leaves the screen, and it must stay readable on a mono printer.
+   */
+  .glyph.upper {
+    color: #000;
+    font-weight: 800;
+  }
+
+  .glyph.lower {
+    color: #5a5a5a;
+    font-weight: 500;
+  }
+
   .glyph.digit {
     color: #000;
+    font-weight: 800;
+    text-decoration: underline;
   }
 
-  .glyph.letter.upper {
-    color: #222;
-  }
-
-  .glyph.letter.lower {
-    color: #555;
+  .glyph.symbol {
+    color: #333;
   }
 }
+
 .sheet ol {
   margin: 0;
   padding-left: 1.15rem;

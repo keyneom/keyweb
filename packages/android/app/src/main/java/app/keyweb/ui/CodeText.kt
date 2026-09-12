@@ -1,8 +1,9 @@
 package app.keyweb.ui
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -16,80 +17,100 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 
 /**
  * Characters that must not be mistaken for one another.
  *
- * Someone copying a recovery code onto paper has to decide, for every glyph,
- * whether they are looking at a zero or a letter O. Getting it wrong is not a
- * typo they notice — it surfaces months later, on the one day the code matters,
- * as "that code isn't right".
+ * Someone copying a code or a password onto paper has to decide, for every
+ * glyph, what they are looking at. Zero against letter O is the famous pair,
+ * but the worse ones are the case twins — `c` and `C`, `s` and `S`, `v` and `V`
+ * — which differ only in size, so an isolated glyph carries no cue at all.
+ * Getting one wrong is not a typo anyone notices; it surfaces later as a code
+ * that simply does not work, with nothing to say which character was wrong.
  *
- * The alphabet already rules out the worst pairs: Crockford base32 omits I, L,
- * O and U entirely. That guarantee is useless to a reader who cannot see it, so
- * digits are drawn visibly apart from letters and the guarantee is stated in
- * words underneath. Colour alone would fail anyone who cannot see it, so weight
- * carries the same distinction.
+ * The fix is display rather than alphabet. Dropping the ambiguous characters
+ * would also work, but it spends real entropy to solve a rendering problem. So
+ * every character is drawn in the colour of its category, with a legend saying
+ * which is which.
+ *
+ * Colour carries the category, weight carries the case, and lightness backs up
+ * both: the palette in `Theme.kt` is chosen so no two categories collapse
+ * together under any common colour blindness.
  */
+private data class GlyphStyles(
+    val upper: SpanStyle,
+    val lower: SpanStyle,
+    val digit: SpanStyle,
+    val symbol: SpanStyle,
+)
+
+@Composable
+@ReadOnlyComposable
+private fun glyphStyles(): GlyphStyles {
+    val status = LocalKeywebStatus.current
+    return GlyphStyles(
+        upper = SpanStyle(color = status.glyphUpper, fontWeight = FontWeight.Bold),
+        lower = SpanStyle(color = status.glyphLower, fontWeight = FontWeight.Medium),
+        digit = SpanStyle(color = status.glyphDigit, fontWeight = FontWeight.ExtraBold),
+        symbol = SpanStyle(color = status.glyphSymbol, fontWeight = FontWeight.Bold),
+    )
+}
+
+private fun AnnotatedString.Builder.appendCategorised(value: String, styles: GlyphStyles) {
+    for (character in value) {
+        val style = when {
+            character.isDigit() -> styles.digit
+            character.isUpperCase() -> styles.upper
+            character.isLetter() -> styles.lower
+            else -> styles.symbol
+        }
+        withStyle(style) { append(character) }
+    }
+}
+
 @Composable
 @ReadOnlyComposable
 fun codeGlyphs(value: String): AnnotatedString {
-    val status = LocalKeywebStatus.current
-    val digit = SpanStyle(color = status.brass, fontWeight = FontWeight.Black)
-    // Case, told apart as well as kind. A generated password no longer contains
-    // a pair differing only in size, but an imported or hand-typed one still
-    // can, and `c` beside `C` is unreadable in isolation. Upper case takes its
-    // own weight *and* its own shade, since weight alone reads as emphasis
-    // rather than as a category.
-    val upper = SpanStyle(
-        color = MaterialTheme.colorScheme.onSurface,
-        fontWeight = FontWeight.Bold,
-    )
-    val lower = SpanStyle(color = status.muted, fontWeight = FontWeight.Medium)
-    return buildAnnotatedString {
-        for (character in value) {
-            when {
-                character.isDigit() -> withStyle(digit) { append(character) }
-                character.isUpperCase() -> withStyle(upper) { append(character) }
-                character.isLetter() -> withStyle(lower) { append(character) }
-                else -> append(character)
-            }
-        }
-    }
+    val styles = glyphStyles()
+    return buildAnnotatedString { appendCategorised(value, styles) }
 }
 
 /**
  * The reading key.
  *
- * Written as a fact about this code rather than as advice, because "be careful"
- * asks the reader to do the work and this sentence does it for them.
+ * Written as facts about the characters rather than as advice, because "be
+ * careful" asks the reader to do the work and these sentences do it for them.
+ *
+ * The recovery variant can promise more than the password one: that alphabet
+ * genuinely has no lower-case letter and no O, I, L or U, so those ambiguities
+ * do not merely look resolved, they do not exist. A password made of arbitrary
+ * characters gets the honest version instead.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CodeLegend(modifier: Modifier = Modifier) {
+fun CodeLegend(modifier: Modifier = Modifier, recovery: Boolean = false) {
     val status = LocalKeywebStatus.current
+    val styles = glyphStyles()
+
     Column(modifier) {
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text(
-                codeGlyphs("123"),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text("numbers", color = status.muted, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                codeGlyphs("ABC"),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text("letters", color = status.muted, style = MaterialTheme.typography.bodyMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            LegendEntry("AB", "cd", "letters", styles)
+            LegendEntry("123", null, "numbers", styles)
+            LegendEntry("-@#", null, "symbols", styles)
         }
         Text(
-            "Every letter is a capital, and there is no letter O, I, L or U — " +
-                "so 0 is always zero and 1 is always one.",
+            if (recovery) {
+                "Every letter is a capital, and there is no letter O, I, L or U — " +
+                    "so 0 is always zero and 1 is always one."
+            } else {
+                "CAPITALS are darker and bolder, small letters lighter. They are not " +
+                    "interchangeable — copy them exactly as they appear."
+            },
             color = status.muted,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 6.dp),
@@ -97,36 +118,42 @@ fun CodeLegend(modifier: Modifier = Modifier) {
     }
 }
 
+@Composable
+private fun LegendEntry(first: String, second: String?, label: String, styles: GlyphStyles) {
+    Text(
+        buildAnnotatedString {
+            appendCategorised(first, styles)
+            second?.let { appendCategorised(it, styles) }
+            withStyle(SpanStyle(color = LocalKeywebStatus.current.muted)) { append("  $label") }
+        },
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
 /**
- * Colours digits apart from letters inside a text field.
- *
- * A stored password is not drawn from Keyweb's own alphabet — it may well
- * contain both a zero and a capital O — so reading one off the screen to type
- * somewhere else is exactly where the confusion bites. The offsets are
- * unchanged, so selection, the cursor and copy all behave normally.
+ * Colours a text field's contents by category without moving any offsets, so
+ * selection, the cursor and copy all behave exactly as before.
  */
 class GlyphColors(
-    private val digit: Color,
     private val upper: Color,
     private val lower: Color,
+    private val digit: Color,
+    private val symbol: Color,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText = TransformedText(
         buildAnnotatedString {
             for (character in text.text) {
-                when {
+                val style = when {
                     character.isDigit() ->
-                        withStyle(SpanStyle(color = digit, fontWeight = FontWeight.Black)) {
-                            append(character)
-                        }
+                        SpanStyle(color = digit, fontWeight = FontWeight.ExtraBold)
                     character.isUpperCase() ->
-                        withStyle(SpanStyle(color = upper, fontWeight = FontWeight.Bold)) {
-                            append(character)
-                        }
+                        SpanStyle(color = upper, fontWeight = FontWeight.Bold)
                     character.isLetter() ->
-                        withStyle(SpanStyle(color = lower)) { append(character) }
-                    // Punctuation is already visually distinct from both.
-                    else -> append(character)
+                        SpanStyle(color = lower, fontWeight = FontWeight.Medium)
+                    else -> SpanStyle(color = symbol, fontWeight = FontWeight.Bold)
                 }
+                withStyle(style) { append(character) }
             }
         },
         OffsetMapping.Identity,
@@ -135,8 +162,8 @@ class GlyphColors(
 
 @Composable
 fun rememberGlyphColors(): GlyphColors {
-    val digit = LocalKeywebStatus.current.brass
-    val upper = MaterialTheme.colorScheme.onSurface
-    val lower = LocalKeywebStatus.current.muted
-    return remember(digit, upper, lower) { GlyphColors(digit, upper, lower) }
+    val status = LocalKeywebStatus.current
+    return remember(status) {
+        GlyphColors(status.glyphUpper, status.glyphLower, status.glyphDigit, status.glyphSymbol)
+    }
 }

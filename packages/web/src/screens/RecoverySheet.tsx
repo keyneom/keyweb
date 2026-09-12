@@ -35,7 +35,7 @@ export function RecoverySheet({
         <h2>Keyweb Recovery Sheet</h2>
         <p className="sheet-sub">Created {new Date().toLocaleDateString()}</p>
         <CodeText value={code} className="sheet-code" />
-        <CodeLegend />
+        <CodeLegend recovery />
         <ol>
           <li>Keep this on paper. Don't photograph it or save it on a computer.</li>
           <li>

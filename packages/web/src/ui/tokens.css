@@ -28,6 +28,20 @@
   --accent-soft: #e3eaf1;
   --brass: #a9832f;
 
+  /*
+   * Character categories, for reading a secret off the screen.
+   *
+   * Four colours chosen so every pair stays at least 24 deltaE apart under
+   * simulated protanopia, deuteranopia *and* tritanopia, and each clears 4.5:1
+   * against its background. Hue alone would not survive colour blindness, so
+   * the categories are separated by lightness as well, and case carries extra
+   * weight on top -- three cues, any one of which is enough.
+   */
+  --glyph-upper: #16202b;
+  --glyph-lower: #5a6b62;
+  --glyph-digit: #a35200;
+  --glyph-symbol: #00639c;
+
   --safe: #1d6b4f;
   --safe-bg: #e0f0e7;
   --attn: #8a4f0b;
@@ -60,6 +74,10 @@
     --on-accent: #0e151c;
     --accent-soft: #22303d;
     --brass: #d7b45e;
+    --glyph-upper: #f2f5f8;
+    --glyph-lower: #a8b5a9;
+    --glyph-digit: #e8a33d;
+    --glyph-symbol: #6cc4f5;
     --safe: #63c79a;
     --safe-bg: #153029;
     --attn: #e3a551;
@@ -83,6 +101,10 @@
   --on-accent: #0e151c;
   --accent-soft: #22303d;
   --brass: #d7b45e;
+  --glyph-upper: #f2f5f8;
+  --glyph-lower: #a8b5a9;
+  --glyph-digit: #e8a33d;
+  --glyph-symbol: #6cc4f5;
   --safe: #63c79a;
   --safe-bg: #153029;
   --attn: #e3a551;

@@ -284,6 +284,7 @@ fun ItemDetailScreen(
                     }
                 },
             )
+            if (revealed) CodeLegend(Modifier.padding(bottom = 10.dp))
             Text(
                 if (revealed) "Tap the eye again to hide it." else "Hidden until you choose to show it.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -343,18 +344,15 @@ private fun ReadOnlyField(
 /**
  * Readable and strong.
  *
- * The alphabet leaves out every character that has to be guessed at when it is
- * read off a screen and written down — and case counts as much as shape. `l`
- * and `1`, `O` and `0` are the famous pairs, but `c/C`, `k/K`, `s/S`, `u/U`,
- * `v/V`, `w/W`, `x/X` and `z/Z` are worse: the two differ only in size, so an
- * isolated glyph carries no cue at all. The upper-case twin of each is dropped,
- * which makes an ambiguous scrawl resolvable — if it looks like a C, it is a c.
- *
- * The cost is 93 bits down to 89 at the default length, which is not a
- * meaningful trade against a password someone gives up on transcribing.
+ * The alphabet drops the characters with no shape of their own — `l`, `1`, `O`,
+ * `0` — and keeps everything else, including the case pairs that differ only in
+ * size (`c/C`, `s/S`, `u/U`, `v/V`, `w/W`, `x/X`, `z/Z`, `k/K`). Removing those
+ * would cost real entropy to solve a display problem, so the display solves it:
+ * see `CodeText`, which colours each character by category and prints a legend
+ * saying which is which.
  */
 fun generatePassword(groups: Int = 4, size: Int = 4): String {
-    val alphabet = "abcdefghijkmnopqrstuvwxyz23456789ADEFGHJLMNPQRTY"
+    val alphabet = "abcdefghijkmnopqrstuvwxyz23456789ACDEFGHJKLMNPQRSTUVWXYZ"
     val random = java.security.SecureRandom()
     return (0 until groups).joinToString("-") {
         (0 until size).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")

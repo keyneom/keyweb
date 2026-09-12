@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { itemField, type ItemRecord, type VaultState } from "@keyweb/vault-core";
+import { CodeLegend, CodeText } from "../ui/CodeText";
 import { BackIcon, CopyIcon, EyeIcon } from "../ui/icons";
 
 const CLIPBOARD_CLEAR_SECONDS = 45;
@@ -75,13 +76,20 @@ export function ItemDetail({
       <label className="field">
         <span>Password</span>
         <div className="box">
-          <input
-            className="mono"
-            type={revealed ? "text" : "password"}
-            value={password}
-            readOnly
-            aria-label="Password"
-          />
+          {/*
+            Rendered text rather than an input, so each character can be drawn
+            in the colour of its category. Nothing is lost: the field was always
+            read-only, `user-select: all` still makes it selectable in one tap,
+            and dropping the password input stops the browser offering to save a
+            password it is only being shown.
+          */}
+          {revealed ? (
+            <CodeText value={password} className="mono secret-value" />
+          ) : (
+            <span className="mono secret-value" aria-label="Password, hidden">
+              {"\u2022".repeat(Math.min(password.length, 24))}
+            </span>
+          )}
           <button type="button" className="iconbtn" onClick={() => setRevealed((v) => !v)}>
             <EyeIcon />
             {revealed ? "Hide" : "Show"}
@@ -97,6 +105,8 @@ export function ItemDetail({
             : "Hidden until you choose to show it."}
         </span>
       </label>
+      {/* Only while something is actually on screen to decode. */}
+      {revealed && <CodeLegend />}
 
       {url && (
         <label className="field">

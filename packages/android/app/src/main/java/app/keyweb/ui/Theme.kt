@@ -41,6 +41,19 @@ data class KeywebStatusColors(
     val riskContainer: Color,
     val brass: Color,
     val muted: Color,
+
+    /*
+     * Character categories, for reading a secret off the screen.
+     *
+     * Every pair stays at least 24 deltaE apart under simulated protanopia,
+     * deuteranopia and tritanopia, and each clears 4.5:1 against its
+     * background. Kept identical to the web tokens so the same password does
+     * not change colour between a phone and a browser.
+     */
+    val glyphUpper: Color,
+    val glyphLower: Color,
+    val glyphDigit: Color,
+    val glyphSymbol: Color,
     val line: Color,
 )
 
@@ -53,6 +66,10 @@ private val LightStatus = KeywebStatusColors(
     riskContainer = Color(0xFFF9E2E0),
     brass = Color(0xFFA9832F),
     muted = Color(0xFF5B6672),
+    glyphUpper = Color(0xFF16202B),
+    glyphLower = Color(0xFF5A6B62),
+    glyphDigit = Color(0xFFA35200),
+    glyphSymbol = Color(0xFF00639C),
     line = Color(0xFFDCD8CF),
 )
 
@@ -65,6 +82,10 @@ private val DarkStatus = KeywebStatusColors(
     riskContainer = Color(0xFF3A1D1B),
     brass = Color(0xFFD7B45E),
     muted = Color(0xFF93A0AD),
+    glyphUpper = Color(0xFFF2F5F8),
+    glyphLower = Color(0xFFA8B5A9),
+    glyphDigit = Color(0xFFE8A33D),
+    glyphSymbol = Color(0xFF6CC4F5),
     line = Color(0xFF2C3742),
 )
 
