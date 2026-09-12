@@ -43,12 +43,14 @@ export function Settings({
   onTextSize,
   onAppearance,
   onBack,
+  onImport,
 }: {
   textSize: TextSize;
   appearance: Appearance;
   onTextSize: (value: TextSize) => void;
   onAppearance: (value: Appearance) => void;
   onBack: () => void;
+  onImport: () => void;
 }) {
   return (
     <>
@@ -72,6 +74,18 @@ export function Settings({
         ]}
         onChange={onTextSize}
       />
+
+      <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
+        <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
+          Coming from another password app
+        </legend>
+        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+          Bring in a KeePass or KeeWeb file, keeping your folders and tags.
+        </p>
+        <button type="button" className="btn sec big" onClick={onImport}>
+          Import from KeePass or KeeWeb
+        </button>
+      </fieldset>
 
       <Choice
         label="Light or dark"

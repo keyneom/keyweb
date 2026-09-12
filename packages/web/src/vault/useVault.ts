@@ -19,6 +19,7 @@ import {
   parseRecoveryCode,
 } from "./recovery";
 import { GoogleDriveRemote } from "./drive";
+import type { ImportPreview } from "./keepass";
 
 /**
  * A remote for when encrypted backup has not been configured for this build.
@@ -80,6 +81,8 @@ export type VaultApi = {
   deleteItem(itemId: string): Promise<void>;
   moveItem(itemId: string, keyringId: string): Promise<void>;
   addKeyring(name: string): Promise<string>;
+  /** Copy a parsed KeePass file in. Returns how many entries landed. */
+  importKeePass(preview: ImportPreview): Promise<number>;
 };
 
 export function useVault(): VaultApi {
@@ -353,6 +356,52 @@ export function useVault(): VaultApi {
     [refresh, backgroundSync],
   );
 
+  /**
+   * Copy a parsed KeePass file in.
+   *
+   * Each top-level group becomes a keyring, and entries keep their KeePass
+   * UUIDs, so importing the same file again updates rather than duplicates.
+   * Every operation goes through the normal commit path, so an import is as
+   * durable and as recoverable as anything typed by hand.
+   */
+  const importKeePass = useCallback(
+    async (preview: ImportPreview) => {
+      const sync = syncRef.current;
+      if (!sync) return 0;
+
+      const existing = Object.values(state.keyrings).filter((ring) => !ring.deleted.value);
+      const keyringIds: Record<string, string> = {};
+      for (const name of preview.keyringNames) {
+        const already = existing.find((ring) => ring.name.value === name);
+        if (already) {
+          keyringIds[name] = already.id;
+        } else {
+          const id = crypto.randomUUID();
+          keyringIds[name] = id;
+          await sync.putKeyring({ keyringId: id, name });
+        }
+      }
+
+      // Committed one at a time through the normal path, so each entry is
+      // stamped by the live clock and lands in the outbox like any other edit.
+      // That ordering is what lets a re-import beat edits made in Keyweb
+      // since the last one, and what makes a half-finished import durable
+      // rather than lost.
+      let next = await sync.state();
+      for (const entry of preview.entries) {
+        next = await sync.putItem({
+          itemId: entry.itemId,
+          keyringId: keyringIds[entry.keyringName] ?? Object.values(keyringIds)[0] ?? "personal",
+          fields: entry.fields,
+        });
+      }
+      refresh(next);
+      backgroundSync();
+      return preview.entries.length;
+    },
+    [state.keyrings, refresh, backgroundSync],
+  );
+
   const items = useMemo(() => visibleItems(state), [state]);
 
   return {
@@ -374,5 +423,6 @@ export function useVault(): VaultApi {
     deleteItem,
     moveItem,
     addKeyring,
+    importKeePass,
   };
 }

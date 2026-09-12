@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
+import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
 import { RecoverySheet } from "./screens/RecoverySheet";
@@ -15,7 +16,8 @@ type Route =
   | { name: "detail"; itemId: string }
   | { name: "edit"; itemId: string | null }
   | { name: "keyrings" }
-  | { name: "settings" };
+  | { name: "settings" }
+  | { name: "import" };
 
 export function App() {
   const vault = useVault();
@@ -134,6 +136,14 @@ export function App() {
           onTextSize={display.setTextSize}
           onAppearance={display.setAppearance}
           onBack={() => setRoute({ name: "list" })}
+          onImport={() => setRoute({ name: "import" })}
+        />
+      )}
+
+      {route.name === "import" && (
+        <Import
+          onBack={() => setRoute({ name: "list" })}
+          onImport={(preview) => vault.importKeePass(preview)}
         />
       )}
 
