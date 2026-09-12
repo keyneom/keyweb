@@ -37,6 +37,29 @@ interface VaultStorage {
     suspend fun writeClock(value: Hlc)
 }
 
+/**
+ * How the vault is transformed on its way to and from disk.
+ *
+ * Operates on the serialised JSON rather than the typed value, so the storage
+ * layer keeps one serialisation step and the cipher stays a pure string
+ * transform. Synchronous on purpose: Android's AES-GCM is, and keeping it
+ * synchronous means it can run inside a Room transaction without holding the
+ * database connection across a suspension point.
+ */
+interface VaultCipher {
+    fun seal(plaintext: String): String
+    fun open(sealed: String): String
+}
+
+/**
+ * Stores the vault as-is. Only appropriate where the threat model does not
+ * include an attacker reading app storage — in practice, tests.
+ */
+object PlaintextVaultCipher : VaultCipher {
+    override fun seal(plaintext: String): String = plaintext
+    override fun open(sealed: String): String = sealed
+}
+
 class VersionConflictException(
     message: String = "The remote vault moved since it was read.",
 ) : Exception(message)

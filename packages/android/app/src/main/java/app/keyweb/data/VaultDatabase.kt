@@ -14,6 +14,8 @@ import androidx.room.Transaction
 import app.keyweb.vault.Hlc
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.VaultState
+import app.keyweb.vault.PlaintextVaultCipher
+import app.keyweb.vault.VaultCipher
 import app.keyweb.vault.VaultStorage
 import app.keyweb.vault.emptyVault
 import app.keyweb.vault.mergeVaults
@@ -86,12 +88,16 @@ abstract class VaultDao {
      * how a saved password silently disappears.
      */
     @Transaction
-    open suspend fun join(incoming: VaultState, json: Json): VaultState {
+    open suspend fun join(incoming: VaultState, json: Json, cipher: VaultCipher): VaultState {
         val current = stateJson()
-            ?.let { json.decodeFromString(VaultState.serializer(), it) }
+            ?.let { json.decodeFromString(VaultState.serializer(), cipher.open(it)) }
             ?: emptyVault()
         val joined = mergeVaults(current, incoming)
-        putState(VaultStateRow(json = json.encodeToString(VaultState.serializer(), joined)))
+        putState(
+            VaultStateRow(
+                json = cipher.seal(json.encodeToString(VaultState.serializer(), joined)),
+            ),
+        )
         return joined
     }
 }
@@ -119,24 +125,32 @@ private const val CLOCK_KEY = "clock"
  */
 class RoomVaultStorage(
     private val dao: VaultDao,
+    /**
+     * Everything written through here is sealed first. Queued operations carry
+     * passwords too, so the outbox is encrypted alongside the state; operation
+     * ids stay in the clear so an acknowledgement needs no key.
+     */
+    private val cipher: VaultCipher = PlaintextVaultCipher,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : VaultStorage {
 
     override suspend fun readState(): VaultState =
-        dao.stateJson()?.let { json.decodeFromString(VaultState.serializer(), it) } ?: emptyVault()
+        dao.stateJson()?.let { json.decodeFromString(VaultState.serializer(), cipher.open(it)) }
+            ?: emptyVault()
 
     override suspend fun commit(op: VaultOp, nextState: VaultState) {
         dao.commit(
-            stateJson = json.encodeToString(VaultState.serializer(), nextState),
+            stateJson = cipher.seal(json.encodeToString(VaultState.serializer(), nextState)),
             opId = op.opId,
-            opJson = json.encodeToString(VaultOp.serializer(), op),
+            opJson = cipher.seal(json.encodeToString(VaultOp.serializer(), op)),
         )
     }
 
-    override suspend fun applyRemote(incoming: VaultState): VaultState = dao.join(incoming, json)
+    override suspend fun applyRemote(incoming: VaultState): VaultState =
+        dao.join(incoming, json, cipher)
 
     override suspend fun pending(): List<VaultOp> =
-        dao.outbox().map { json.decodeFromString(VaultOp.serializer(), it.json) }
+        dao.outbox().map { json.decodeFromString(VaultOp.serializer(), cipher.open(it.json)) }
 
     override suspend fun ack(opIds: List<String>) {
         if (opIds.isNotEmpty()) dao.deleteOutbox(opIds)

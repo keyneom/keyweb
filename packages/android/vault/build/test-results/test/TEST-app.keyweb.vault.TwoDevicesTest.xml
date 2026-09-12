@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="app.keyweb.vault.TwoDevicesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-05T01:00:41.280Z" hostname="Micaels-MacBook-Air.local" time="0.005">
+<testsuite name="app.keyweb.vault.TwoDevicesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-12T03:32:18.223Z" hostname="Micaels-MacBook-Air.local" time="0.005">
   <properties/>
-  <testcase name="gives up cleanly rather than looping forever under permanent contention()" classname="app.keyweb.vault.TwoDevicesTest" time="0.002"/>
-  <testcase name="merges both sides when a competing revision lands mid-flight()" classname="app.keyweb.vault.TwoDevicesTest" time="0.001"/>
-  <testcase name="keeps both edits when each device changes a different field of one login()" classname="app.keyweb.vault.TwoDevicesTest" time="0.001"/>
+  <testcase name="gives up cleanly rather than looping forever under permanent contention()" classname="app.keyweb.vault.TwoDevicesTest" time="0.001"/>
+  <testcase name="merges both sides when a competing revision lands mid-flight()" classname="app.keyweb.vault.TwoDevicesTest" time="0.002"/>
+  <testcase name="keeps both edits when each device changes a different field of one login()" classname="app.keyweb.vault.TwoDevicesTest" time="0.002"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -29,12 +28,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.KeyringsScreen
 import app.keyweb.ui.KeywebTheme
 import app.keyweb.ui.SettingsScreen
+import app.keyweb.ui.UnlockScreen
 import app.keyweb.ui.VaultListScreen
 
 private sealed interface Route {
@@ -45,19 +46,19 @@ private sealed interface Route {
     data object Settings : Route
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private val viewModel: VaultViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { KeywebApp(viewModel) }
+        setContent { KeywebApp(viewModel, this) }
     }
 }
 
 @Composable
-private fun KeywebApp(viewModel: VaultViewModel) {
+private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("keyweb", Context.MODE_PRIVATE)
@@ -125,10 +126,13 @@ private fun KeywebApp(viewModel: VaultViewModel) {
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                if (!ui.ready) {
-                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        Box(contentAlignment = Alignment.Center) { Text("Opening your vault…") }
-                    }
+                if (ui.phase != VaultPhase.READY) {
+                    UnlockScreen(
+                        phase = ui.phase,
+                        firstRun = ui.firstRun,
+                        error = ui.error,
+                        onUnlock = { viewModel.unlock(activity) },
+                    )
                     return@Box
                 }
 
