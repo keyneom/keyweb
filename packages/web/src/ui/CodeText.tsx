@@ -23,9 +23,11 @@ export function CodeText({ value, className }: { value: string; className?: stri
           className={
             /[0-9]/.test(character)
               ? "glyph digit"
-              : /[A-Za-z]/.test(character)
-                ? "glyph letter"
-                : "glyph"
+              : /[A-Z]/.test(character)
+                ? "glyph letter upper"
+                : /[a-z]/.test(character)
+                  ? "glyph letter lower"
+                  : "glyph"
           }
         >
           {character}
@@ -40,6 +42,11 @@ export function CodeText({ value, className }: { value: string; className?: stri
  *
  * Written as a fact about this code rather than as advice, because "be careful"
  * asks the reader to do the work and this sentence does it for them.
+ *
+ * The all-capitals fact earns its place: without it someone writing the code in
+ * their own hand may mix cases, and then cannot tell later whether their own `c`
+ * meant `c` or `C`. It never meant `c` — there are no lower-case letters in a
+ * recovery code at all.
  */
 export function CodeLegend() {
   return (
@@ -48,12 +55,12 @@ export function CodeLegend() {
         <b className="glyph digit">123</b> numbers
       </span>
       <span>
-        <b className="glyph letter">ABC</b> letters
+        <b className="glyph letter upper">ABC</b> letters
       </span>
       <span className="code-legend-note">
-        There is no letter <b>O</b>, <b>I</b>, <b>L</b> or <b>U</b> in this code — so{" "}
-        <b className="glyph digit">0</b> is always zero and <b className="glyph digit">1</b> is
-        always one.
+        Every letter is a <b>capital</b>, and there is no letter <b>O</b>, <b>I</b>, <b>L</b> or{" "}
+        <b>U</b> — so <b className="glyph digit">0</b> is always zero and{" "}
+        <b className="glyph digit">1</b> is always one.
       </span>
     </p>
   );

@@ -41,15 +41,22 @@ import androidx.compose.ui.unit.dp
 fun codeGlyphs(value: String): AnnotatedString {
     val status = LocalKeywebStatus.current
     val digit = SpanStyle(color = status.brass, fontWeight = FontWeight.Black)
-    val letter = SpanStyle(
+    // Case, told apart as well as kind. A generated password no longer contains
+    // a pair differing only in size, but an imported or hand-typed one still
+    // can, and `c` beside `C` is unreadable in isolation. Upper case takes its
+    // own weight *and* its own shade, since weight alone reads as emphasis
+    // rather than as a category.
+    val upper = SpanStyle(
         color = MaterialTheme.colorScheme.onSurface,
-        fontWeight = FontWeight.Medium,
+        fontWeight = FontWeight.Bold,
     )
+    val lower = SpanStyle(color = status.muted, fontWeight = FontWeight.Medium)
     return buildAnnotatedString {
         for (character in value) {
             when {
                 character.isDigit() -> withStyle(digit) { append(character) }
-                character.isLetter() -> withStyle(letter) { append(character) }
+                character.isUpperCase() -> withStyle(upper) { append(character) }
+                character.isLetter() -> withStyle(lower) { append(character) }
                 else -> append(character)
             }
         }
@@ -81,8 +88,8 @@ fun CodeLegend(modifier: Modifier = Modifier) {
             Text("letters", color = status.muted, style = MaterialTheme.typography.bodyMedium)
         }
         Text(
-            "There is no letter O, I, L or U in this code — so 0 is always zero " +
-                "and 1 is always one.",
+            "Every letter is a capital, and there is no letter O, I, L or U — " +
+                "so 0 is always zero and 1 is always one.",
             color = status.muted,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 6.dp),
@@ -98,7 +105,11 @@ fun CodeLegend(modifier: Modifier = Modifier) {
  * somewhere else is exactly where the confusion bites. The offsets are
  * unchanged, so selection, the cursor and copy all behave normally.
  */
-class GlyphColors(private val digit: Color, private val letter: Color) : VisualTransformation {
+class GlyphColors(
+    private val digit: Color,
+    private val upper: Color,
+    private val lower: Color,
+) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText = TransformedText(
         buildAnnotatedString {
             for (character in text.text) {
@@ -107,8 +118,12 @@ class GlyphColors(private val digit: Color, private val letter: Color) : VisualT
                         withStyle(SpanStyle(color = digit, fontWeight = FontWeight.Black)) {
                             append(character)
                         }
+                    character.isUpperCase() ->
+                        withStyle(SpanStyle(color = upper, fontWeight = FontWeight.Bold)) {
+                            append(character)
+                        }
                     character.isLetter() ->
-                        withStyle(SpanStyle(color = letter)) { append(character) }
+                        withStyle(SpanStyle(color = lower)) { append(character) }
                     // Punctuation is already visually distinct from both.
                     else -> append(character)
                 }
@@ -121,6 +136,7 @@ class GlyphColors(private val digit: Color, private val letter: Color) : VisualT
 @Composable
 fun rememberGlyphColors(): GlyphColors {
     val digit = LocalKeywebStatus.current.brass
-    val letter = MaterialTheme.colorScheme.onSurface
-    return remember(digit, letter) { GlyphColors(digit, letter) }
+    val upper = MaterialTheme.colorScheme.onSurface
+    val lower = LocalKeywebStatus.current.muted
+    return remember(digit, upper, lower) { GlyphColors(digit, upper, lower) }
 }
