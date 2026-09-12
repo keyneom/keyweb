@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="app.keyweb.vault.StorageContractTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-12T05:46:40.073Z" hostname="Micaels-MacBook-Air.local" time="0.002">
-  <properties/>
-  <testcase name="applyRemote joins rather than replaces()" classname="app.keyweb.vault.StorageContractTest" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="app.keyweb.vault.EditDuringSyncTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-12T05:46:40.055Z" hostname="Micaels-MacBook-Air.local" time="0.006">
-  <properties/>
-  <testcase name="every one of many edits during a single slow sync is kept()" classname="app.keyweb.vault.EditDuringSyncTest" time="0.004"/>
-  <testcase name="an edit made while a sync is in flight survives and reaches the cloud()" classname="app.keyweb.vault.EditDuringSyncTest" time="0.002"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
