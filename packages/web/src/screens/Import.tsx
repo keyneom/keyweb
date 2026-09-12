@@ -5,11 +5,28 @@ import {
   WrongMasterPassword,
   type ImportPreview,
 } from "../vault/keepass";
+import {
+  forgetSource,
+  markImported,
+  mergeSources,
+  pickDriveFiles,
+  PICKER_CONFIGURED,
+  readDriveFile,
+  readSources,
+  rememberSources,
+  type ImportSource,
+} from "../vault/importSource";
 
 type Stage =
   | { name: "choose" }
-  | { name: "password"; file: File; bytes: ArrayBuffer }
-  | { name: "preview"; preview: ImportPreview }
+  | {
+      name: "password";
+      label: string;
+      bytes: ArrayBuffer;
+      /** Set when the bytes came from Drive, so the source can be recorded. */
+      fileId?: string;
+    }
+  | { name: "preview"; preview: ImportPreview; fileId?: string }
   | { name: "done"; count: number };
 
 /**
@@ -31,11 +48,55 @@ export function Import({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sources, setSources] = useState<ImportSource[]>(readSources);
 
   async function choose(file: File | undefined) {
     if (!file) return;
     setError(null);
-    setStage({ name: "password", file, bytes: await file.arrayBuffer() });
+    setStage({ name: "password", label: file.name, bytes: await file.arrayBuffer() });
+  }
+
+  /**
+   * Hand files over through the Google Picker.
+   *
+   * This is the grant, not just a file browser: `drive.file` cannot see a
+   * `.kdbx` until the user has picked it, which is why downloading by hand was
+   * the only route before. Cancelling returns nothing and is not an error.
+   */
+  async function pick() {
+    setBusy(true);
+    setError(null);
+    try {
+      const picked = await pickDriveFiles();
+      if (picked.length === 0) return;
+      const next = mergeSources(sources, picked);
+      setSources(next);
+      rememberSources(next);
+      if (picked.length === 1) await openFromDrive(picked[0]!);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Keyweb couldn't open your Drive.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openFromDrive(source: ImportSource) {
+    setBusy(true);
+    setError(null);
+    try {
+      const bytes = await readDriveFile(source.fileId);
+      setStage({ name: "password", label: source.name, bytes, fileId: source.fileId });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Keyweb couldn't read that file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function forget(fileId: string) {
+    const next = forgetSource(sources, fileId);
+    setSources(next);
+    rememberSources(next);
   }
 
   async function open() {
@@ -50,7 +111,11 @@ export function Import({
         setError("That file opened, but there were no passwords in it.");
         return;
       }
-      setStage({ name: "preview", preview });
+      setStage({
+        name: "preview",
+        preview,
+        ...(stage.fileId ? { fileId: stage.fileId } : {}),
+      });
     } catch (cause) {
       setError(
         cause instanceof WrongMasterPassword || cause instanceof Error
@@ -67,6 +132,11 @@ export function Import({
     setBusy(true);
     try {
       const count = await onImport(stage.preview);
+      if (stage.fileId) {
+        const next = markImported(sources, stage.fileId);
+        setSources(next);
+        rememberSources(next);
+      }
       setStage({ name: "done", count });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Keyweb couldn't finish the import.");
@@ -101,8 +171,66 @@ export function Import({
             Keyweb can read a KeePass or KeeWeb file — the kind ending in <code>.kdbx</code>. Your
             folders and tags come across with it.
           </p>
+
+          {sources.length > 0 && (
+            <>
+              <h2 className="import-heading">Files you've used before</h2>
+              <div className="list">
+                {sources.map((source) => (
+                  <div key={source.fileId} className="row" style={{ cursor: "default" }}>
+                    <span className="avatar">KP</span>
+                    <span className="rowtext">
+                      <b>{source.name}</b>
+                      <span>
+                        {source.lastImportedAt
+                          ? `Last brought in ${new Date(source.lastImportedAt).toLocaleDateString()}`
+                          : "Not brought in yet"}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      disabled={busy}
+                      onClick={() => void openFromDrive(source)}
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      onClick={() => forget(source.fileId)}
+                      aria-label={`Forget ${source.name}`}
+                    >
+                      Forget
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="hint" style={{ margin: "0.5rem 0 1.25rem" }}>
+                Keyweb reads these straight out of Drive, so you can bring in changes whenever you
+                like. Forgetting one only removes it from this list.
+              </p>
+            </>
+          )}
+
+          {PICKER_CONFIGURED && (
+            <>
+              <button
+                type="button"
+                className="btn pri big"
+                disabled={busy}
+                onClick={() => void pick()}
+              >
+                {busy ? "Opening Google Drive…" : "Choose a file from Google Drive"}
+              </button>
+              <p className="hint" style={{ margin: "0.5rem 0 1.25rem" }}>
+                Google will ask which file to share. Keyweb can only ever see the files you pick.
+              </p>
+            </>
+          )}
+
           <label className="field">
-            <span>Choose your file</span>
+            <span>Or choose a file on this device</span>
             <div className="box">
               <input
                 type="file"
@@ -110,15 +238,16 @@ export function Import({
                 onChange={(event) => void choose(event.target.files?.[0])}
               />
             </div>
-            <span className="hint">
-              If it's in Google Drive, download it to this device first, then pick it here.
-            </span>
           </label>
+
           <p className="status" data-tone="calm">
             <ShieldIcon />
             <span>
-              <b>The file never leaves this device.</b>
-              <em>Keyweb opens it here, copies what's inside, and forgets the password.</em>
+              <b>Keyweb only ever reads your KeePass file.</b>
+              <em>
+                It is opened, copied from, and left exactly as it was — Keyweb never writes to it or
+                changes it.
+              </em>
             </span>
           </p>
         </>
@@ -127,7 +256,7 @@ export function Import({
       {stage.name === "password" && (
         <>
           <p className="screen-sub">
-            Reading <b>{stage.file.name}</b>. Enter the master password you use to open it.
+            Reading <b>{stage.label}</b>. Enter the master password you use to open it.
           </p>
           <label className="field">
             <span>Master password</span>

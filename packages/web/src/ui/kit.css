@@ -163,6 +163,13 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
+  /*
+   * `.app` is a flex column, and `overflow: hidden` implicitly gives a flex
+   * item `min-height: 0` -- so without this the list happily shrinks to a few
+   * pixels and clips every row inside it. The rows keep their real height; they
+   * are simply not drawn.
+   */
+  flex-shrink: 0;
 }
 .row {
   display: flex;
@@ -693,4 +700,10 @@
   width: 100%;
   min-height: var(--tap);
   accent-color: var(--accent);
+}
+
+.import-heading {
+  font-size: 1em;
+  font-weight: 650;
+  margin: 0.5rem 0 0.5rem;
 }
