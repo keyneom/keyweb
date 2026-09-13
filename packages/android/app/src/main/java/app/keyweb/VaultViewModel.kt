@@ -529,7 +529,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * kept on the device and nothing needs syncing: a file picked in a browser
      * simply appears here.
      */
-    fun refreshImportFiles() {
+    fun refreshImportFiles(interactive: Boolean = true) {
         setImport { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
@@ -541,10 +541,56 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     .sortedByDescending { it.modifiedAtMs ?: 0L }
                 setImport { it.copy(files = files, busy = false) }
             } catch (cause: GoogleAuthorizer.ConsentRequired) {
-                _consent.value = cause.intentSender
+                // Opening the screen must not throw a Google account prompt at
+                // someone who has not asked for one -- especially since the
+                // local-file option below needs no Google account at all. The
+                // prompt belongs to the button that asks for Drive.
+                if (interactive) {
+                    _consent.value = cause.intentSender
+                }
                 setImport { it.copy(busy = false) }
             } catch (cause: Exception) {
-                setImport { it.copy(busy = false, error = describeBackup(cause)) }
+                setImport {
+                    it.copy(busy = false, error = if (interactive) describeBackup(cause) else null)
+                }
+            }
+        }
+    }
+
+    /**
+     * Open a file chosen from this phone.
+     *
+     * Android's own document picker, which reaches local storage and any
+     * provider the phone has — the Drive app, Dropbox, a USB stick. Worth being
+     * clear about what this is *not*: the permission it grants is to this app
+     * on this device, and authorizes nothing at the Drive API, so a file opened
+     * this way does not become visible to the website or to another phone. That
+     * is what the Picker grant is for. This is for the file that is simply
+     * here.
+     */
+    fun openLocalFile(uri: android.net.Uri) {
+        setImport { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val name = withContext(Dispatchers.IO) {
+                    resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val column = cursor.getColumnIndex(
+                            android.provider.OpenableColumns.DISPLAY_NAME,
+                        )
+                        if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+                    }
+                } ?: "that file"
+                pendingBytes = withContext(Dispatchers.IO) {
+                    resolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IllegalStateException("Keyweb couldn't open that file.")
+                setImport {
+                    it.copy(stage = ImportStage.PASSWORD, openingName = name, busy = false)
+                }
+            } catch (cause: Exception) {
+                setImport {
+                    it.copy(busy = false, error = cause.message ?: "Keyweb couldn't open that file.")
+                }
             }
         }
     }

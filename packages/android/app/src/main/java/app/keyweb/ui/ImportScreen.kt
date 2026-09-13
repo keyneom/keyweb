@@ -1,6 +1,11 @@
 package app.keyweb.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +30,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.keyweb.ImportStage
@@ -50,9 +57,16 @@ fun ImportScreen(
     onRefresh: () -> Unit,
     onGrantAccess: () -> Unit,
     onOpen: (String) -> Unit,
+    onLocalFile: (Uri) -> Unit,
     onUnlock: (String) -> Unit,
     onConfirm: () -> Unit,
 ) {
+    // A .kdbx has no registered media type, and providers label it variously as
+    // octet-stream or nothing at all. Filtering by type would hide the very
+    // file being looked for, so the filter is left open.
+    val localFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(onLocalFile) }
     val status = LocalKeywebStatus.current
     var password by remember { mutableStateOf("") }
 
@@ -78,6 +92,7 @@ fun ImportScreen(
                     onRefresh = onRefresh,
                     onGrantAccess = onGrantAccess,
                     onOpen = onOpen,
+                    onBrowseThisPhone = { localFile.launch(arrayOf("*/*")) },
                 )
 
                 ImportStage.PASSWORD -> {
@@ -94,6 +109,20 @@ fun ImportScreen(
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         shape = RoundedCornerShape(14.dp),
+                        // Enter submits. Without this the key falls through to
+                        // the back handler and walks out of the import.
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                if (!state.busy && password.isNotEmpty()) {
+                                    onUnlock(password)
+                                    password = ""
+                                }
+                            },
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
@@ -183,6 +212,7 @@ private fun Choosing(
     onRefresh: () -> Unit,
     onGrantAccess: () -> Unit,
     onOpen: (String) -> Unit,
+    onBrowseThisPhone: () -> Unit,
 ) {
     val status = LocalKeywebStatus.current
     val dates = remember { DateFormat.getDateInstance(DateFormat.MEDIUM) }
@@ -249,6 +279,18 @@ private fun Choosing(
         modifier = Modifier.padding(top = 8.dp, bottom = 10.dp),
     )
     SecondaryButton("I've picked it — check again", onRefresh, Modifier.fillMaxWidth())
+
+    Spacer(Modifier.height(20.dp))
+    Text("Or open a file on this phone", fontWeight = FontWeight.SemiBold)
+    Text(
+        "Anywhere this phone can reach — Downloads, a memory card, or another app's " +
+            "storage. A file opened this way is read once; it won't appear on your other " +
+            "devices the way a Drive file does.",
+        color = status.muted,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+    )
+    SecondaryButton("Browse this phone", onBrowseThisPhone, Modifier.fillMaxWidth())
 
     StatusLine(
         Tone.SAFE,

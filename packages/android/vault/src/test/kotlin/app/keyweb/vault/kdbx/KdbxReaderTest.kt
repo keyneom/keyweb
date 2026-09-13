@@ -176,3 +176,36 @@ class KdbxReaderTest {
         )
     }
 }
+
+/**
+ * The XML parser must not fetch anything, on any platform.
+ *
+ * Found on a phone rather than in this suite: Android's parser does not
+ * implement `disallow-doctype-decl` and throws when asked for it, so hardening
+ * that worked on the JVM broke every import on the device. The features are now
+ * applied defensively and the guarantee rests on refusing entities at
+ * resolution time, which every parser supports.
+ */
+class KdbxXmlHardeningTest {
+
+    @Test
+    fun `parses ordinary XML`() {
+        val document = safeDocumentBuilder()
+            .parse("<a><b>hello</b></a>".byteInputStream())
+        assertEquals("hello", document.documentElement.textContent)
+    }
+
+    @Test
+    fun `never resolves an external entity`() {
+        val hostile = """
+            <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+            <a>&xxe;</a>
+        """.trimIndent()
+        // Either refusing the doctype outright or resolving the entity to
+        // nothing is acceptable. Reading the file is not.
+        val text = runCatching {
+            safeDocumentBuilder().parse(hostile.byteInputStream()).documentElement.textContent
+        }.getOrDefault("")
+        assertTrue(!text.contains("root:"), "external entity was resolved: $text")
+    }
+}

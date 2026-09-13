@@ -250,7 +250,9 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onBack = ::goBack,
                         onBackup = { route = Route.Backup },
                         onImport = {
-                            viewModel.refreshImportFiles()
+                            // Quietly: if Drive access already exists the list
+                            // fills in, and if it does not, nothing interrupts.
+                            viewModel.refreshImportFiles(interactive = false)
                             route = Route.Import
                         },
                     )
@@ -272,6 +274,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             }
                         },
                         onOpen = viewModel::openImportFile,
+                        onLocalFile = viewModel::openLocalFile,
                         onUnlock = viewModel::unlockImportFile,
                         onConfirm = viewModel::confirmImport,
                     )

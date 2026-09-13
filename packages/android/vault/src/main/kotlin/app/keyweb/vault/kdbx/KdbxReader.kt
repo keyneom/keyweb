@@ -2,9 +2,11 @@ package app.keyweb.vault.kdbx
 
 import java.io.ByteArrayInputStream
 import java.util.Base64
+import javax.xml.parsers.DocumentBuilder
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 import org.w3c.dom.Node
+import org.xml.sax.InputSource
 
 /**
  * One entry as it sits in the KeePass file, before anything Keyweb-specific.
@@ -176,18 +178,8 @@ object KdbxReader {
      * a set of queries.
      */
     private fun parseXml(xml: ByteArray, stream: InnerStream): KdbxFile {
-        val factory = DocumentBuilderFactory.newInstance().apply {
-            // The file comes from cloud storage and is not to be trusted. An
-            // external entity reference in it could otherwise read local files
-            // or make network requests while "importing passwords".
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            isXIncludeAware = false
-            isExpandEntityReferences = false
-        }
         val document = try {
-            factory.newDocumentBuilder().parse(ByteArrayInputStream(xml))
+            safeDocumentBuilder().parse(ByteArrayInputStream(xml))
         } catch (cause: Exception) {
             throw KdbxException("This file opened, but its contents could not be read.", cause)
         }
@@ -315,6 +307,40 @@ object KdbxReader {
                 .joinToString(", "),
             extra = fields,
         )
+    }
+}
+
+/**
+ * An XML parser that will not fetch anything.
+ *
+ * The file arrives from cloud storage and is not to be trusted: an external
+ * entity reference in it could otherwise read local files or make network
+ * requests while "importing passwords".
+ *
+ * Each hardening feature is applied defensively because the parsers differ.
+ * Android's does not implement `disallow-doctype-decl` at all and throws
+ * `ParserConfigurationException` when asked for it — which is how this was
+ * found, since the JVM used by the tests supports it and the phone does not.
+ * Refusing every entity at resolution time is the part that works everywhere,
+ * so it is the guarantee rather than the belt-and-braces.
+ */
+internal fun safeDocumentBuilder(): DocumentBuilder {
+    val factory = DocumentBuilderFactory.newInstance()
+    for (feature in listOf(
+        "http://apache.org/xml/features/disallow-doctype-decl",
+        "http://xml.org/sax/features/external-general-entities",
+        "http://xml.org/sax/features/external-parameter-entities",
+        "http://apache.org/xml/features/nonvalidating/load-external-dtd",
+    )) {
+        val enable = feature.endsWith("disallow-doctype-decl")
+        runCatching { factory.setFeature(feature, enable) }
+    }
+    runCatching { factory.isXIncludeAware = false }
+    factory.isExpandEntityReferences = false
+
+    return factory.newDocumentBuilder().apply {
+        // Nothing external is ever fetched, whatever the parser allowed above.
+        setEntityResolver { _, _ -> InputSource(java.io.StringReader("")) }
     }
 }
 
