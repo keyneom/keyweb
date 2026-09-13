@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertIcon, BackIcon, CheckIcon, ShieldIcon } from "../ui/icons";
 import {
   readKeePass,
@@ -6,14 +6,10 @@ import {
   type ImportPreview,
 } from "../vault/keepass";
 import {
-  forgetSource,
-  markImported,
-  mergeSources,
+  listImportableFiles,
   pickDriveFiles,
   PICKER_CONFIGURED,
   readDriveFile,
-  readSources,
-  rememberSources,
   type ImportSource,
 } from "../vault/importSource";
 
@@ -48,7 +44,49 @@ export function Import({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [sources, setSources] = useState<ImportSource[]>(readSources);
+  const [sources, setSources] = useState<ImportSource[]>([]);
+  const [listed, setListed] = useState(false);
+
+  /**
+   * Ask Drive what this account has handed over.
+   *
+   * Under `drive.file` the answer is exactly the granted files, so the list is
+   * the same in a browser and on a phone with no syncing at all. Failing is not
+   * an error worth shouting about -- being signed out simply means there is
+   * nothing to offer yet, and the picker below still works.
+   */
+  const refresh = useCallback(async () => {
+    if (!PICKER_CONFIGURED) return;
+    try {
+      setSources(await listImportableFiles());
+    } catch {
+      setSources([]);
+    } finally {
+      setListed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  /**
+   * Arriving from the phone.
+   *
+   * Android has no native UI for `drive.file`, so it sends people here with
+   * `?grant=import` and the Picker opens straight away. Landing on a screen and
+   * having to find the right button would make the handoff feel like a
+   * detour that went wrong.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("grant") !== "import") return;
+    // Consumed so a refresh does not reopen the picker unbidden.
+    window.history.replaceState({}, "", window.location.pathname);
+    void pick();
+    // Deliberately once, on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function choose(file: File | undefined) {
     if (!file) return;
@@ -69,9 +107,9 @@ export function Import({
     try {
       const picked = await pickDriveFiles();
       if (picked.length === 0) return;
-      const next = mergeSources(sources, picked);
-      setSources(next);
-      rememberSources(next);
+      // Re-ask Drive rather than trusting what came back, so the list stays
+      // the same question both platforms ask.
+      await refresh();
       if (picked.length === 1) await openFromDrive(picked[0]!);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Keyweb couldn't open your Drive.");
@@ -93,11 +131,7 @@ export function Import({
     }
   }
 
-  function forget(fileId: string) {
-    const next = forgetSource(sources, fileId);
-    setSources(next);
-    rememberSources(next);
-  }
+
 
   async function open() {
     if (stage.name !== "password") return;
@@ -132,11 +166,6 @@ export function Import({
     setBusy(true);
     try {
       const count = await onImport(stage.preview);
-      if (stage.fileId) {
-        const next = markImported(sources, stage.fileId);
-        setSources(next);
-        rememberSources(next);
-      }
       setStage({ name: "done", count });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Keyweb couldn't finish the import.");
@@ -174,43 +203,41 @@ export function Import({
 
           {sources.length > 0 && (
             <>
-              <h2 className="import-heading">Files you've used before</h2>
+              <h2 className="import-heading">KeePass files in your Google Drive</h2>
               <div className="list">
                 {sources.map((source) => (
-                  <div key={source.fileId} className="row" style={{ cursor: "default" }}>
+                  <button
+                    key={source.fileId}
+                    type="button"
+                    className="row"
+                    disabled={busy}
+                    onClick={() => void openFromDrive(source)}
+                  >
                     <span className="avatar">KP</span>
                     <span className="rowtext">
                       <b>{source.name}</b>
                       <span>
-                        {source.lastImportedAt
-                          ? `Last brought in ${new Date(source.lastImportedAt).toLocaleDateString()}`
-                          : "Not brought in yet"}
+                        {source.modifiedAt
+                          ? `Changed ${new Date(source.modifiedAt).toLocaleDateString()}`
+                          : "In your Drive"}
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      disabled={busy}
-                      onClick={() => void openFromDrive(source)}
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      onClick={() => forget(source.fileId)}
-                      aria-label={`Forget ${source.name}`}
-                    >
-                      Forget
-                    </button>
-                  </div>
+                  </button>
                 ))}
               </div>
               <p className="hint" style={{ margin: "0.5rem 0 1.25rem" }}>
-                Keyweb reads these straight out of Drive, so you can bring in changes whenever you
-                like. Forgetting one only removes it from this list.
+                Keyweb reads these straight out of Drive, so you can bring in changes as often as
+                you like. The same list appears on your phone — it comes from Google, not from this
+                browser.
               </p>
             </>
+          )}
+
+          {listed && sources.length === 0 && PICKER_CONFIGURED && (
+            <p className="screen-sub">
+              You haven't shown Keyweb any KeePass files yet. Choose one below and it will stay
+              available here and on your phone.
+            </p>
           )}
 
           {PICKER_CONFIGURED && (

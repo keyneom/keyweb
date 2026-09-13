@@ -35,9 +35,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.keyweb.ui.BackupScreen
+import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.KeyringsScreen
+import app.keyweb.data.GrantBrowser
 import app.keyweb.ui.KeywebTheme
 import app.keyweb.ui.relativeTime
 import app.keyweb.ui.SettingsScreen
@@ -51,6 +53,7 @@ private sealed interface Route {
     data object Keyrings : Route
     data object Settings : Route
     data object Backup : Route
+    data object Import : Route
 }
 
 class MainActivity : FragmentActivity() {
@@ -92,6 +95,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         is Route.Keyrings -> "keyrings"
                         is Route.Settings -> "settings"
                         is Route.Backup -> "backup"
+                        is Route.Import -> "import"
                     }
                 },
                 restore = {
@@ -99,6 +103,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         it == "keyrings" -> Route.Keyrings
                         it == "settings" -> Route.Settings
                         it == "backup" -> Route.Backup
+                        it == "import" -> Route.Import
                         it.startsWith("detail:") -> Route.Detail(it.removePrefix("detail:"))
                         it.startsWith("edit:") ->
                             Route.Edit(it.removePrefix("edit:").ifEmpty { null })
@@ -244,6 +249,31 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         },
                         onBack = ::goBack,
                         onBackup = { route = Route.Backup },
+                        onImport = {
+                            viewModel.refreshImportFiles()
+                            route = Route.Import
+                        },
+                    )
+
+                    is Route.Import -> ImportScreen(
+                        state = ui.import,
+                        onBack = {
+                            viewModel.closeImport()
+                            goBack()
+                        },
+                        onRefresh = viewModel::refreshImportFiles,
+                        onGrantAccess = {
+                            if (!GrantBrowser.open(activity)) {
+                                viewModel.reportImportProblem(
+                                    "Keyweb couldn't find a browser to open. " +
+                                        "Open ${GrantBrowser.GRANT_URL} yourself and pick the " +
+                                        "file there.",
+                                )
+                            }
+                        },
+                        onOpen = viewModel::openImportFile,
+                        onUnlock = viewModel::unlockImportFile,
+                        onConfirm = viewModel::confirmImport,
                     )
 
                     is Route.Backup -> BackupScreen(

@@ -27,6 +27,22 @@ export function App() {
   const [route, setRoute] = useState<Route>({ name: "list" });
   const [toast, setToast] = useState<string | null>(null);
 
+  /**
+   * Arriving from the phone to hand a Drive file over.
+   *
+   * Android has no native picker for `drive.file`, so it opens this page with
+   * `?grant=import`. The vault still has to be unlocked first, so the intent is
+   * remembered and acted on once it is — otherwise the parameter would be
+   * consumed by the unlock screen and the handoff would silently do nothing.
+   */
+  const wantsGrant =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("grant") === "import";
+
+  useEffect(() => {
+    if (wantsGrant && vault.phase === "ready") setRoute({ name: "import" });
+  }, [wantsGrant, vault.phase]);
+
   useEffect(() => {
     if (toast === null) return;
     const timer = setTimeout(() => setToast(null), 5000);

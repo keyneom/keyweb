@@ -40,6 +40,11 @@ private class FakeDrive : DriveFiles {
             appProperties.all { (k, v) -> file.appProperties[k] == v }
         }?.key
 
+    override suspend fun listFiles(): List<DriveFiles.DriveFile> =
+        files.map { (id, file) ->
+            DriveFiles.DriveFile(id, "$id.kdbx", null, file.appProperties["keyweb"])
+        }
+
     override suspend fun readText(fileId: String): String {
         readCount += 1
         return files[fileId]?.content.orEmpty()

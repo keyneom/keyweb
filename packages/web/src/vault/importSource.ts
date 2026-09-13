@@ -43,8 +43,8 @@ export const PICKER_CONFIGURED = Boolean(API_KEY && PROJECT_NUMBER && CLIENT_ID)
 export type ImportSource = {
   fileId: string;
   name: string;
-  /** Epoch millis of the last successful import, for ordering the list. */
-  lastImportedAt: number | null;
+  /** When Drive last saw the file change, so the newest is offered first. */
+  modifiedAt: number | null;
 };
 
 export class PickerUnavailable extends Error {
@@ -80,7 +80,7 @@ export async function pickDriveFiles(): Promise<ImportSource[]> {
   return picked.map((file: GoogleDrivePickedFile) => ({
     fileId: file.fileId,
     name: file.name ?? "KeePass file",
-    lastImportedAt: null,
+    modifiedAt: null,
   }));
 }
 
@@ -110,66 +110,47 @@ export async function readDriveFile(fileId: string): Promise<ArrayBuffer> {
 }
 
 /**
- * Files handed over previously, so re-importing is one tap.
+ * The files this Google account has handed over.
  *
- * Kept in this browser rather than in the vault. A Drive file id is not secret,
- * but the list of files someone imports is mildly revealing and it is not worth
- * syncing something that would also have to be merged. The consequence — a
- * second device has to pick again — is stated in the UI rather than discovered.
+ * Not a list Keyweb keeps — a question asked of Drive. Under `drive.file`,
+ * `files.list` returns exactly the files the app created or was granted, so the
+ * grant *is* the shared state. Nothing has to be synced, merged, or re-picked:
+ * a file handed over in a browser shows up on the phone, because the grant is
+ * scoped to the Cloud project and the Google account rather than to a device.
+ *
+ * Keyweb's own vault file and folder carry an `appProperties` marker and are
+ * filtered out here, so its backup never appears as something to import.
  */
-const SOURCES_KEY = "keyweb:import-sources";
+export async function listImportableFiles(): Promise<ImportSource[]> {
+  if (!PICKER_CONFIGURED) throw new PickerUnavailable();
+  const authorization = await authorize();
 
-export function readSources(): ImportSource[] {
-  try {
-    const stored = localStorage.getItem(SOURCES_KEY);
-    const parsed = stored ? (JSON.parse(stored) as ImportSource[]) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+  const params = new URLSearchParams({
+    spaces: "drive",
+    corpora: "user",
+    q: "trashed = false",
+    fields: "files(id,name,modifiedTime,appProperties)",
+    pageSize: "200",
+    supportsAllDrives: "true",
+    includeItemsFromAllDrives: "true",
+  });
+  const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { Authorization: `Bearer ${authorization.accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Google Drive couldn't list your files (${response.status}).`);
   }
-}
 
-export function rememberSources(sources: ImportSource[]): void {
-  try {
-    localStorage.setItem(SOURCES_KEY, JSON.stringify(sources));
-  } catch {
-    // Private browsing or full storage. The import still works; only the
-    // shortcut for next time is lost.
-  }
-}
-
-/** Merge newly picked files in, keeping any import history already recorded. */
-export function mergeSources(
-  existing: ImportSource[],
-  picked: ImportSource[],
-): ImportSource[] {
-  const byId = new Map(existing.map((source) => [source.fileId, source]));
-  for (const source of picked) {
-    const previous = byId.get(source.fileId);
-    byId.set(source.fileId, {
-      ...source,
-      lastImportedAt: previous?.lastImportedAt ?? null,
-    });
-  }
-  return [...byId.values()].sort(
-    (a, b) => (b.lastImportedAt ?? 0) - (a.lastImportedAt ?? 0),
-  );
-}
-
-export function markImported(
-  sources: ImportSource[],
-  fileId: string,
-  now = Date.now(),
-): ImportSource[] {
-  return sources
-    .map((source) =>
-      source.fileId === fileId ? { ...source, lastImportedAt: now } : source,
-    )
-    .sort((a, b) => (b.lastImportedAt ?? 0) - (a.lastImportedAt ?? 0));
-}
-
-export function forgetSource(sources: ImportSource[], fileId: string): ImportSource[] {
-  // Only Keyweb's shortcut is dropped. The file stays in Drive, and the Drive
-  // grant stays too -- revoking that is Google's screen, not ours to fake.
-  return sources.filter((source) => source.fileId !== fileId);
+  const body = (await response.json()) as {
+    files?: { id: string; name?: string; modifiedTime?: string; appProperties?: Record<string, string> }[];
+  };
+  return (body.files ?? [])
+    .filter((file) => !file.appProperties?.["keyweb"])
+    .filter((file) => (file.name ?? "").toLowerCase().endsWith(".kdbx"))
+    .map((file) => ({
+      fileId: file.id,
+      name: file.name ?? "KeePass file",
+      modifiedAt: file.modifiedTime ? Date.parse(file.modifiedTime) : null,
+    }))
+    .sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
 }

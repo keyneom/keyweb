@@ -562,6 +562,7 @@ fun SettingsScreen(
     onDarkMode: (Boolean?) -> Unit,
     onBack: () -> Unit,
     onBackup: () -> Unit,
+    onImport: () -> Unit,
 ) {
     val statusColors = LocalKeywebStatus.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -586,6 +587,16 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Backup and recovery", onBackup)
+
+            Spacer(Modifier.height(24.dp))
+            Text("Coming from another password app", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Bring in a KeePass or KeeWeb file, keeping your folders and tags.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Import from KeePass or KeeWeb", onImport)
 
             Spacer(Modifier.height(24.dp))
             Text("Text size", style = MaterialTheme.typography.labelLarge)

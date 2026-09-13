@@ -59,8 +59,36 @@ class DriveClient(private val token: suspend () -> String) : DriveFiles {
         return match?.jsonObject?.get("id")?.jsonPrimitive?.content
     }
 
+    override suspend fun listFiles(): List<DriveFiles.DriveFile> {
+        val query = buildString {
+            append(FILES)
+            append("?spaces=drive&corpora=user&pageSize=200")
+            append("&supportsAllDrives=true&includeItemsFromAllDrives=true")
+            append("&fields=").append(encode("files(id,name,modifiedTime,appProperties)"))
+            append("&q=").append(encode("trashed = false"))
+        }
+        val body = json.parseToJsonElement(get(query)).jsonObject
+        return (body["files"]?.jsonArray ?: emptyList()).mapNotNull { element ->
+            val file = element.jsonObject
+            val id = file["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            DriveFiles.DriveFile(
+                fileId = id,
+                name = file["name"]?.jsonPrimitive?.content.orEmpty(),
+                modifiedAtMs = file["modifiedTime"]?.jsonPrimitive?.content?.let {
+                    runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
+                },
+                keywebMarker = file["appProperties"]?.jsonObject
+                    ?.get("keyweb")?.jsonPrimitive?.content,
+            )
+        }
+    }
+
     override suspend fun readText(fileId: String): String =
         get("$FILES/${encode(fileId)}?alt=media&supportsAllDrives=true")
+
+    /** The raw bytes of a file, for anything that is not text -- a .kdbx. */
+    suspend fun readBytes(fileId: String): ByteArray =
+        sendBytes("$FILES/${encode(fileId)}?alt=media&supportsAllDrives=true")
 
     /**
      * The version token, taken from Drive **v2**.
@@ -138,6 +166,33 @@ class DriveClient(private val token: suspend () -> String) : DriveFiles {
             ?: throw DriveException("Google Drive did not return a file id.")
 
     private suspend fun get(url: String): String = send(url, "GET", null, null)
+
+    /**
+     * A GET that keeps the bytes.
+     *
+     * A .kdbx is not text, and decoding it as UTF-8 to turn it back into bytes
+     * would mangle every byte outside ASCII -- which is most of an encrypted
+     * file.
+     */
+    private suspend fun sendBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
+        val accessToken = token()
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer $accessToken")
+            connectTimeout = 30_000
+            readTimeout = 60_000
+        }
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val detail = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw DriveException(explain(status, detail), status)
+            }
+            connection.inputStream.use { it.readBytes() }
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     private suspend fun send(
         url: String,

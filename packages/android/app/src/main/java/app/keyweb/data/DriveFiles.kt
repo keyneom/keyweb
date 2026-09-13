@@ -13,6 +13,16 @@ interface DriveFiles {
     /** The id of the file carrying these markers, or null if there is none. */
     suspend fun findFile(appProperties: Map<String, String>): String?
 
+    /**
+     * Every file this account has handed over.
+     *
+     * Under `drive.file` the answer is exactly the files the app created or was
+     * granted through the Picker — so this is the same question the web app
+     * asks, with the same answer, and neither platform has to keep or sync a
+     * list of its own.
+     */
+    suspend fun listFiles(): List<DriveFile>
+
     suspend fun readText(fileId: String): String
 
     /** The version token both platforms agree on. */
@@ -31,4 +41,12 @@ interface DriveFiles {
 
     /** `headRevisionId` when Drive supplies one; the etag is the fallback. */
     data class WriteHead(val etag: String, val headRevisionId: String?)
+
+    data class DriveFile(
+        val fileId: String,
+        val name: String,
+        val modifiedAtMs: Long?,
+        /** Keyweb's own files carry a marker, so its backup is never offered. */
+        val keywebMarker: String?,
+    )
 }

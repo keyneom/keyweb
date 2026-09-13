@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.fragment.app.FragmentActivity
 import app.keyweb.data.DriveClient
 import app.keyweb.data.DriveVaultRemote
+import app.keyweb.data.DriveFiles
 import app.keyweb.data.GoogleAuthorizer
 import app.keyweb.data.RoomVaultStorage
 import app.keyweb.data.SwitchableRemote
@@ -27,14 +28,21 @@ import app.keyweb.vault.SavedRules
 import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultEnvelopeCipher
 import app.keyweb.vault.VaultState
+import app.keyweb.vault.VaultOp
 import app.keyweb.vault.VaultSync
+import app.keyweb.vault.kdbx.KdbxEntry
+import app.keyweb.vault.kdbx.KdbxFile
+import app.keyweb.vault.kdbx.KdbxReader
+import app.keyweb.vault.kdbx.WrongMasterPassword
 import app.keyweb.vault.emptyVault
 import app.keyweb.vault.visibleItems
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Where the backup setup flow has got to.
@@ -70,6 +78,21 @@ data class BackupUiState(
     val busy: Boolean = false,
 )
 
+enum class ImportStage { CHOOSING, PASSWORD, PREVIEW, DONE }
+
+data class ImportUiState(
+    val stage: ImportStage = ImportStage.CHOOSING,
+    /** What Drive says this account has handed over. Never a local list. */
+    val files: List<DriveFiles.DriveFile> = emptyList(),
+    val openingName: String = "",
+    val entryCount: Int = 0,
+    val keyringNames: List<String> = emptyList(),
+    val skipped: Int = 0,
+    val importedCount: Int = 0,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
+
 enum class VaultPhase {
     /** Working out whether a vault already exists on this device. */
     CHECKING,
@@ -95,6 +118,7 @@ data class VaultUiState(
     val backup: BackupUiState = BackupUiState(),
     /** Rule sets someone named and kept, alongside the built-in presets. */
     val savedRules: List<SavedRules> = emptyList(),
+    val import: ImportUiState = ImportUiState(),
     /** What the generator opens with: whatever was used last. */
     val lastRules: PasswordRules = PasswordRules(),
     val toast: String? = null,
@@ -486,6 +510,162 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+
+    // ---- Importing from KeePass ------------------------------------------
+
+    /** Bytes of the file being opened, held only until the password arrives. */
+    private var pendingBytes: ByteArray? = null
+    private var pendingFile: KdbxFile? = null
+
+    private fun setImport(update: (ImportUiState) -> ImportUiState) {
+        _state.value = _state.value.copy(import = update(_state.value.import))
+    }
+
+    /**
+     * Ask Drive which files this account has handed over.
+     *
+     * Under `drive.file` the answer is exactly the granted files, so this is
+     * the same question the web app asks and gives the same answer. Nothing is
+     * kept on the device and nothing needs syncing: a file picked in a browser
+     * simply appears here.
+     */
+    fun refreshImportFiles() {
+        setImport { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val files = driveClient().listFiles()
+                    // Keyweb's own backup carries a marker and is not something
+                    // anyone wants to import into itself.
+                    .filter { it.keywebMarker == null }
+                    .filter { it.name.endsWith(".kdbx", ignoreCase = true) }
+                    .sortedByDescending { it.modifiedAtMs ?: 0L }
+                setImport { it.copy(files = files, busy = false) }
+            } catch (cause: GoogleAuthorizer.ConsentRequired) {
+                _consent.value = cause.intentSender
+                setImport { it.copy(busy = false) }
+            } catch (cause: Exception) {
+                setImport { it.copy(busy = false, error = describeBackup(cause)) }
+            }
+        }
+    }
+
+    /** Open the file, holding its bytes until a password is supplied. */
+    fun openImportFile(fileId: String) {
+        val name = _state.value.import.files.firstOrNull { it.fileId == fileId }?.name.orEmpty()
+        setImport { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                pendingBytes = driveClient().readBytes(fileId)
+                setImport {
+                    it.copy(stage = ImportStage.PASSWORD, openingName = name, busy = false)
+                }
+            } catch (cause: Exception) {
+                setImport { it.copy(busy = false, error = describeBackup(cause)) }
+            }
+        }
+    }
+
+    /**
+     * Read the file with the master password.
+     *
+     * The password is used once and dropped. The parse happens off the main
+     * thread because Argon2 is deliberately slow — that is the entire point of
+     * it — and a KeePass file with strong settings can take seconds.
+     */
+    fun unlockImportFile(password: String) {
+        val bytes = pendingBytes ?: return
+        setImport { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val file = withContext(Dispatchers.Default) { KdbxReader.read(bytes, password) }
+                if (file.entries.isEmpty()) {
+                    setImport {
+                        it.copy(busy = false, error = "That file opened, but there were no passwords in it.")
+                    }
+                    return@launch
+                }
+                pendingFile = file
+                setImport {
+                    it.copy(
+                        stage = ImportStage.PREVIEW,
+                        entryCount = file.entries.size,
+                        keyringNames = file.keyringNames,
+                        skipped = file.skipped,
+                        busy = false,
+                    )
+                }
+            } catch (cause: WrongMasterPassword) {
+                setImport { it.copy(busy = false, error = cause.message) }
+            } catch (cause: Exception) {
+                setImport {
+                    it.copy(busy = false, error = cause.message ?: "Keyweb couldn't read that file.")
+                }
+            }
+        }
+    }
+
+    /**
+     * Copy the entries in.
+     *
+     * Item ids are derived from the KeePass UUID, so importing the same file
+     * again updates what changed rather than making a second copy of
+     * everything. That is what makes re-importing safe to do repeatedly.
+     */
+    fun confirmImport() {
+        val engine = sync ?: return
+        val file = pendingFile ?: return
+        setImport { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                val rings = HashMap<String, String>()
+                var current = engine.state()
+                for (name in file.keyringNames) {
+                    val existing = current.keyrings.values
+                        .firstOrNull { !it.deleted.value && it.name.value == name }
+                    rings[name] = existing?.id ?: UUID.randomUUID().toString().also { id ->
+                        current = engine.putKeyring(keyringId = id, name = name)
+                    }
+                }
+                val fallback = rings.values.firstOrNull()
+                    ?: current.keyrings.keys.firstOrNull()
+                    ?: "personal"
+
+                for (entry in file.entries) {
+                    current = engine.putItem(
+                        itemId = "kdbx:${entry.uuid}",
+                        keyringId = rings[entry.keyringName] ?: fallback,
+                        fields = entry.toFields(),
+                    )
+                }
+                pendingBytes = null
+                pendingFile = null
+                publish(current)
+                setImport {
+                    it.copy(
+                        stage = ImportStage.DONE,
+                        importedCount = file.entries.size,
+                        busy = false,
+                    )
+                }
+            } catch (cause: Exception) {
+                setImport {
+                    it.copy(busy = false, error = cause.message ?: "Keyweb couldn't finish the import.")
+                }
+            }
+        }
+    }
+
+    fun reportImportProblem(message: String) {
+        setImport { it.copy(error = message, busy = false) }
+    }
+
+    /** Leaving the screen drops the file and the parsed contents from memory. */
+    fun closeImport() {
+        pendingBytes = null
+        pendingFile = null
+        _state.value = _state.value.copy(import = ImportUiState())
+    }
+
     private fun describeBackup(cause: Exception): String = when (cause) {
         is InvalidRecoveryCode -> cause.message ?: "That code isn't right."
         is GoogleAuthorizer.NotSignedIn ->
@@ -497,5 +677,30 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val RECOVERY_SECRET_KEY = "recovery-secret"
+    }
+}
+
+/**
+ * A KeePass entry, as Keyweb's fields.
+ *
+ * Custom fields the database carried are kept rather than dropped: a field
+ * Keyweb has no name for is still somebody's account number. Anything
+ * sensitive-sounding gets the `secret:` prefix so it stays masked.
+ */
+private fun KdbxEntry.toFields(): Map<ItemField, String> = buildMap {
+    if (title.isNotEmpty()) put(Fields.TITLE, title)
+    if (username.isNotEmpty()) put(Fields.USERNAME, username)
+    if (password.isNotEmpty()) put(Fields.PASSWORD, password)
+    if (url.isNotEmpty()) put(Fields.URL, url)
+    if (note.isNotEmpty()) put(Fields.NOTE, note)
+    if (folder.isNotEmpty()) put(Fields.FOLDER, folder)
+    if (tags.isNotEmpty()) put(Fields.TAGS, tags)
+    for ((key, value) in extra) {
+        if (value.isEmpty()) continue
+        // KeePass stores a TOTP key under one of these names; recognising it
+        // means the code shows up rather than sitting there as opaque text.
+        val looksLikeOtp = key.equals("otp", true) || key.equals("TOTP Seed", true) ||
+            key.startsWith("TOTP", true)
+        put(if (looksLikeOtp) Fields.OTP else "secret:$key", value)
     }
 }
