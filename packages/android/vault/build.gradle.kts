@@ -14,6 +14,11 @@ kotlin { jvmToolchain(17) }
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Argon2, ChaCha20 and Salsa20, for reading KeePass files. The JDK ships
+    // none of them, and hand-rolling a password-hashing function inside a
+    // password manager is not a risk worth taking. `api` so :app links it too.
+    api("org.bouncycastle:bcprov-jdk18on:1.79")
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

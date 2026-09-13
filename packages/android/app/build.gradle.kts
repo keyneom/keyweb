@@ -104,6 +104,7 @@ dependencies {
     // Drive authorization. AuthorizationClient asks Google for an access token
     // scoped to the two Drive scopes; the app never sees a client secret.
     implementation("com.google.android.gms:play-services-auth:21.3.0")
+
     implementation("androidx.activity:activity-ktx:1.9.3")
 
     testImplementation(kotlin("test"))
