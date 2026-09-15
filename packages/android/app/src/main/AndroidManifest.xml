@@ -6,6 +6,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Package visibility (Android 11+). Without this the platform hides every
+         other app from us, and `resolveActivity` for an https VIEW intent comes
+         back null however many browsers are installed — which reads as "no
+         browser found" and dead-ends the Drive grant. Declaring the intent we
+         actually dispatch is what makes browsers visible to resolve against. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

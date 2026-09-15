@@ -265,11 +265,15 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         },
                         onRefresh = viewModel::refreshImportFiles,
                         onGrantAccess = {
+                            // Copied first, so the recovery is already in hand
+                            // if opening a browser turns out to be impossible.
+                            GrantBrowser.copyLink(activity)
                             if (!GrantBrowser.open(activity)) {
                                 viewModel.reportImportProblem(
-                                    "Keyweb couldn't find a browser to open. " +
-                                        "Open ${GrantBrowser.GRANT_URL} yourself and pick the " +
-                                        "file there.",
+                                    "Keyweb couldn't open a browser on this phone. The link " +
+                                        "has been copied for you — paste it into any browser, " +
+                                        "sign in with this same Google account, pick your file, " +
+                                        "then come back and tap \"I've picked it\".",
                                 )
                             }
                         },
