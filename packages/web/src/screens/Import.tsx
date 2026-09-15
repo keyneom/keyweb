@@ -6,6 +6,7 @@ import {
   type ImportPreview,
 } from "../vault/keepass";
 import {
+  hasDriveAccess,
   listImportableFiles,
   pickDriveFiles,
   PICKER_CONFIGURED,
@@ -55,10 +56,10 @@ export function Import({
    * an error worth shouting about -- being signed out simply means there is
    * nothing to offer yet, and the picker below still works.
    */
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ interactive = true } = {}) => {
     if (!PICKER_CONFIGURED) return;
     try {
-      setSources(await listImportableFiles());
+      setSources(await listImportableFiles({ interactive }));
     } catch {
       setSources([]);
     } finally {
@@ -66,27 +67,11 @@ export function Import({
     }
   }, []);
 
+  // Non-interactive on mount. Opening this screen is not consent to a Google
+  // sign-in popup, and a popup not tied to a tap is blocked regardless.
   useEffect(() => {
-    void refresh();
+    void refresh({ interactive: false });
   }, [refresh]);
-
-  /**
-   * Arriving from the phone.
-   *
-   * Android has no native UI for `drive.file`, so it sends people here with
-   * `?grant=import` and the Picker opens straight away. Landing on a screen and
-   * having to find the right button would make the handoff feel like a
-   * detour that went wrong.
-   */
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("grant") !== "import") return;
-    // Consumed so a refresh does not reopen the picker unbidden.
-    window.history.replaceState({}, "", window.location.pathname);
-    void pick();
-    // Deliberately once, on arrival.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function choose(file: File | undefined) {
     if (!file) return;
@@ -233,10 +218,15 @@ export function Import({
             </>
           )}
 
+          {/* Only claim the list is empty once Drive has actually been asked.
+              Before signing in, "you haven't shown Keyweb any files" is a
+              guess, and a discouraging one for someone who already picked a
+              file on their phone. */}
           {listed && sources.length === 0 && PICKER_CONFIGURED && (
             <p className="screen-sub">
-              You haven't shown Keyweb any KeePass files yet. Choose one below and it will stay
-              available here and on your phone.
+              {hasDriveAccess()
+                ? "You haven't shown Keyweb any KeePass files yet. Choose one below and it will stay available here and on your phone."
+                : "Keyweb will ask Google which files you've pointed it at. Choose one below to sign in and get started — anything you've already picked on your phone shows up here too."}
             </p>
           )}
 

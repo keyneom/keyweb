@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
+import { Grant } from "./screens/Grant";
 import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
@@ -31,23 +32,42 @@ export function App() {
    * Arriving from the phone to hand a Drive file over.
    *
    * Android has no native picker for `drive.file`, so it opens this page with
-   * `?grant=import`. The vault still has to be unlocked first, so the intent is
-   * remembered and acted on once it is — otherwise the parameter would be
-   * consumed by the unlock screen and the handoff would silently do nothing.
+   * `?grant=import`. This is deliberately checked *before* the vault, and read
+   * once into state rather than from the URL each render.
+   *
+   * Before the vault: the errand is to record a grant at Google against a Cloud
+   * project and an account, which no vault is involved in. Putting the unlock
+   * gate in front of it asked someone who has only ever used the phone to
+   * create a second, empty vault — and to write down a recovery phrase for it
+   * that looks exactly like the one that matters and protects nothing.
+   *
+   * Once into state: `dismiss` clears it so "use Keyweb in this browser" can
+   * fall through to the normal app, and so a reload cannot reopen the handoff.
    */
-  const wantsGrant =
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("grant") === "import";
+  const [granting, setGranting] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("grant") === "import",
+  );
 
+  // Consumed from the address bar so a refresh does not reopen the handoff.
   useEffect(() => {
-    if (wantsGrant && vault.phase === "ready") setRoute({ name: "import" });
-  }, [wantsGrant, vault.phase]);
+    if (granting) window.history.replaceState({}, "", window.location.pathname);
+  }, [granting]);
 
   useEffect(() => {
     if (toast === null) return;
     const timer = setTimeout(() => setToast(null), 5000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  if (granting) {
+    return (
+      <main className="app">
+        <Grant onContinue={() => setGranting(false)} />
+      </main>
+    );
+  }
 
   if (vault.phase === "checking") {
     return (
