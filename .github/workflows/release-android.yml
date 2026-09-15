@@ -43,6 +43,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check the Linux native bindings are pinned
+        run: node scripts/check-ci-bindings.mjs
+
       - name: Verify the vault core
         run: |
           npm ci

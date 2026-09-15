@@ -28,7 +28,8 @@ import android.net.Uri
  *     platform hides other apps from us, and every resolve below returns
  *     nothing at all unless we declare the https VIEW intent we dispatch. This
  *     is the failure that looks exactly like having no browser installed, on a
- *     phone with three of them.
+ *     phone with three of them, and it is why the manifest carries a `<queries>`
+ *     element that must not be removed.
  *  2. **A full browser tab, not a Custom Tab.** Google Identity Services runs
  *     its token flow in a popup, and inside a Custom Tab the popup replaces the
  *     page — the token never reaches the opener and the Picker never loads.
@@ -45,71 +46,90 @@ object GrantBrowser {
     const val GRANT_URL = "https://keyneom.github.io/keyweb/?grant=import"
 
     /**
-     * Returns false only when nothing on the device would take an https link.
-     * The caller has already been handed the URL on the clipboard by then, so
-     * the fallback is reading it out rather than a dead end.
+     * A neutral URL, used to find a browser.
+     *
+     * Deliberately not the grant URL: resolving that would return Keyweb if it
+     * ever owns the origin's App Link, which is the one answer that cannot
+     * work here.
      */
-    fun open(activity: Activity, url: String = GRANT_URL): Boolean {
-        val target = Uri.parse(url)
+    private const val PROBE_URL = "https://www.google.com"
 
-        // Preferred: name the browser explicitly, so the intent cannot be
-        // routed back into Keyweb by an App Link we may claim later.
-        resolveBrowser(activity)?.let { browser ->
-            if (start(activity, viewIntent(target).setPackage(browser))) return true
-        }
+    /**
+     * The slice of the platform this needs.
+     *
+     * Pulled out so the choosing can be tested on the JVM. The bug that made
+     * this necessary — no `<queries>`, so nothing resolves — is invisible in a
+     * build and only appears on a device, so the least this code can do is be
+     * provably correct about what it does when nothing resolves.
+     */
+    interface Environment {
+        /** This app, which must never be the target. */
+        val ownPackage: String
 
-        // The device answered no browser, or that browser refused to start.
-        // An unaddressed intent lets the system resolve or offer a chooser,
-        // which still reaches a browser on most phones.
-        return start(activity, viewIntent(target))
+        /** The default handler for [url], or null when the user has set none. */
+        fun defaultHandler(url: String): String?
+
+        /** Every package that can handle [url]. */
+        fun handlers(url: String): List<String>
+
+        /** Returns false when the launch failed. [target] null means unaddressed. */
+        fun launch(url: String, target: String?): Boolean
     }
 
     /**
-     * Puts the grant URL on the clipboard so it can be opened by hand.
-     *
-     * Called before the attempt rather than after it: if `startActivity` throws
-     * the user is already looking at a failure, and asking them to retype a
-     * URL from an error message is not a recovery worth offering.
+     * Returns false only when nothing on the device would take an https link.
+     * The caller has already put the URL on the clipboard by then, so the
+     * fallback is pasting it rather than a dead end.
      */
+    fun open(activity: Activity, url: String = GRANT_URL): Boolean =
+        choose(AndroidEnvironment(activity), url)
+
+    /** Puts the grant URL on the clipboard so it can be opened by hand. */
     fun copyLink(context: Context, url: String = GRANT_URL) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText("Keyweb grant link", url))
     }
 
-    private fun viewIntent(target: Uri): Intent =
-        Intent(Intent.ACTION_VIEW, target).addCategory(Intent.CATEGORY_BROWSABLE)
-
     /**
-     * The default browser's package, resolved with a **neutral** URL.
+     * Name a browser if one can be found, and otherwise let the system try.
      *
-     * Resolving the grant URL itself would return Keyweb if it ever owns that
-     * origin's App Link, which is the one answer that cannot work here.
+     * The unaddressed attempt is last rather than absent: a device that
+     * answers no browser to a query may still route a plain VIEW intent, and
+     * the alternative is telling someone to go and do it themselves.
      */
-    private fun resolveBrowser(activity: Activity): String? {
-        val probe = viewIntent(Uri.parse("https://www.google.com"))
-        val default = activity.packageManager
-            .resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
-            ?.activityInfo?.packageName
-            ?.takeIf { it.isUsableBrowser(activity) }
-        if (default != null) return default
+    internal fun choose(environment: Environment, url: String = GRANT_URL): Boolean {
+        val browser = environment.defaultHandler(PROBE_URL)?.takeIf { environment.usable(it) }
+            ?: environment.handlers(PROBE_URL).firstOrNull { environment.usable(it) }
 
-        // No default set — the resolver activity answers instead. Take any
-        // browser that can handle the probe.
-        return activity.packageManager
-            .queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
-            .asSequence()
-            .map { it.activityInfo.packageName }
-            .firstOrNull { it.isUsableBrowser(activity) }
+        if (browser != null && environment.launch(url, browser)) return true
+        return environment.launch(url, null)
     }
 
     /** Neither Keyweb itself nor the system's "which app?" resolver. */
-    private fun String.isUsableBrowser(activity: Activity): Boolean =
-        this != activity.packageName && this != "android"
+    private fun Environment.usable(candidate: String): Boolean =
+        candidate != ownPackage && candidate != "android"
 
-    private fun start(activity: Activity, intent: Intent): Boolean = try {
-        activity.startActivity(intent)
-        true
-    } catch (cause: Exception) {
-        false
+    private class AndroidEnvironment(private val activity: Activity) : Environment {
+        override val ownPackage: String get() = activity.packageName
+
+        override fun defaultHandler(url: String): String? =
+            activity.packageManager
+                .resolveActivity(viewIntent(url), PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName
+
+        override fun handlers(url: String): List<String> =
+            activity.packageManager
+                .queryIntentActivities(viewIntent(url), PackageManager.MATCH_DEFAULT_ONLY)
+                .map { it.activityInfo.packageName }
+
+        override fun launch(url: String, target: String?): Boolean = try {
+            activity.startActivity(viewIntent(url).apply { target?.let(::setPackage) })
+            true
+        } catch (cause: Exception) {
+            false
+        }
+
+        private fun viewIntent(url: String): Intent =
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
     }
 }

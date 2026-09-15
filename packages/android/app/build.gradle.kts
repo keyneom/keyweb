@@ -44,8 +44,8 @@ android {
         applicationId = "app.keyweb"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1-beta.1"
     }
 
     signingConfigs {
@@ -60,6 +60,24 @@ android {
     }
 
     buildTypes {
+        /*
+         * Debug installs alongside release rather than over it.
+         *
+         * They are signed with different keys, so installing a debug build on
+         * a phone that has the release one requires uninstalling first — and
+         * that takes the vault with it. Testing a change on a real device
+         * therefore meant destroying the data being protected, which is a poor
+         * trade and a good way to end up not testing. A separate application
+         * id removes the choice: both can be present, and the release vault is
+         * never touched.
+         *
+         * Nothing is lost by it. Drive access is granted to the release
+         * certificate, so a debug build could never reach Drive under the
+         * shared id either.
+         */
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
             isMinifyEnabled = false
             if (releaseSigningEnabled) {
