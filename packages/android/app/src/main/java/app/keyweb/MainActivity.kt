@@ -152,6 +152,12 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
                 if (ui.phase != VaultPhase.READY) {
+                    // Opening the app is the request; this saves asking twice.
+                    // Keyed on the flag, which the ViewModel clears as it acts,
+                    // so a recomposition cannot raise a second sheet.
+                    LaunchedEffect(ui.promptOnEntry) {
+                        if (ui.promptOnEntry) viewModel.unlock(activity)
+                    }
                     UnlockScreen(
                         phase = ui.phase,
                         firstRun = ui.firstRun,

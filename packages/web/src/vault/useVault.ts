@@ -60,7 +60,7 @@ export type VaultApi = {
   status: SyncStatus;
   backupConfigured: boolean;
   items: ItemRecord[];
-  unlock(): Promise<void>;
+  unlock(options?: { quiet?: boolean }): Promise<void>;
   /** Open a vault that already exists in Drive, onto a device that has none. */
   restore(): Promise<void>;
   /** Open a backup with the printed code, when the passkey is gone. */
@@ -292,18 +292,31 @@ export function useVault(): VaultApi {
     return cause instanceof Error ? cause.message : "Keyweb couldn't open your vault.";
   }, []);
 
-  const unlock = useCallback(async () => {
-    setPhase("unlocking");
-    setError(null);
-    try {
-      const sealed = await peekSealedState();
-      const { cipher, lock } = await unlockVault(sealed);
-      await start(cipher, lock, false);
-    } catch (cause) {
-      setError(describe(cause));
-      setPhase("locked");
-    }
-  }, [describe, start]);
+  /**
+   * `quiet` is for the attempt nobody asked for.
+   *
+   * A browser may refuse a passkey prompt that did not come from a tap —
+   * Safari requires one — and it refuses with the same `NotAllowedError` a
+   * person gets for dismissing the prompt themselves, so the two cannot be
+   * told apart. Reporting either would mean greeting Safari users with an
+   * error they did nothing to cause. The quiet attempt therefore fails into
+   * the ordinary locked screen, where the button says what to do next.
+   */
+  const unlock = useCallback(
+    async ({ quiet = false }: { quiet?: boolean } = {}) => {
+      setPhase("unlocking");
+      setError(null);
+      try {
+        const sealed = await peekSealedState();
+        const { cipher, lock } = await unlockVault(sealed);
+        await start(cipher, lock, false);
+      } catch (cause) {
+        if (!quiet) setError(describe(cause));
+        setPhase("locked");
+      }
+    },
+    [describe, start],
+  );
 
   /**
    * Restore onto a device that has no vault of its own.

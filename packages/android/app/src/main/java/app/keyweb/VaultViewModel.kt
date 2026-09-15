@@ -121,6 +121,14 @@ enum class VaultPhase {
 
 data class VaultUiState(
     val phase: VaultPhase = VaultPhase.CHECKING,
+    /**
+     * Raise the unlock prompt without being asked.
+     *
+     * One shot, cleared the moment it is acted on. If it survived a
+     * cancellation the sheet would reappear the instant it was dismissed, and
+     * the app could not be put down.
+     */
+    val promptOnEntry: Boolean = false,
     /** True when this device has no vault yet, so unlocking means setting up. */
     val firstRun: Boolean = false,
     val error: String? = null,
@@ -165,9 +173,18 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     init {
+        val firstRun = !VaultKeystore.exists()
         _state.value = _state.value.copy(
             phase = VaultPhase.LOCKED,
-            firstRun = !VaultKeystore.exists(),
+            firstRun = firstRun,
+            // A returning person opened the app to get at their passwords, and
+            // the only way through is this prompt — so raise it rather than
+            // making them ask for the thing they already asked for.
+            //
+            // Not on first run. There the prompt would be creating a key and
+            // choosing how the vault is protected, and the screen explaining
+            // that should be read before a system dialog covers it.
+            promptOnEntry = !firstRun,
             savedRules = readSavedRules(),
             lastRules = readLastRules(),
         )
@@ -224,13 +241,19 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Authenticate, then open the vault.
      *
-     * Deliberately driven by a button rather than fired on launch: a biometric
-     * sheet appearing before anyone asked for one reads as something going
-     * wrong.
+     * Raised on entry for a returning person, and by the button otherwise —
+     * after a cancellation, after a failure, and on first run. The button
+     * never goes away: it is the only way back once the sheet has been
+     * dismissed, and the prompt cannot be raised again automatically without
+     * making the app impossible to leave.
      */
     fun unlock(activity: FragmentActivity) {
         val firstRun = _state.value.firstRun
-        _state.value = _state.value.copy(phase = VaultPhase.UNLOCKING, error = null)
+        _state.value = _state.value.copy(
+            phase = VaultPhase.UNLOCKING,
+            error = null,
+            promptOnEntry = false,
+        )
         viewModelScope.launch {
             when (val result = VaultUnlock.prompt(activity, firstRun)) {
                 is UnlockResult.Cancelled ->

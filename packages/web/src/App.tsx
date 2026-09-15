@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
@@ -60,6 +60,27 @@ export function App() {
     const timer = setTimeout(() => setToast(null), 5000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  /**
+   * Ask for the passkey without being asked to ask.
+   *
+   * Opening Keyweb is already the request, and the only way past the lock
+   * screen is this prompt, so making someone press a button first is asking
+   * twice. Fired once, guarded by a ref rather than by the phase: the phase
+   * returns to "locked" after a dismissal, and keying on it would summon the
+   * prompt again the instant it was dismissed.
+   *
+   * Not on first run, where the prompt creates the key rather than checking
+   * one, and the screen explaining that should be read before a browser dialog
+   * covers it. Not on the grant handoff either — that path needs no vault.
+   */
+  const promptedOnEntry = useRef(false);
+  useEffect(() => {
+    if (granting || promptedOnEntry.current) return;
+    if (vault.phase !== "locked" || vault.firstRun) return;
+    promptedOnEntry.current = true;
+    void vault.unlock({ quiet: true });
+  }, [granting, vault]);
 
   if (granting) {
     return (

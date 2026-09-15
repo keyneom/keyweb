@@ -23,9 +23,16 @@ import app.keyweb.VaultPhase
 /**
  * The unlock gate.
  *
- * Deliberately does not raise the biometric sheet on launch. A system dialog
- * appearing before anyone has asked for one reads as something going wrong; the
- * button says what will happen, then it happens.
+ * For a returning person the biometric sheet is raised on entry: opening the
+ * app is already the request, and the only way past this screen is that sheet,
+ * so asking them to press a button first is asking twice.
+ *
+ * The button stays regardless, and is not decoration. Once the sheet has been
+ * dismissed it is the only way back — the prompt cannot simply be raised again,
+ * or cancelling it would summon it afresh and the app could not be put down.
+ * It is also what first run uses, where the prompt would be creating the key
+ * rather than checking one, and the text explaining that deserves to be read
+ * before a system dialog covers it.
  */
 @Composable
 fun UnlockScreen(
