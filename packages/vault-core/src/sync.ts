@@ -2,7 +2,7 @@ import type { Clock, Hlc } from "./hlc.js";
 import { HLC_ZERO } from "./hlc.js";
 import { mergeVaults } from "./merge.js";
 import type { ItemField, VaultState } from "./model.js";
-import { emptyVault, fingerprint } from "./model.js";
+import { emptyVault, fingerprint, visibleItems } from "./model.js";
 import type { VaultOp } from "./ops.js";
 import { applyOp, applyOps } from "./ops.js";
 import type { RemoteVaultStore, VaultStorage } from "./storage.js";
@@ -129,6 +129,84 @@ export class VaultSync {
     const pending = await this.#storage.pending();
     this.#pendingCount = pending.length;
     return next;
+  }
+
+  /**
+   * Save several edits as one durable write.
+   *
+   * Not a convenience wrapper around `commit`. Committing N edits separately
+   * costs N reads and N writes of the *whole* vault — and since each write
+   * re-encrypts everything and `pending()` re-reads the growing outbox, the
+   * cost of deleting a keyring grew with the square of its size. Deleting 200
+   * passwords meant 201 whole-vault encryptions and sixty thousand operation
+   * decryptions, which is why it appeared to hang.
+   *
+   * The ops are folded in memory and persisted once, in one transaction, so
+   * the vault is never left holding half a bulk change.
+   */
+  async commitAll(ops: readonly VaultOp[]): Promise<VaultState> {
+    if (ops.length === 0) return this.#storage.readState();
+    if (ops.length === 1) return this.commit(ops[0]!);
+
+    const current = await this.#storage.readState();
+    let next = current;
+    for (const op of ops) next = applyOp(next, op);
+    await this.#storage.commitAll(ops, next);
+    await this.#storage.writeClock(this.#clock.snapshot());
+    const pending = await this.#storage.pending();
+    this.#pendingCount = pending.length;
+    return next;
+  }
+
+  /** Stamp and delete several items in one write. */
+  deleteItems(itemIds: readonly string[]): Promise<VaultState> {
+    return this.commitAll(
+      itemIds.map((itemId) => ({
+        kind: "item.delete" as const,
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId,
+      })),
+    );
+  }
+
+  /** Stamp and move several items in one write. */
+  moveItems(itemIds: readonly string[], keyringId: string): Promise<VaultState> {
+    return this.commitAll(
+      itemIds.map((itemId) => ({
+        kind: "item.move" as const,
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId,
+        keyringId,
+      })),
+    );
+  }
+
+  /**
+   * Delete a keyring and the passwords in it, as one write.
+   *
+   * The items go first in the op order, so a reader replaying the outbox sees
+   * them deleted in their own right rather than merely orphaned by a keyring
+   * that vanished.
+   */
+  async deleteKeyringWithItems(keyringId: string): Promise<VaultState> {
+    const current = await this.#storage.readState();
+    const doomed = visibleItems(current).filter((item) => item.keyring.value === keyringId);
+    return this.commitAll([
+      ...doomed.map((item) => ({
+        kind: "item.delete" as const,
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId: item.id,
+      })),
+      {
+        kind: "keyring.delete" as const,
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+      },
+    ]);
   }
 
   // ---- Edit helpers: build a stamped operation and commit it. ----

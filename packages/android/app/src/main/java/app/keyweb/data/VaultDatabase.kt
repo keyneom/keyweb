@@ -81,6 +81,19 @@ abstract class VaultDao {
     }
 
     /**
+     * The same guarantee for a bulk change: one transaction, however many ops.
+     *
+     * A half-written bulk delete would leave the state saying the passwords
+     * are gone while the outbox has no record of it, so the next sync would
+     * quietly restore them from the remote.
+     */
+    @Transaction
+    open suspend fun commitAll(stateJson: String, rows: List<OutboxRow>) {
+        putState(VaultStateRow(json = stateJson))
+        for (row in rows) appendOutbox(row)
+    }
+
+    /**
      * Atomic read-join-write.
      *
      * Never a blind assignment: an edit committed while a sync was in flight
@@ -143,6 +156,22 @@ class RoomVaultStorage(
             stateJson = cipher.seal(json.encodeToString(VaultState.serializer(), nextState)),
             opId = op.opId,
             opJson = cipher.seal(json.encodeToString(VaultOp.serializer(), op)),
+        )
+    }
+
+    override suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState) {
+        if (ops.isEmpty()) return
+        // The state is sealed once here rather than once per op, which is the
+        // whole saving: it is the entire vault, and sealing it is the
+        // expensive part of a commit.
+        dao.commitAll(
+            stateJson = cipher.seal(json.encodeToString(VaultState.serializer(), nextState)),
+            rows = ops.map { op ->
+                OutboxRow(
+                    opId = op.opId,
+                    json = cipher.seal(json.encodeToString(VaultOp.serializer(), op)),
+                )
+            },
         )
     }
 

@@ -22,6 +22,15 @@ interface VaultStorage {
     /** Atomic: persist [nextState] and append [op] to the outbox together. */
     suspend fun commit(op: VaultOp, nextState: VaultState)
 
+    /**
+     * Atomic: persist [nextState] and append every op in [ops] together.
+     *
+     * The whole point is that it is one write. Committing a bulk change an op
+     * at a time re-encrypts the entire vault per op, which is what made
+     * deleting a keyring of 200 passwords take the better part of a minute.
+     */
+    suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState)
+
     /** Atomic: join [incoming] into the current state and return the result. */
     suspend fun applyRemote(incoming: VaultState): VaultState
 
@@ -104,6 +113,11 @@ class MemoryVaultStorage : VaultStorage {
     override suspend fun commit(op: VaultOp, nextState: VaultState) {
         state = nextState
         outbox += op
+    }
+
+    override suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState) {
+        state = nextState
+        outbox += ops
     }
 
     override suspend fun applyRemote(incoming: VaultState): VaultState {

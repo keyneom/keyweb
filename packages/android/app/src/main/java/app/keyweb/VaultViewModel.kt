@@ -371,17 +371,16 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Delete several passwords in one gesture.
      *
-     * One op each through the normal path, as the import does: each is stamped
-     * by the live clock and lands in the outbox like any other edit, so a bulk
-     * delete interrupted halfway is durable up to where it reached rather than
-     * lost. Only the final state is published, so the list redraws once.
+     * One write, not one per password. Each op is still stamped by the live
+     * clock and queued individually, so the outbox and the merge behave
+     * exactly as they always did — but the vault is read, re-encrypted and
+     * stored once.
      */
     fun deleteItems(itemIds: List<String>) {
         val engine = sync ?: return
         if (itemIds.isEmpty()) return
         viewModelScope.launch {
-            var next = engine.state()
-            for (itemId in itemIds) next = engine.deleteItem(itemId)
+            val next = engine.deleteItems(itemIds)
             publish(
                 next,
                 toast = "${itemIds.size} password${if (itemIds.size == 1) "" else "s"} deleted.",
@@ -394,8 +393,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         val engine = sync ?: return
         if (itemIds.isEmpty()) return
         viewModelScope.launch {
-            var next = engine.state()
-            for (itemId in itemIds) next = engine.moveItem(itemId, keyringId)
+            val next = engine.moveItems(itemIds, keyringId)
             val name = next.keyrings[keyringId]?.name?.value ?: "that keyring"
             publish(
                 next,
@@ -413,19 +411,15 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * password manager should not keep passwords a person believes they
      * deleted.
      *
-     * Items first: interrupted, that leaves a keyring holding fewer passwords,
-     * which is visible and recoverable. The other order leaves orphans nothing
-     * can reach.
+     * One atomic write, so the vault is never left holding half of it — which
+     * also removes the question of what an interrupted bulk delete leaves
+     * behind, since it can no longer be interrupted partway.
      */
     fun deleteKeyring(keyringId: String) {
         val engine = sync ?: return
         viewModelScope.launch {
-            var next = engine.state()
-            val name = next.keyrings[keyringId]?.name?.value ?: "That keyring"
-            val doomed = visibleItems(next).filter { it.keyring.value == keyringId }
-            for (item in doomed) next = engine.deleteItem(item.id)
-            next = engine.deleteKeyring(keyringId)
-            publish(next, toast = "$name was deleted.")
+            val name = engine.state().keyrings[keyringId]?.name?.value ?: "That keyring"
+            publish(engine.deleteKeyringWithItems(keyringId), toast = "$name was deleted.")
         }
     }
 

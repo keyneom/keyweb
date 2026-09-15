@@ -216,6 +216,7 @@ describe("crash safety", () => {
         }
         await storage.ack(ids);
       },
+      commitAll: (...args: Parameters<typeof storage.commitAll>) => storage.commitAll(...args),
       readClock: () => storage.readClock(),
       writeClock: (value: string) => storage.writeClock(value),
     };

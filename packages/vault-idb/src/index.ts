@@ -170,9 +170,9 @@ export class IndexedDbVaultStorage implements VaultStorage {
   async #casCommit(
     expectedRevision: number,
     statePayload: unknown,
-    outbox: OutboxRow | null,
+    outbox: readonly OutboxRow[],
   ): Promise<boolean> {
-    const stores = outbox ? [META, OUTBOX] : [META];
+    const stores = outbox.length > 0 ? [META, OUTBOX] : [META];
     const tx = this.#db.transaction(stores, "readwrite");
     const meta = tx.objectStore(META);
     const current = await request<StateRow | undefined>(meta.get(STATE_KEY));
@@ -181,32 +181,40 @@ export class IndexedDbVaultStorage implements VaultStorage {
       return false;
     }
     meta.put({ revision: expectedRevision + 1, payload: statePayload }, STATE_KEY);
-    if (outbox) tx.objectStore(OUTBOX).add(outbox);
+    // One transaction however many rows: a bulk change must not be able to
+    // land half-written, and paying the state re-encryption once is the whole
+    // reason the batch exists.
+    if (outbox.length > 0) {
+      const store = tx.objectStore(OUTBOX);
+      for (const row of outbox) store.add(row);
+    }
     await committed(tx);
     return true;
   }
 
-  async commit(op: VaultOp, nextState: VaultState): Promise<void> {
+  commit(op: VaultOp, nextState: VaultState): Promise<void> {
+    return this.commitAll([op], nextState);
+  }
+
+  async commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void> {
+    if (ops.length === 0) return;
     await this.#withLock(async () => {
       const row = await this.#readRow();
       const sealedState = await this.#cipher.sealState(nextState);
-      const sealedOp = await this.#cipher.sealOp(op);
-      const ok = await this.#casCommit(row.revision, sealedState, {
-        opId: op.opId,
-        payload: sealedOp,
-      });
+      const sealedOps = await Promise.all(
+        ops.map(async (op) => ({ opId: op.opId, payload: await this.#cipher.sealOp(op) })),
+      );
+      const ok = await this.#casCommit(row.revision, sealedState, sealedOps);
       if (!ok) {
-        // Another tab wrote between our read and our write. Re-derive the state
-        // by joining the operation onto whatever is there now, so neither
-        // side's work is lost, and try again.
+        // Another tab wrote between our read and our write. Re-derive the
+        // state by joining the operations onto whatever is there now, so
+        // neither side's work is lost, and try again.
         const current = await this.readState();
-        const rejoined = applyOp(current, op);
+        let rejoined = current;
+        for (const op of ops) rejoined = applyOp(rejoined, op);
         const row2 = await this.#readRow();
         const resealed = await this.#cipher.sealState(rejoined);
-        const retried = await this.#casCommit(row2.revision, resealed, {
-          opId: op.opId,
-          payload: sealedOp,
-        });
+        const retried = await this.#casCommit(row2.revision, resealed, sealedOps);
         if (!retried) throw new Error("The vault was being written by another tab. Try again.");
       }
     });
@@ -219,7 +227,7 @@ export class IndexedDbVaultStorage implements VaultStorage {
         const current = await this.#decode(row);
         const joined = mergeVaults(current, incoming);
         const sealed = await this.#cipher.sealState(joined);
-        if (await this.#casCommit(row.revision, sealed, null)) return joined;
+        if (await this.#casCommit(row.revision, sealed, [])) return joined;
       }
       throw new Error("The vault kept changing while we merged. Try again.");
     })) as VaultState;

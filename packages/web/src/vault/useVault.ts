@@ -436,19 +436,15 @@ export function useVault(): VaultApi {
   /**
    * Delete several passwords in one gesture.
    *
-   * One op each, committed through the normal path, for the same reason the
-   * import does it that way: each is stamped by the live clock and lands in
-   * the outbox like any other edit, so a bulk delete interrupted halfway is
-   * durable up to where it got rather than lost entirely. Only the last state
-   * is published to the UI, so the list does not redraw per password.
+   * One write, not one per password. Each op is still stamped by the live
+   * clock and queued individually, so the outbox and the merge behave exactly
+   * as they always did — but the vault is read, re-encrypted and stored once.
    */
   const deleteItems = useCallback(
     async (itemIds: string[]) => {
       const sync = syncRef.current;
       if (!sync || itemIds.length === 0) return;
-      let next = await sync.state();
-      for (const itemId of itemIds) next = await sync.deleteItem(itemId);
-      refresh(next);
+      refresh(await sync.deleteItems(itemIds));
       backgroundSync();
     },
     [refresh, backgroundSync],
@@ -459,9 +455,7 @@ export function useVault(): VaultApi {
     async (itemIds: string[], keyringId: string) => {
       const sync = syncRef.current;
       if (!sync || itemIds.length === 0) return;
-      let next = await sync.state();
-      for (const itemId of itemIds) next = await sync.moveItem(itemId, keyringId);
-      refresh(next);
+      refresh(await sync.moveItems(itemIds, keyringId));
       backgroundSync();
     },
     [refresh, backgroundSync],
@@ -475,19 +469,15 @@ export function useVault(): VaultApi {
    * `visibleItems` hides anything whose keyring is gone, but still there. A
    * password manager should not keep passwords a person believes they deleted.
    *
-   * The items are deleted first. If this is interrupted, what survives is a
-   * keyring holding fewer passwords, which is visible and recoverable; the
-   * other order leaves orphans nothing can reach.
+   * One atomic write, so the vault is never left holding half of it — which
+   * also removes the question of what an interrupted bulk delete leaves
+   * behind, since it can no longer be interrupted partway.
    */
   const deleteKeyring = useCallback(
     async (keyringId: string) => {
       const sync = syncRef.current;
       if (!sync) return;
-      let next = await sync.state();
-      const doomed = visibleItems(next).filter((item) => item.keyring.value === keyringId);
-      for (const item of doomed) next = await sync.deleteItem(item.id);
-      next = await sync.deleteKeyring(keyringId);
-      refresh(next);
+      refresh(await sync.deleteKeyringWithItems(keyringId));
       backgroundSync();
     },
     [refresh, backgroundSync],

@@ -81,6 +81,56 @@ class VaultSync(
         return next
     }
 
+    /**
+     * Save several edits as one durable write.
+     *
+     * Not a convenience wrapper around [commit]. Committing N edits separately
+     * costs N reads and N writes of the *whole* vault — and since each write
+     * re-encrypts everything and [VaultStorage.pending] re-reads the growing
+     * outbox, the cost of deleting a keyring grew with the square of its size.
+     * Deleting 200 passwords meant 201 whole-vault encryptions and sixty
+     * thousand operation decryptions, which is why it appeared to hang.
+     *
+     * The ops are folded in memory and persisted once, in one transaction, so
+     * the vault is never left holding half a bulk change.
+     */
+    suspend fun commitAll(ops: List<VaultOp>): VaultState {
+        if (ops.isEmpty()) return storage.readState()
+        if (ops.size == 1) return commit(ops.first())
+
+        val current = storage.readState()
+        var next = current
+        for (op in ops) next = applyOp(next, op)
+        storage.commitAll(ops, next)
+        storage.writeClock(clock.snapshot())
+        statusValue = statusValue.copy(pending = storage.pending().size)
+        return next
+    }
+
+    /** Stamp and delete several items in one write. */
+    suspend fun deleteItems(itemIds: List<String>): VaultState =
+        commitAll(itemIds.map { VaultOp.ItemDelete(newId(), clock.now(), it) })
+
+    /** Stamp and move several items in one write. */
+    suspend fun moveItems(itemIds: List<String>, keyringId: String): VaultState =
+        commitAll(itemIds.map { VaultOp.ItemMove(newId(), clock.now(), it, keyringId) })
+
+    /**
+     * Delete a keyring and the passwords in it, as one write.
+     *
+     * The items come first in the op order, so a reader replaying the outbox
+     * sees them deleted in their own right rather than merely orphaned by a
+     * keyring that vanished.
+     */
+    suspend fun deleteKeyringWithItems(keyringId: String): VaultState {
+        val current = storage.readState()
+        val doomed = visibleItems(current).filter { it.keyring.value == keyringId }
+        return commitAll(
+            doomed.map { VaultOp.ItemDelete(newId(), clock.now(), it.id) } +
+                VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
+        )
+    }
+
     // ---- Edit helpers: build a stamped operation and commit it. ----
 
     suspend fun putItem(

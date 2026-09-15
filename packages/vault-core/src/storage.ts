@@ -27,6 +27,14 @@ export interface VaultStorage {
   /** Atomic: persist `nextState` and append `op` to the outbox together. */
   commit(op: VaultOp, nextState: VaultState): Promise<void>;
   /** Atomic: join `incoming` into the current state and return the result. */
+  /**
+   * Atomic: persist [nextState] and append every op in [ops] together.
+   *
+   * The whole point is that it is one write. Committing a bulk change one op
+   * at a time re-encrypts the entire vault per op, which is what made deleting
+   * a keyring of 200 passwords take the better part of a minute.
+   */
+  commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void>;
   applyRemote(incoming: VaultState): Promise<VaultState>;
   /** Operations not yet proven present in a published revision, oldest first. */
   pending(): Promise<VaultOp[]>;
@@ -79,6 +87,11 @@ export class MemoryVaultStorage implements VaultStorage {
   async commit(op: VaultOp, nextState: VaultState): Promise<void> {
     this.#state = nextState;
     this.#outbox.push({ op, seq: this.#seq++ });
+  }
+
+  async commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void> {
+    this.#state = nextState;
+    for (const op of ops) this.#outbox.push({ op, seq: this.#seq++ });
   }
 
   async applyRemote(incoming: VaultState): Promise<VaultState> {
