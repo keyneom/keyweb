@@ -90,6 +90,10 @@ export type VaultApi = {
   }): Promise<void>;
   deleteItem(itemId: string): Promise<void>;
   moveItem(itemId: string, keyringId: string): Promise<void>;
+  deleteItems(itemIds: string[]): Promise<void>;
+  moveItems(itemIds: string[], keyringId: string): Promise<void>;
+  /** Deletes the keyring *and* the passwords in it. */
+  deleteKeyring(keyringId: string): Promise<void>;
   addKeyring(name: string): Promise<string>;
   /** Copy a parsed KeePass file in. Returns how many entries landed. */
   importKeePass(preview: ImportPreview, ungrouped: UngroupedDestination): Promise<number>;
@@ -429,6 +433,66 @@ export function useVault(): VaultApi {
     [refresh, backgroundSync],
   );
 
+  /**
+   * Delete several passwords in one gesture.
+   *
+   * One op each, committed through the normal path, for the same reason the
+   * import does it that way: each is stamped by the live clock and lands in
+   * the outbox like any other edit, so a bulk delete interrupted halfway is
+   * durable up to where it got rather than lost entirely. Only the last state
+   * is published to the UI, so the list does not redraw per password.
+   */
+  const deleteItems = useCallback(
+    async (itemIds: string[]) => {
+      const sync = syncRef.current;
+      if (!sync || itemIds.length === 0) return;
+      let next = await sync.state();
+      for (const itemId of itemIds) next = await sync.deleteItem(itemId);
+      refresh(next);
+      backgroundSync();
+    },
+    [refresh, backgroundSync],
+  );
+
+  /** Move several passwords to one keyring. */
+  const moveItems = useCallback(
+    async (itemIds: string[], keyringId: string) => {
+      const sync = syncRef.current;
+      if (!sync || itemIds.length === 0) return;
+      let next = await sync.state();
+      for (const itemId of itemIds) next = await sync.moveItem(itemId, keyringId);
+      refresh(next);
+      backgroundSync();
+    },
+    [refresh, backgroundSync],
+  );
+
+  /**
+   * Delete a keyring and the passwords in it.
+   *
+   * The passwords go too, deliberately. Deleting only the keyring leaves them
+   * in storage and in the Drive backup forever — invisible, because
+   * `visibleItems` hides anything whose keyring is gone, but still there. A
+   * password manager should not keep passwords a person believes they deleted.
+   *
+   * The items are deleted first. If this is interrupted, what survives is a
+   * keyring holding fewer passwords, which is visible and recoverable; the
+   * other order leaves orphans nothing can reach.
+   */
+  const deleteKeyring = useCallback(
+    async (keyringId: string) => {
+      const sync = syncRef.current;
+      if (!sync) return;
+      let next = await sync.state();
+      const doomed = visibleItems(next).filter((item) => item.keyring.value === keyringId);
+      for (const item of doomed) next = await sync.deleteItem(item.id);
+      next = await sync.deleteKeyring(keyringId);
+      refresh(next);
+      backgroundSync();
+    },
+    [refresh, backgroundSync],
+  );
+
   const addKeyring = useCallback(
     async (name: string) => {
       const sync = syncRef.current;
@@ -521,6 +585,9 @@ export function useVault(): VaultApi {
     saveItem,
     deleteItem,
     moveItem,
+    deleteItems,
+    moveItems,
+    deleteKeyring,
     addKeyring,
     importKeePass,
   };

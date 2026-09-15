@@ -1,5 +1,6 @@
 package app.keyweb.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +56,7 @@ import app.keyweb.vault.PasswordRules
 import app.keyweb.vault.SavedRules
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
+import app.keyweb.vault.KeyringRecord
 import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.field
@@ -99,6 +102,8 @@ fun VaultListScreen(
     onKeyrings: () -> Unit,
     onSettings: () -> Unit,
     onSetUpBackup: () -> Unit,
+    onDeleteMany: (List<String>) -> Unit,
+    onMoveMany: (List<String>, String) -> Unit,
     /** This build's version, so the update notice knows what to compare. */
     currentVersion: String,
     /** Opens a link in a browser. Routed through the caller, which has the Activity. */
@@ -107,6 +112,29 @@ fun VaultListScreen(
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
     val statusColors = LocalKeywebStatus.current
+
+    /**
+     * Selection mode.
+     *
+     * Entered by holding a row rather than by a switch in the corner, because
+     * the thing being selected is what the finger is already on. Null means
+     * not selecting, which differs from selecting nothing: an empty selection
+     * keeps the bar, so clearing the last row does not throw you out mid-task.
+     */
+    var selected by remember { mutableStateOf<Set<String>?>(null) }
+    var confirming by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
+    val selecting = selected != null
+
+    fun exitSelection() {
+        selected = null
+        confirming = false
+        moving = false
+    }
+
+    // The system back gesture should leave selection before leaving the
+    // screen; escaping a mode is what a person means by "back" while in one.
+    BackHandler(enabled = selecting) { exitSelection() }
 
     val rings = state.keyrings.values.filter { !it.deleted.value }.sortedBy { it.name.value }
     val shown = items
@@ -127,15 +155,32 @@ fun VaultListScreen(
                 Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "Keyweb",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = statusColors.brass,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onKeyrings) { Text("Keyrings") }
-                TextButton(onClick = onSettings) { Text("Settings") }
+                val chosen = selected
+                if (chosen != null) {
+                    TextButton(onClick = { exitSelection() }) { Text("Done") }
+                    Spacer(Modifier.weight(1f))
+                    Text("${chosen.size} selected", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        selected = if (chosen.size == shown.size) {
+                            emptySet()
+                        } else {
+                            shown.map { it.id }.toSet()
+                        }
+                    }) {
+                        Text(if (chosen.size == shown.size) "Clear" else "Select all")
+                    }
+                } else {
+                    Text(
+                        "Keyweb",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = statusColors.brass,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onKeyrings) { Text("Keyrings") }
+                    TextButton(onClick = onSettings) { Text("Settings") }
+                }
             }
 
             OutlinedTextField(
@@ -216,6 +261,7 @@ fun VaultListScreen(
                                 val ringName = state.keyrings[item.keyring.value]?.name?.value
                                     ?: "No keyring"
                                 val user = item.field(Fields.USERNAME)
+                                val chosen = selected?.contains(item.id)
                                 VaultRow(
                                     initials = initials(title),
                                     title = title,
@@ -224,13 +270,51 @@ fun VaultListScreen(
                                     } else {
                                         "$ringName · $user"
                                     },
-                                    onClick = { onOpen(item.id) },
+                                    onClick = {
+                                        val current = selected
+                                        if (current == null) {
+                                            onOpen(item.id)
+                                        } else {
+                                            selected = if (item.id in current) {
+                                                current - item.id
+                                            } else {
+                                                current + item.id
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selected == null) selected = setOf(item.id)
+                                    },
+                                    selected = chosen,
                                 )
                                 HorizontalDivider(color = statusColors.line)
                             }
                         }
                     }
                 }
+            }
+
+            val chosen = selected
+            if (chosen != null) {
+                SelectionActions(
+                    count = chosen.size,
+                    keyrings = rings,
+                    confirming = confirming,
+                    moving = moving,
+                    onAskDelete = { confirming = true },
+                    onAskMove = { moving = true },
+                    onCancel = { confirming = false; moving = false },
+                    onDelete = {
+                        onDeleteMany(chosen.toList())
+                        exitSelection()
+                    },
+                    onMove = { keyringId ->
+                        onMoveMany(chosen.toList(), keyringId)
+                        exitSelection()
+                    },
+                )
+                Spacer(Modifier.height(12.dp))
+                return@Column
             }
 
             PrimaryButton(
@@ -509,8 +593,11 @@ fun KeyringsScreen(
     items: List<ItemRecord>,
     onBack: () -> Unit,
     onAdd: (String) -> Unit,
+    onDelete: (String) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    /** The keyring being deleted, held until the count has been acknowledged. */
+    var confirming by remember { mutableStateOf<String?>(null) }
     val statusColors = LocalKeywebStatus.current
     val rings = state.keyrings.values.filter { !it.deleted.value }
 
@@ -532,15 +619,73 @@ fun KeyringsScreen(
                 Column {
                     rings.forEach { r ->
                         val count = items.count { it.keyring.value == r.id }
-                        VaultRow(
-                            initials = "●",
-                            title = r.name.value,
-                            subtitle = "$count password${if (count == 1) "" else "s"} · only you",
-                            onClick = {},
-                            accent = ringColor(state, r.id),
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) {
+                                VaultRow(
+                                    initials = "●",
+                                    title = r.name.value,
+                                    subtitle = "$count password${if (count == 1) "" else "s"} · only you",
+                                    onClick = {},
+                                    accent = ringColor(state, r.id),
+                                )
+                            }
+                            // Never the last one: every password lives in a
+                            // keyring, so a vault with none has nowhere to put
+                            // the next one.
+                            if (rings.size > 1) {
+                                TextButton(onClick = { confirming = r.id }) {
+                                    Text("Delete", color = statusColors.risk)
+                                }
+                            }
+                        }
                         HorizontalDivider(color = statusColors.line)
                     }
+                }
+            }
+
+            confirming?.let { keyringId ->
+                val ring = rings.firstOrNull { it.id == keyringId }
+                val count = items.count { it.keyring.value == keyringId }
+                if (ring == null) {
+                    confirming = null
+                } else {
+                    AlertDialog(
+                        onDismissRequest = { confirming = null },
+                        title = {
+                            Text(
+                                if (count > 0) {
+                                    "Delete ${ring.name.value} and its $count " +
+                                        "password${if (count == 1) "" else "s"}?"
+                                } else {
+                                    "Delete ${ring.name.value}?"
+                                },
+                            )
+                        },
+                        text = {
+                            Text(
+                                if (count > 0) {
+                                    "The passwords in it are deleted too. This cannot be " +
+                                        "undone on this device."
+                                } else {
+                                    "This keyring is empty. This cannot be undone on this device."
+                                },
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                onDelete(keyringId)
+                                confirming = null
+                            }) {
+                                Text(
+                                    if (count > 0 && count != 1) "Yes, delete them" else "Yes, delete it",
+                                    color = statusColors.risk,
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirming = null }) { Text("Keep it") }
+                        },
+                    )
                 }
             }
 
@@ -648,5 +793,83 @@ internal fun ChoiceButton(text: String, selected: Boolean, onClick: () -> Unit) 
         PrimaryButton(text, onClick, Modifier.padding(bottom = 8.dp))
     } else {
         SecondaryButton(text, onClick, Modifier.padding(bottom = 8.dp))
+    }
+}
+
+/**
+ * What can be done to the selection.
+ *
+ * Delete asks first and says the number rather than "these": a count is the
+ * one fact that makes the size of the mistake visible before it is made.
+ */
+@Composable
+private fun SelectionActions(
+    count: Int,
+    keyrings: List<KeyringRecord>,
+    confirming: Boolean,
+    moving: Boolean,
+    onAskDelete: () -> Unit,
+    onAskMove: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: (String) -> Unit,
+) {
+    val status = LocalKeywebStatus.current
+    val plural = if (count == 1) "" else "s"
+
+    if (count == 0) {
+        Text(
+            "Choose some passwords, or hold another to select it.",
+            color = status.muted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(vertical = 12.dp),
+        )
+        return
+    }
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = onCancel,
+            title = { Text("Delete $count password$plural?") },
+            text = { Text("This cannot be undone on this device.") },
+            confirmButton = {
+                TextButton(onClick = onDelete) {
+                    Text("Yes, delete $count", color = status.risk)
+                }
+            },
+            dismissButton = { TextButton(onClick = onCancel) { Text("Keep them") } },
+        )
+    }
+
+    if (moving) {
+        AlertDialog(
+            onDismissRequest = onCancel,
+            title = { Text("Move $count password$plural to:") },
+            text = {
+                Column {
+                    for (ring in keyrings) {
+                        TextButton(
+                            onClick = { onMove(ring.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(ring.name.value, Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        )
+    }
+
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Delete is marked as destructive and Move is not, because one of them
+        // cannot be taken back. Two identical buttons side by side is how the
+        // wrong one gets pressed.
+        SecondaryButton("Move to…", onAskMove, Modifier.weight(1f))
+        SecondaryButton("Delete", onAskDelete, Modifier.weight(1f), danger = true)
     }
 }

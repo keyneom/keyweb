@@ -143,6 +143,19 @@ export function App() {
           onAdd={() => setRoute({ name: "edit", itemId: null })}
           onManageKeyrings={() => setRoute({ name: "keyrings" })}
           onSettings={() => setRoute({ name: "settings" })}
+          onDeleteMany={async (itemIds) => {
+            await vault.deleteItems(itemIds);
+            setToast(
+              `${itemIds.length} password${itemIds.length === 1 ? "" : "s"} deleted.`,
+            );
+          }}
+          onMoveMany={async (itemIds, keyringId) => {
+            await vault.moveItems(itemIds, keyringId);
+            const name = vault.state.keyrings[keyringId]?.name.value ?? "that keyring";
+            setToast(
+              `${itemIds.length} password${itemIds.length === 1 ? "" : "s"} moved to ${name}.`,
+            );
+          }}
         />
       )}
 
@@ -188,6 +201,11 @@ export function App() {
           onAdd={async (name) => {
             await vault.addKeyring(name);
             setToast(`The ${name} keyring is ready.`);
+          }}
+          onDelete={async (keyringId) => {
+            const name = vault.state.keyrings[keyringId]?.name.value ?? "That keyring";
+            await vault.deleteKeyring(keyringId);
+            setToast(`${name} was deleted.`);
           }}
         />
       )}

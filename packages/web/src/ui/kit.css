@@ -730,3 +730,35 @@
   padding-top: 1rem;
   border-top: 2px solid var(--line);
 }
+
+/* ---------- Selecting several passwords at once ---------- */
+
+/* The two bulk actions sit side by side; "Move to…" is the larger target
+   because it is the reversible one. */
+.bulk-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+.bulk-actions .btn {
+  flex: 1;
+}
+
+/* The avatar becomes the checkbox while selecting, so the row does not
+   reflow and shift the text sideways when the mode changes. */
+.row .avatar[data-selected] {
+  background: var(--accent);
+  color: var(--paper);
+}
+/* Unselected, it is an empty ring rather than a blank space, so it is clear
+   the slot is a control and not a missing icon. */
+.row[aria-pressed="false"] .avatar {
+  background: none;
+  border: 2px solid var(--line);
+}
+
+/* The keyring row's own delete, kept quiet: it is beside a name, not a
+   primary action, and should not compete with "Make this keyring". */
+.row > .iconbtn {
+  margin-left: auto;
+  flex: none;
+}

@@ -8,14 +8,18 @@ export function Keyrings({
   items,
   onBack,
   onAdd,
+  onDelete,
 }: {
   state: VaultState;
   items: ItemRecord[];
   onBack: () => void;
   onAdd: (name: string) => Promise<void>;
+  onDelete: (keyringId: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The keyring being deleted, held until the count has been acknowledged. */
+  const [confirming, setConfirming] = useState<string | null>(null);
   const rings = Object.values(state.keyrings).filter((r) => !r.deleted.value);
 
   async function add() {
@@ -48,6 +52,7 @@ export function Keyrings({
       <div className="list">
         {rings.map((r) => {
           const count = items.filter((item) => item.keyring.value === r.id).length;
+          const last = rings.length === 1;
           return (
             <div key={r.id} className="row" style={{ cursor: "default" }}>
               <span
@@ -63,10 +68,78 @@ export function Keyrings({
                   {count} password{count === 1 ? "" : "s"} · only you
                 </span>
               </span>
+              {/* Never the last one: every password lives in a keyring, so a
+                  vault with none has nowhere to put the next one. */}
+              {!last && (
+                <button
+                  type="button"
+                  className="iconbtn"
+                  disabled={busy}
+                  onClick={() => setConfirming(r.id)}
+                  aria-label={`Delete the ${r.name.value} keyring`}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           );
         })}
       </div>
+
+      {confirming !== null && (
+        <div className="confirm">
+          {(() => {
+            const ring = rings.find((r) => r.id === confirming);
+            const count = items.filter((item) => item.keyring.value === confirming).length;
+            if (!ring) return null;
+            return (
+              <>
+                <p className="status" data-tone="attn">
+                  <span>
+                    <b>
+                      Delete {ring.name.value}
+                      {count > 0 ? ` and its ${count} password${count === 1 ? "" : "s"}` : ""}?
+                    </b>
+                    <em>
+                      {count > 0
+                        ? "The passwords in it are deleted too. This cannot be undone on this device."
+                        : "This keyring is empty. This cannot be undone on this device."}
+                    </em>
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  className="btn danger big"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await onDelete(ring.id);
+                      setConfirming(null);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {busy
+                    ? "Deleting…"
+                    : count > 0
+                      ? `Yes, delete ${count === 1 ? "it" : "them"}`
+                      : "Yes, delete it"}
+                </button>
+                <button
+                  type="button"
+                  className="btn sec"
+                  disabled={busy}
+                  onClick={() => setConfirming(null)}
+                >
+                  Keep it
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       <label className="field" style={{ marginTop: "1.25rem" }}>
         <span>Make a new keyring</span>

@@ -368,6 +368,67 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { publish(engine.moveItem(itemId, keyringId)) }
     }
 
+    /**
+     * Delete several passwords in one gesture.
+     *
+     * One op each through the normal path, as the import does: each is stamped
+     * by the live clock and lands in the outbox like any other edit, so a bulk
+     * delete interrupted halfway is durable up to where it reached rather than
+     * lost. Only the final state is published, so the list redraws once.
+     */
+    fun deleteItems(itemIds: List<String>) {
+        val engine = sync ?: return
+        if (itemIds.isEmpty()) return
+        viewModelScope.launch {
+            var next = engine.state()
+            for (itemId in itemIds) next = engine.deleteItem(itemId)
+            publish(
+                next,
+                toast = "${itemIds.size} password${if (itemIds.size == 1) "" else "s"} deleted.",
+            )
+        }
+    }
+
+    /** Move several passwords to one keyring. */
+    fun moveItems(itemIds: List<String>, keyringId: String) {
+        val engine = sync ?: return
+        if (itemIds.isEmpty()) return
+        viewModelScope.launch {
+            var next = engine.state()
+            for (itemId in itemIds) next = engine.moveItem(itemId, keyringId)
+            val name = next.keyrings[keyringId]?.name?.value ?: "that keyring"
+            publish(
+                next,
+                toast = "${itemIds.size} password${if (itemIds.size == 1) "" else "s"} moved to $name.",
+            )
+        }
+    }
+
+    /**
+     * Delete a keyring and the passwords in it.
+     *
+     * The passwords go too, deliberately. Deleting only the keyring leaves
+     * them in storage and in the Drive backup forever — invisible, because
+     * the list hides anything whose keyring is gone, but still there. A
+     * password manager should not keep passwords a person believes they
+     * deleted.
+     *
+     * Items first: interrupted, that leaves a keyring holding fewer passwords,
+     * which is visible and recoverable. The other order leaves orphans nothing
+     * can reach.
+     */
+    fun deleteKeyring(keyringId: String) {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            var next = engine.state()
+            val name = next.keyrings[keyringId]?.name?.value ?: "That keyring"
+            val doomed = visibleItems(next).filter { it.keyring.value == keyringId }
+            for (item in doomed) next = engine.deleteItem(item.id)
+            next = engine.deleteKeyring(keyringId)
+            publish(next, toast = "$name was deleted.")
+        }
+    }
+
     fun addKeyring(name: String) {
         val engine = sync ?: return
         viewModelScope.launch {

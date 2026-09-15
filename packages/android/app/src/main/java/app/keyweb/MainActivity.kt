@@ -199,6 +199,8 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onKeyrings = { route = Route.Keyrings },
                         onSettings = { route = Route.Settings },
                         onSetUpBackup = { route = Route.Backup },
+                        onDeleteMany = viewModel::deleteItems,
+                        onMoveMany = viewModel::moveItems,
                         currentVersion = BuildConfig.VERSION_NAME,
                         // Through GrantBrowser, which knows the things that
                         // make an https intent fail silently on Android — the
@@ -256,6 +258,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         items = ui.items,
                         onBack = ::goBack,
                         onAdd = viewModel::addKeyring,
+                        onDelete = viewModel::deleteKeyring,
                     )
 
                     is Route.Settings -> SettingsScreen(

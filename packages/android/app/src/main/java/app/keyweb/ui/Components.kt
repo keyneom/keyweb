@@ -1,7 +1,9 @@
 package app.keyweb.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -209,6 +212,7 @@ fun SecondaryButton(
 }
 
 /** A tappable row. The whole row is the target, never just a chevron. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun VaultRow(
     initials: String,
@@ -216,6 +220,9 @@ fun VaultRow(
     subtitle: String,
     onClick: () -> Unit,
     accent: Color? = null,
+    onLongClick: (() -> Unit)? = null,
+    /** Null when not selecting at all, which differs from selected = false. */
+    selected: Boolean? = null,
 ) {
     val scale = LocalKeywebScale.current
     val status = LocalKeywebStatus.current
@@ -223,30 +230,45 @@ fun VaultRow(
         Modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = scale.row)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(
+                if (selected == true) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                } else {
+                    Color.Transparent
+                },
+            )
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .background(
-                    accent ?: MaterialTheme.colorScheme.primaryContainer,
-                    RoundedCornerShape(10.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                initials,
-                color = if (accent != null) {
-                    Color.White
-                } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                },
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.labelLarge,
-            )
+        if (selected != null) {
+            // In the avatar's place, so switching modes does not shift the
+            // text sideways under the reader's eye.
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                Checkbox(checked = selected, onCheckedChange = null)
+            }
+        } else {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .background(
+                        accent ?: MaterialTheme.colorScheme.primaryContainer,
+                        RoundedCornerShape(10.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    initials,
+                    color = if (accent != null) {
+                        Color.White
+                    } else {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    },
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(
