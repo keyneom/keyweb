@@ -115,7 +115,7 @@ describe("reading a KeePass or KeeWeb file", () => {
 describe("importing into the vault", () => {
   it("lands entries on the keyring matching their top-level group", async () => {
     const preview = await readKeePass(await database(), MASTER);
-    const ops = importOperations(preview, keyringIds(preview), stamper());
+    const ops = importOperations(preview, keyringIds(preview), "ring-ungrouped", stamper());
     const state = applyOps(emptyVault(), [
       {
         kind: "keyring.put",
@@ -146,13 +146,13 @@ describe("importing into the vault", () => {
   it("updates rather than duplicates when the same file is imported again", async () => {
     const first = await readKeePass(await database(), MASTER);
     const rings = keyringIds(first);
-    let state = applyOps(emptyVault(), importOperations(first, rings, stamper()));
+    let state = applyOps(emptyVault(), importOperations(first, rings, "ring-ungrouped", stamper()));
     const afterFirst = Object.keys(state.items).length;
 
     // The same file, imported a second time: KeePass UUIDs carry over as item
     // ids, so the CRDT merges field by field instead of creating twins.
     const second = await readKeePass(await database(), MASTER);
-    state = applyOps(state, importOperations(second, rings, stamper()));
+    state = applyOps(state, importOperations(second, rings, "ring-ungrouped", stamper()));
 
     expect(Object.keys(state.items)).toHaveLength(afterFirst);
   });
@@ -160,7 +160,7 @@ describe("importing into the vault", () => {
   it("lets a later edit in the source file win on re-import", async () => {
     const preview = await readKeePass(await database(), MASTER);
     const rings = keyringIds(preview);
-    let state = applyOps(emptyVault(), importOperations(preview, rings, stamper()));
+    let state = applyOps(emptyVault(), importOperations(preview, rings, "ring-ungrouped", stamper()));
 
     const changed: ImportPreview = {
       ...preview,
@@ -174,7 +174,7 @@ describe("importing into the vault", () => {
     let n = 100;
     state = applyOps(
       state,
-      importOperations(changed, rings, () => {
+      importOperations(changed, rings, "ring-ungrouped", () => {
         n += 1;
         return { opId: `re-${n}`, ts: `0017000000000${n}-00000-import` };
       }),

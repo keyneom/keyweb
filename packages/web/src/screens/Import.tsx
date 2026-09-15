@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertIcon, BackIcon, CheckIcon, ShieldIcon } from "../ui/icons";
 import {
   readKeePass,
+  suggestedKeyringName,
   WrongMasterPassword,
   type ImportPreview,
+  type UngroupedDestination,
 } from "../vault/keepass";
 import {
   hasDriveAccess,
@@ -23,7 +25,7 @@ type Stage =
       /** Set when the bytes came from Drive, so the source can be recorded. */
       fileId?: string;
     }
-  | { name: "preview"; preview: ImportPreview; fileId?: string }
+  | { name: "preview"; preview: ImportPreview; label: string; fileId?: string }
   | { name: "done"; count: number };
 
 /**
@@ -35,11 +37,13 @@ type Stage =
  * they haven't seen the shape of.
  */
 export function Import({
+  keyrings,
   onBack,
   onImport,
 }: {
+  keyrings: { id: string; name: string }[];
   onBack: () => void;
-  onImport: (preview: ImportPreview) => Promise<number>;
+  onImport: (preview: ImportPreview, ungrouped: UngroupedDestination) => Promise<number>;
 }) {
   const [stage, setStage] = useState<Stage>({ name: "choose" });
   const [password, setPassword] = useState("");
@@ -47,6 +51,14 @@ export function Import({
   const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [listed, setListed] = useState(false);
+  /**
+   * Where the entries that are in no group should go.
+   *
+   * Null until the preview names a suggestion, so the suggested keyring name
+   * can follow the file that was actually opened rather than being seeded from
+   * whatever was opened first.
+   */
+  const [ungrouped, setUngrouped] = useState<UngroupedDestination | null>(null);
 
   /**
    * Ask Drive what this account has handed over.
@@ -130,9 +142,13 @@ export function Import({
         setError("That file opened, but there were no passwords in it.");
         return;
       }
+      setUngrouped(
+        preview.ungrouped === 0 ? null : { kind: "new", name: suggestedKeyringName(stage.label) },
+      );
       setStage({
         name: "preview",
         preview,
+        label: stage.label,
         ...(stage.fileId ? { fileId: stage.fileId } : {}),
       });
     } catch (cause) {
@@ -148,9 +164,14 @@ export function Import({
 
   async function commit() {
     if (stage.name !== "preview") return;
+    const destination = ungrouped ?? { kind: "new" as const, name: suggestedKeyringName(stage.label) };
+    if (stage.preview.ungrouped > 0 && destination.kind === "new" && !destination.name.trim()) {
+      setError("Give the new keyring a name, or choose one you already have.");
+      return;
+    }
     setBusy(true);
     try {
-      const count = await onImport(stage.preview);
+      const count = await onImport(stage.preview, destination);
       setStage({ name: "done", count });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Keyweb couldn't finish the import.");
@@ -323,6 +344,56 @@ export function Import({
               );
             })}
           </div>
+          {stage.preview.ungrouped > 0 && ungrouped && (
+            <div className="ungrouped">
+              <h2 className="import-heading">
+                {stage.preview.ungrouped} password{stage.preview.ungrouped === 1 ? "" : "s"} aren't
+                in a folder
+              </h2>
+              <p className="hint" style={{ margin: "0 0 0.75rem" }}>
+                In your KeePass file these sit loose at the top rather than inside a folder. Keyweb
+                keeps every password in a keyring, so choose where these should go.
+              </p>
+
+              <label className="field">
+                <span>Put them in</span>
+                <div className="box">
+                  <select
+                    value={ungrouped.kind === "new" ? "__new__" : ungrouped.keyringId}
+                    onChange={(event) =>
+                      setUngrouped(
+                        event.target.value === "__new__"
+                          ? { kind: "new", name: suggestedKeyringName(stage.label) }
+                          : { kind: "existing", keyringId: event.target.value },
+                      )
+                    }
+                  >
+                    <option value="__new__">A new keyring</option>
+                    {keyrings.map((ring) => (
+                      <option key={ring.id} value={ring.id}>
+                        {ring.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </label>
+
+              {ungrouped.kind === "new" && (
+                <label className="field">
+                  <span>Name the new keyring</span>
+                  <div className="box">
+                    <input
+                      type="text"
+                      value={ungrouped.name}
+                      onChange={(event) => setUngrouped({ kind: "new", name: event.target.value })}
+                    />
+                  </div>
+                  <span className="hint">Named after your file to start with. Change it if you like.</span>
+                </label>
+              )}
+            </div>
+          )}
+
           {stage.preview.skipped > 0 && (
             <p className="screen-sub" style={{ marginTop: "0.9rem" }}>
               {stage.preview.skipped} empty {stage.preview.skipped === 1 ? "entry was" : "entries were"}{" "}

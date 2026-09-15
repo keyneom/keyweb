@@ -280,6 +280,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onOpen = viewModel::openImportFile,
                         onLocalFile = viewModel::openLocalFile,
                         onUnlock = viewModel::unlockImportFile,
+                        onUngroupedDestination = viewModel::setUngroupedDestination,
                         onConfirm = viewModel::confirmImport,
                     )
 

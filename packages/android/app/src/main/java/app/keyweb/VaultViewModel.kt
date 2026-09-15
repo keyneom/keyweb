@@ -33,6 +33,7 @@ import app.keyweb.vault.VaultSync
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
 import app.keyweb.vault.kdbx.KdbxReader
+import app.keyweb.vault.kdbx.suggestedKeyringName
 import app.keyweb.vault.kdbx.WrongMasterPassword
 import app.keyweb.vault.emptyVault
 import app.keyweb.vault.visibleItems
@@ -80,6 +81,12 @@ data class BackupUiState(
 
 enum class ImportStage { CHOOSING, PASSWORD, PREVIEW, DONE }
 
+/** Where the entries that are in no group should land. */
+sealed interface UngroupedDestination {
+    data class New(val name: String) : UngroupedDestination
+    data class Existing(val keyringId: String) : UngroupedDestination
+}
+
 data class ImportUiState(
     val stage: ImportStage = ImportStage.CHOOSING,
     /** What Drive says this account has handed over. Never a local list. */
@@ -87,6 +94,12 @@ data class ImportUiState(
     val openingName: String = "",
     val entryCount: Int = 0,
     val keyringNames: List<String> = emptyList(),
+    /** How many entries sit at the database root, in no group. */
+    val ungrouped: Int = 0,
+    /** Where those go. Seeded from the file's name when the preview is built. */
+    val ungroupedDestination: UngroupedDestination = UngroupedDestination.New(""),
+    /** The keyrings already in the vault, to offer as a destination. */
+    val existingKeyrings: List<Pair<String, String>> = emptyList(),
     val skipped: Int = 0,
     val importedCount: Int = 0,
     val busy: Boolean = false,
@@ -631,11 +644,22 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 pendingFile = file
+                val rings = sync?.state()?.keyrings?.values
+                    ?.filter { !it.deleted.value }
+                    ?.map { ring -> ring.id to ring.name.value }
+                    .orEmpty()
                 setImport {
                     it.copy(
                         stage = ImportStage.PREVIEW,
                         entryCount = file.entries.size,
                         keyringNames = file.keyringNames,
+                        ungrouped = file.ungrouped,
+                        // Suggested from the file that was actually opened, so
+                        // it follows a second import rather than sticking.
+                        ungroupedDestination = UngroupedDestination.New(
+                            suggestedKeyringName(it.openingName),
+                        ),
+                        existingKeyrings = rings,
                         skipped = file.skipped,
                         busy = false,
                     )
@@ -657,9 +681,21 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * again updates what changed rather than making a second copy of
      * everything. That is what makes re-importing safe to do repeatedly.
      */
+    /** The user's answer to where the entries in no group should go. */
+    fun setUngroupedDestination(destination: UngroupedDestination) {
+        setImport { it.copy(ungroupedDestination = destination, error = null) }
+    }
+
     fun confirmImport() {
         val engine = sync ?: return
         val file = pendingFile ?: return
+        val choice = _state.value.import.ungroupedDestination
+        if (file.ungrouped > 0 && choice is UngroupedDestination.New && choice.name.isBlank()) {
+            setImport {
+                it.copy(error = "Give the new keyring a name, or choose one you already have.")
+            }
+            return
+        }
         setImport { it.copy(busy = true) }
         viewModelScope.launch {
             try {
@@ -677,14 +713,35 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         current = engine.putKeyring(keyringId = id, name = name)
                     }
                 }
-                val fallback = rings.values.firstOrNull()
-                    ?: current.keyrings.keys.firstOrNull()
-                    ?: "personal"
+                // Where the entries in no group go. Resolved before any
+                // entry is written, so a half-finished import cannot leave
+                // them somewhere arbitrary.
+                val ungroupedId = when {
+                    file.ungrouped == 0 -> ""
+                    choice is UngroupedDestination.Existing -> choice.keyringId
+                    else -> {
+                        val name = (choice as UngroupedDestination.New).name.trim()
+                        val already = current.keyrings.values
+                            .firstOrNull { !it.deleted.value && it.name.value == name }
+                        already?.id ?: UUID.randomUUID().toString().also { id ->
+                            current = engine.putKeyring(keyringId = id, name = name)
+                        }
+                    }
+                }
 
                 for (entry in file.entries) {
+                    // An entry either names a group, which is mapped above, or
+                    // names none and goes where the user said. There is no
+                    // third case and deliberately no fallback: a missing
+                    // mapping used to be absorbed silently, which is how
+                    // entries ended up in folders nobody put them in.
+                    val keyringId = entry.keyringName?.let(rings::get) ?: ungroupedId
+                    check(keyringId.isNotEmpty()) {
+                        "No keyring was prepared for \"${entry.keyringName}\"."
+                    }
                     current = engine.putItem(
                         itemId = "kdbx:${entry.uuid}",
-                        keyringId = rings[entry.keyringName] ?: fallback,
+                        keyringId = keyringId,
                         fields = entry.toFields(),
                     )
                 }

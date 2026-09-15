@@ -184,8 +184,11 @@ export function App() {
 
       {route.name === "import" && (
         <Import
+          keyrings={Object.values(vault.state.keyrings)
+            .filter((ring) => !ring.deleted.value)
+            .map((ring) => ({ id: ring.id, name: ring.name.value }))}
           onBack={() => setRoute({ name: "list" })}
-          onImport={(preview) => vault.importKeePass(preview)}
+          onImport={(preview, ungrouped) => vault.importKeePass(preview, ungrouped)}
         />
       )}
 

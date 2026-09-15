@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as kdbxweb from "kdbxweb";
-import { readKeePass, registerArgon2 } from "../src/vault/keepass";
+import {
+  importOperations,
+  readKeePass,
+  registerArgon2,
+  suggestedKeyringName,
+} from "../src/vault/keepass";
 
 /**
  * Where an imported entry lands.
@@ -70,50 +75,87 @@ describe("KeePass group structure", () => {
     expect(placed["direct-in-Work"]).toEqual({ keyring: "Work", folder: "Work" });
   });
 
-  it("offers a keyring for every group that will hold something", async () => {
+  it("offers a keyring for each real group, and only those", async () => {
     const preview = await readKeePass(await database(), "pw");
-    // "MyVault" is the database's root group, earning a keyring only because
-    // an entry actually sits loose in it.
-    //
-    // Compared as a set: this reader takes a group's entries before its
-    // subgroups, while the Kotlin reader walks the file in document order, so
-    // the two put the root's own keyring in a different position. Both are
-    // deterministic and neither is wrong, and nothing depends on the position
-    // now that no entry falls back to "whichever came first".
-    expect(new Set(preview.keyringNames)).toEqual(
-      new Set(["MyVault", "Banking", "Shopping", "Work"]),
-    );
+    // The database's own root group is not among them: its name is the
+    // database's, not a folder anyone made, and what happens to the entries
+    // sitting in it is the user's choice rather than this module's.
+    expect(preview.keyringNames).toEqual(["Banking", "Shopping", "Work"]);
   });
 
-  it("lists the real groups in the order the file has them", async () => {
+  it("counts the entries that are in no group instead of inventing one", async () => {
     const preview = await readKeePass(await database(), "pw");
-    expect(preview.keyringNames.filter((name) => name !== "MyVault")).toEqual([
-      "Banking",
-      "Shopping",
-      "Work",
-    ]);
-  });
+    expect(preview.ungrouped).toBe(1);
 
-  it("gives a root-level entry its own keyring rather than someone else's", async () => {
-    const preview = await readKeePass(await database(), "pw");
     const loose = preview.entries.find((entry) => entry.fields.title === "loose-at-root");
-    expect(loose).toBeDefined();
-
-    // The failure this guards against is silent: an unregistered keyring name
-    // is not an error at commit time, it just falls through to whichever
-    // keyring came first, so the entry lands in a real folder it was never in.
-    expect(preview.keyringNames).toContain(loose!.keyringName);
-    expect(["Banking", "Shopping", "Work"]).not.toContain(loose!.keyringName);
-    expect(loose!.folder).toBe("MyVault");
+    expect(loose!.keyringName).toBeNull();
+    expect(loose!.folder).toBe("");
   });
 
   it("never names a keyring that was not offered", async () => {
-    // Every entry's keyring must be one the commit step will have created.
-    // This is the invariant that was broken, and it is worth asserting over
-    // the whole file rather than for the one entry known to have tripped it.
+    // The invariant that was broken. An unregistered name is not an error at
+    // commit time — it used to fall through to whichever keyring came first,
+    // so the entry landed in a real folder it had never been in.
     const preview = await readKeePass(await database(), "pw");
     for (const entry of preview.entries) {
+      if (entry.keyringName === null) continue;
       expect(preview.keyringNames).toContain(entry.keyringName);
     }
+  });
+
+  it("sends the ungrouped entries where the caller said, and nowhere else", async () => {
+    const preview = await readKeePass(await database(), "pw");
+    const keyringIds = Object.fromEntries(
+      preview.keyringNames.map((name) => [name, `ring-${name}`]),
+    );
+    let n = 0;
+    const ops = importOperations(preview, keyringIds, "ring-chosen", () => {
+      n += 1;
+      return { opId: `op-${n}`, ts: `00170000000000${n}-00000-test` };
+    });
+
+    const byTitle = new Map(
+      ops.map((op) => [
+        (op as { fields: Record<string, string> }).fields["title"],
+        (op as { keyringId: string }).keyringId,
+      ]),
+    );
+    expect(byTitle.get("loose-at-root")).toBe("ring-chosen");
+    // And the grouped ones are untouched by the choice.
+    expect(byTitle.get("direct-in-Banking")).toBe("ring-Banking");
+    expect(byTitle.get("in-Shopping-Personal")).toBe("ring-Shopping");
+  });
+
+  it("refuses to guess when a group has no keyring prepared", async () => {
+    // Being loudly wrong beats being quietly wrong: the old fallback absorbed
+    // this and put the entry in an unrelated folder.
+    const preview = await readKeePass(await database(), "pw");
+    expect(() =>
+      importOperations(preview, {}, "ring-chosen", () => ({ opId: "x", ts: "t" })),
+    ).toThrow(/No keyring was prepared/);
+  });
+});
+
+describe("suggesting a name for the ungrouped keyring", () => {
+  it("uses the file's name without its extension", () => {
+    expect(suggestedKeyringName("Family passwords.kdbx")).toBe("Family passwords");
+  });
+
+  it("keeps everything but the last extension", () => {
+    expect(suggestedKeyringName("Work passwords.v2.kdbx")).toBe("Work passwords.v2");
+  });
+
+  it("copes with a name that has no extension", () => {
+    expect(suggestedKeyringName("passwords")).toBe("passwords");
+  });
+
+  it("strips any leading path a file input may hand over", () => {
+    expect(suggestedKeyringName("C:\\Users\\me\\vault.kdbx")).toBe("vault");
+    expect(suggestedKeyringName("/home/me/vault.kdbx")).toBe("vault");
+  });
+
+  it("falls back rather than suggesting an empty name", () => {
+    expect(suggestedKeyringName(".kdbx")).toBe("Imported");
+    expect(suggestedKeyringName("   ")).toBe("Imported");
   });
 });

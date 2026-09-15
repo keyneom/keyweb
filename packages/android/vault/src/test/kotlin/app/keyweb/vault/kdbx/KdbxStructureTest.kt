@@ -66,38 +66,26 @@ class KdbxStructureTest {
     }
 
     @Test
-    fun `every group that will hold something is offered as a keyring`() {
-        // "MyVault" is the database's root group, earning a keyring only
-        // because an entry actually sits loose in it.
-        //
-        // Compared as a set: this reader walks the file in document order,
-        // while the web reader takes a group's entries before its subgroups,
-        // so the two put the root's own keyring in a different position. Both
-        // are deterministic and neither is wrong, and nothing depends on the
-        // position now that no entry falls back to "whichever came first".
-        assertEquals(
-            setOf("MyVault", "Banking", "Shopping", "Work"),
-            read().keyringNames.toSet(),
-        )
-    }
-
-    @Test
-    fun `lists the real groups in the order the file has them`() {
-        val listed = read().keyringNames.filter { it != "MyVault" }
-        assertEquals(listOf("Banking", "Shopping", "Work"), listed)
+    fun `offers a keyring for each real group, and only those`() {
+        // The database's own root group is not among them: its name is the
+        // database's, not a folder anyone made, and what happens to the
+        // entries sitting in it is the user's choice rather than this
+        // reader's.
+        assertEquals(listOf("Banking", "Shopping", "Work"), read().keyringNames)
     }
 
     @Test
     fun `never names a keyring that was not offered`() {
         // The invariant behind the whole bug. An unregistered name is not an
-        // error at commit time — it falls through to whichever keyring came
-        // out of the map first, so the entry lands in a real folder it was
-        // never in, and nothing anywhere says so.
+        // error at commit time — it used to fall through to whichever keyring
+        // came out of the map first, so the entry landed in a real folder it
+        // had never been in, and nothing anywhere said so.
         val file = read()
         for (entry in file.entries) {
+            val named = entry.keyringName ?: continue
             assertTrue(
-                entry.keyringName in file.keyringNames,
-                "'${entry.title}' claims keyring '${entry.keyringName}', which is not offered",
+                named in file.keyringNames,
+                "'${entry.title}' claims keyring '$named', which is not offered",
             )
         }
     }
@@ -125,15 +113,24 @@ class KdbxStructureTest {
     }
 
     @Test
-    fun `a root-level entry gets its own keyring rather than someone else's`() {
+    fun `counts the entries that are in no group instead of inventing one`() {
         val file = read()
+        assertEquals(1, file.ungrouped)
+
         val loose = file.at("loose-at-root")
-        assertEquals("MyVault", loose.keyringName)
-        assertEquals("MyVault", loose.folder)
-        assertTrue(loose.keyringName in file.keyringNames, "its keyring is never created")
-        assertTrue(
-            loose.keyringName !in listOf("Banking", "Shopping", "Work"),
-            "a loose entry was filed into a real folder it was never in",
-        )
+        assertEquals(null, loose.keyringName)
+        assertEquals("", loose.folder)
+    }
+
+    @Test
+    fun `suggests a keyring name from the file, not the database's root group`() {
+        // The root group here is "MyVault", a name the user may never have
+        // seen. The file name is what they actually call this collection.
+        assertEquals("Family passwords", suggestedKeyringName("Family passwords.kdbx"))
+        assertEquals("Work passwords.v2", suggestedKeyringName("Work passwords.v2.kdbx"))
+        assertEquals("passwords", suggestedKeyringName("passwords"))
+        assertEquals("vault", suggestedKeyringName("/storage/emulated/0/Download/vault.kdbx"))
+        assertEquals("Imported", suggestedKeyringName(".kdbx"))
+        assertEquals("Imported", suggestedKeyringName("   "))
     }
 }

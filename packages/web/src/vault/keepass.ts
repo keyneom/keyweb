@@ -63,19 +63,50 @@ export function registerArgon2(): void {
 export type ImportedEntry = {
   /** Derived from the KeePass UUID, so a second import updates rather than duplicates. */
   itemId: string;
-  /** The top-level group, which becomes the keyring. */
-  keyringName: string;
-  /** The full group path, e.g. "Banking / Personal". */
+  /**
+   * The top-level group, which becomes the keyring, or null for an entry that
+   * sits at the database root and is in no group at all.
+   *
+   * Null rather than a stand-in name, because there is no answer to give here:
+   * where those entries should go is the user's decision, not something this
+   * module can infer. Inventing a name made that decision silently and got it
+   * wrong.
+   */
+  keyringName: string | null;
+  /** The full group path, e.g. "Banking / Personal". Empty when in no group. */
   folder: string;
   fields: Partial<Record<ItemField, string>>;
 };
+
+/** Where the entries that are in no group should land. */
+export type UngroupedDestination =
+  | { kind: "new"; name: string }
+  | { kind: "existing"; keyringId: string };
 
 export type ImportPreview = {
   entries: ImportedEntry[];
   /** Top-level group names, in the order they appear. */
   keyringNames: string[];
+  /** How many entries sit at the database root, in no group. */
+  ungrouped: number;
   skipped: number;
 };
+
+/**
+ * The name to suggest for a keyring holding the entries that are in no group.
+ *
+ * The file's own name is the best guess available: it is what the user calls
+ * this collection of passwords, and it is already on screen, so the suggestion
+ * does not come out of nowhere. The database's internal root group name is a
+ * worse guess — it is often a leftover default like "NewDatabase" that the
+ * user has never seen.
+ */
+export function suggestedKeyringName(fileName: string): string {
+  const base = fileName.replace(/^.*[\\/]/, "");
+  // Only the final extension: "Work passwords.v2.kdbx" keeps the ".v2".
+  const withoutExtension = base.replace(/\.[^.]+$/, "");
+  return withoutExtension.trim() || "Imported";
+}
 
 export class WrongMasterPassword extends Error {
   constructor() {
@@ -127,6 +158,7 @@ export async function readKeePass(
 
   const entries: ImportedEntry[] = [];
   const keyringNames: string[] = [];
+  let ungrouped = 0;
   let skipped = 0;
 
   const walk = (group: kdbxweb.KdbxGroup, path: string[]) => {
@@ -136,11 +168,10 @@ export async function readKeePass(
 
     const here = [...path, text(group.name)].filter(Boolean);
     // here[0] is the database's own root group, whose name is the database
-    // name rather than a keyring — so the keyring is the group below it. An
-    // entry sitting loose at the root has no group below, and falls back to
-    // the root's own name: that is what KeePass shows at the top of the tree,
-    // so it arrives somewhere the user recognises rather than nowhere.
-    const top = here[1] ?? here[0] ?? "Imported";
+    // name rather than a keyring, so the keyring is the group below it. An
+    // entry sitting loose at the root has no group below it and no keyring to
+    // name — the caller is asked where those should go.
+    const top = here[1] ?? null;
 
     for (const entry of group.entries) {
       const title = text(entry.fields.get("Title"));
@@ -156,9 +187,9 @@ export async function readKeePass(
         url: text(entry.fields.get("URL")),
         note: text(entry.fields.get("Notes")),
         // Drop the root group from the displayed path; its name is the
-        // database's, not a folder the user made. An entry that really does
-        // live at the root keeps that name rather than showing no folder.
-        folder: here.slice(1).join(" / ") || top,
+        // database's, not a folder the user made. An entry at the root is in
+        // no folder, and says so by leaving this empty.
+        folder: here.slice(1).join(" / "),
       };
       const tags = (entry.tags ?? []).filter(Boolean);
       if (tags.length > 0) fields.tags = tags.join(", ");
@@ -168,7 +199,8 @@ export async function readKeePass(
       // entry created empty keyrings for groups that only contain subgroups,
       // and — worse — left a keyring the entries below name but which was
       // never created, so they were filed under whichever one came first.
-      if (!keyringNames.includes(top)) keyringNames.push(top);
+      if (top === null) ungrouped += 1;
+      else if (!keyringNames.includes(top)) keyringNames.push(top);
 
       entries.push({
         itemId: `kdbx:${entry.uuid.id}`,
@@ -182,9 +214,8 @@ export async function readKeePass(
   };
 
   for (const group of db.groups) walk(group, []);
-  if (keyringNames.length === 0) keyringNames.push("Imported");
 
-  return { entries, keyringNames, skipped };
+  return { entries, keyringNames, ungrouped, skipped };
 }
 
 /**
@@ -192,22 +223,35 @@ export async function readKeePass(
  *
  * `keyringIds` maps a top-level group name to the keyring it should land on,
  * so the caller decides whether to create new keyrings or fold everything into
- * one. Stamping is left to the caller's clock, which is what keeps a re-import
- * ordered correctly against edits made in between.
+ * one. `ungroupedKeyringId` is where the entries that are in no group go — a
+ * separate argument because that is a separate question, and the only one the
+ * user has to answer. Stamping is left to the caller's clock, which is what
+ * keeps a re-import ordered correctly against edits made in between.
  */
 export function importOperations(
   preview: ImportPreview,
   keyringIds: Record<string, string>,
+  ungroupedKeyringId: string,
   stamp: () => { opId: string; ts: string },
 ): VaultOp[] {
   return preview.entries.map((entry) => {
     const { opId, ts } = stamp();
+    // An entry either names a group, which the caller has mapped, or names
+    // none and goes where the caller said ungrouped entries go. There is no
+    // third case and deliberately no fallback: a missing mapping used to be
+    // silently absorbed, which is how entries ended up in folders nobody put
+    // them in. Better to be obviously wrong than quietly wrong.
+    const keyringId =
+      entry.keyringName === null ? ungroupedKeyringId : keyringIds[entry.keyringName];
+    if (!keyringId) {
+      throw new Error(`No keyring was prepared for "${entry.keyringName}".`);
+    }
     return {
       kind: "item.put",
       opId,
       ts,
       itemId: entry.itemId,
-      keyringId: keyringIds[entry.keyringName] ?? Object.values(keyringIds)[0] ?? "personal",
+      keyringId,
       fields: entry.fields,
     } satisfies VaultOp;
   });

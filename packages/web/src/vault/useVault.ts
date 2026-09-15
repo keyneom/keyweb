@@ -20,7 +20,7 @@ import {
   parseRecoveryCode,
 } from "./recovery";
 import { GoogleDriveRemote } from "./drive";
-import type { ImportPreview } from "./keepass";
+import type { ImportPreview, UngroupedDestination } from "./keepass";
 
 /**
  * A remote for when encrypted backup has not been configured for this build.
@@ -92,7 +92,7 @@ export type VaultApi = {
   moveItem(itemId: string, keyringId: string): Promise<void>;
   addKeyring(name: string): Promise<string>;
   /** Copy a parsed KeePass file in. Returns how many entries landed. */
-  importKeePass(preview: ImportPreview): Promise<number>;
+  importKeePass(preview: ImportPreview, ungrouped: UngroupedDestination): Promise<number>;
 };
 
 /**
@@ -437,22 +437,33 @@ export function useVault(): VaultApi {
    * durable and as recoverable as anything typed by hand.
    */
   const importKeePass = useCallback(
-    async (preview: ImportPreview) => {
+    async (preview: ImportPreview, ungrouped: UngroupedDestination) => {
       const sync = syncRef.current;
       if (!sync) return 0;
 
       const existing = Object.values(state.keyrings).filter((ring) => !ring.deleted.value);
       const keyringIds: Record<string, string> = {};
-      for (const name of preview.keyringNames) {
+      const keyringFor = async (name: string) => {
         const already = existing.find((ring) => ring.name.value === name);
-        if (already) {
-          keyringIds[name] = already.id;
-        } else {
-          const id = crypto.randomUUID();
-          keyringIds[name] = id;
-          await sync.putKeyring({ keyringId: id, name });
-        }
+        if (already) return already.id;
+        const id = crypto.randomUUID();
+        await sync.putKeyring({ keyringId: id, name });
+        return id;
+      };
+
+      for (const name of preview.keyringNames) {
+        keyringIds[name] = await keyringFor(name);
       }
+
+      // Where the entries in no group go. Asked of the user rather than
+      // guessed, and resolved before any entry is written so a half-finished
+      // import cannot leave them somewhere arbitrary.
+      const ungroupedKeyringId =
+        preview.ungrouped === 0
+          ? ""
+          : ungrouped.kind === "existing"
+            ? ungrouped.keyringId
+            : await keyringFor(ungrouped.name);
 
       // Committed one at a time through the normal path, so each entry is
       // stamped by the live clock and lands in the outbox like any other edit.
@@ -463,7 +474,8 @@ export function useVault(): VaultApi {
       for (const entry of preview.entries) {
         next = await sync.putItem({
           itemId: entry.itemId,
-          keyringId: keyringIds[entry.keyringName] ?? Object.values(keyringIds)[0] ?? "personal",
+          keyringId:
+            entry.keyringName === null ? ungroupedKeyringId : keyringIds[entry.keyringName]!,
           fields: entry.fields,
         });
       }

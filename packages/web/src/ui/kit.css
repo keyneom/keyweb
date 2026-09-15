@@ -296,6 +296,21 @@
   min-height: var(--tap);
   min-width: 0;
 }
+/* Matches the input above it, so a box holding a choice and a box holding
+   typed text do not read as two different kinds of control. */
+.field .box select {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  min-height: var(--tap);
+  min-width: 0;
+  /* The platform arrow is drawn outside the padding box on some engines and
+     clips against the border; margin gives it room without insetting text. */
+  margin-right: -0.2rem;
+}
 .field .hint {
   display: block;
   font-size: 0.8em;
@@ -706,4 +721,12 @@
   font-size: 1em;
   font-weight: 650;
   margin: 0.5rem 0 0.5rem;
+}
+
+/* The "these are in no folder" decision, set apart from the folder list above
+   it so it reads as a question rather than more of the summary. */
+.ungrouped {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 2px solid var(--line);
 }

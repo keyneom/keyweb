@@ -4,6 +4,12 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +42,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.keyweb.ImportStage
 import app.keyweb.ImportUiState
+import app.keyweb.UngroupedDestination
+import app.keyweb.vault.kdbx.suggestedKeyringName
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,6 +67,7 @@ fun ImportScreen(
     onOpen: (String) -> Unit,
     onLocalFile: (Uri) -> Unit,
     onUnlock: (String) -> Unit,
+    onUngroupedDestination: (UngroupedDestination) -> Unit,
     onConfirm: () -> Unit,
 ) {
     // A .kdbx has no registered media type, and providers label it variously as
@@ -162,6 +171,13 @@ fun ImportScreen(
                             }
                         }
                     }
+                    if (state.ungrouped > 0) {
+                        UngroupedChoice(
+                            state = state,
+                            onChoose = onUngroupedDestination,
+                        )
+                    }
+
                     if (state.skipped > 0) {
                         Text(
                             "${state.skipped} empty or deleted " +
@@ -298,4 +314,94 @@ private fun Choosing(
         "It is opened, copied from, and left exactly as it was. Keyweb cannot write to it.",
         Modifier.padding(top = 14.dp),
     )
+}
+
+/**
+ * Where the passwords that are in no folder should go.
+ *
+ * Asked rather than guessed. In a KeePass file these sit loose at the top with
+ * no group of their own, and Keyweb has to put them somewhere — so the choice
+ * is the user's, made while they can see how many are involved. The suggested
+ * name is the file's, because that is what they call this set of passwords and
+ * it is already on the screen above.
+ */
+@Composable
+private fun UngroupedChoice(
+    state: ImportUiState,
+    onChoose: (UngroupedDestination) -> Unit,
+) {
+    val status = LocalKeywebStatus.current
+    val choice = state.ungroupedDestination
+    val plural = if (state.ungrouped == 1) "" else "s"
+
+    HorizontalDivider(Modifier.padding(top = 18.dp, bottom = 14.dp))
+
+    Text(
+        "${state.ungrouped} password$plural ${if (state.ungrouped == 1) "isn't" else "aren't"} " +
+            "in a folder",
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        "In your KeePass file these sit loose at the top rather than inside a folder. Keyweb " +
+            "keeps every password in a keyring, so choose where these should go.",
+        color = status.muted,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+    )
+
+    // Radio rows rather than a dropdown: there are rarely more than a handful
+    // of keyrings, and a list you can see beats one you have to open.
+    DestinationRow(
+        label = "A new keyring",
+        selected = choice is UngroupedDestination.New,
+        onSelect = { onChoose(UngroupedDestination.New(suggestedKeyringName(state.openingName))) },
+    )
+
+    if (choice is UngroupedDestination.New) {
+        OutlinedTextField(
+            value = choice.name,
+            onValueChange = { onChoose(UngroupedDestination.New(it)) },
+            label = { Text("Name the new keyring") },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 34.dp, top = 4.dp, bottom = 4.dp),
+        )
+        Text(
+            "Named after your file to start with. Change it if you like.",
+            color = status.muted,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = 34.dp, bottom = 6.dp),
+        )
+    }
+
+    for ((id, name) in state.existingKeyrings) {
+        DestinationRow(
+            label = name,
+            selected = choice is UngroupedDestination.Existing && choice.keyringId == id,
+            onSelect = { onChoose(UngroupedDestination.Existing(id)) },
+        )
+    }
+}
+
+@Composable
+private fun DestinationRow(
+    label: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            // The whole row is the target, not just the button: a 20dp circle
+            // is a poor thing to ask anyone to hit, and worse with shaky hands.
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 6.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Text(label, Modifier.padding(start = 10.dp))
+    }
 }

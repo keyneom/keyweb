@@ -15,10 +15,15 @@ import org.xml.sax.InputSource
  * the full nested path, so an organised database does not arrive as one flat
  * list. Both are preserved because losing them is how an import turns someone's
  * filing system into a pile.
+ *
+ * `keyringName` is null for an entry sitting at the database root, in no group
+ * at all. Null rather than a stand-in name, because there is no answer to give
+ * here: where those go is the user's decision, not something this reader can
+ * infer. Inventing a name made that decision silently and got it wrong.
  */
 data class KdbxEntry(
     val uuid: String,
-    val keyringName: String,
+    val keyringName: String?,
     val folder: String,
     val title: String,
     val username: String,
@@ -34,9 +39,27 @@ data class KdbxFile(
     val entries: List<KdbxEntry>,
     /** Top-level group names, in the order they appear. */
     val keyringNames: List<String>,
+    /** How many entries sit at the database root, in no group. */
+    val ungrouped: Int,
     /** Entries with nothing worth importing, plus anything in the recycle bin. */
     val skipped: Int,
 )
+
+/**
+ * The name to suggest for a keyring holding the entries that are in no group.
+ *
+ * The file's own name is the best guess available: it is what the user calls
+ * this collection of passwords, and it is already on screen, so the suggestion
+ * does not come out of nowhere. The database's internal root group name is a
+ * worse guess — it is often a leftover default like "NewDatabase" that the
+ * user has never seen.
+ */
+fun suggestedKeyringName(fileName: String): String {
+    val base = fileName.substringAfterLast('/').substringAfterLast('\\')
+    // Only the final extension: "Work passwords.v2.kdbx" keeps the ".v2".
+    val withoutExtension = if (base.contains('.')) base.substringBeforeLast('.') else base
+    return withoutExtension.trim().ifEmpty { "Imported" }
+}
 
 /**
  * Reads a KeePass database.
@@ -196,6 +219,7 @@ object KdbxReader {
 
         val entries = mutableListOf<KdbxEntry>()
         val keyringNames = linkedSetOf<String>()
+        var ungrouped = 0
         var skipped = 0
 
         /**
@@ -225,7 +249,7 @@ object KdbxReader {
                             skipped += 1
                         } else {
                             entries += entry
-                            entry.keyringName.takeIf { it.isNotEmpty() }?.let(keyringNames::add)
+                            entry.keyringName?.let(keyringNames::add)
                         }
                     }
 
@@ -238,35 +262,25 @@ object KdbxReader {
         // name is the database name rather than a keyring. Treating it as a
         // group would collapse every keyring into one called "Household".
         for (container in root.children("Group")) {
-            // Loose entries do need a name, though. Left without one they
-            // matched no keyring at commit time and were quietly filed under
-            // whichever keyring came out of the map first — a different folder
-            // on a different run, and never the right one. The root group's
-            // name is what KeePass shows at the top of the tree, so an entry
-            // that lived there arrives somewhere the user recognises.
-            val rootName = container.children("Name").firstOrNull()
-                ?.textContent?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: "Imported"
-
             for (child in container.elements()) {
                 when (child.tagName) {
                     "Group" -> walk(child, emptyList())
-                    // An entry sitting loose at the root belongs to no group;
-                    // it is still someone's password and must not vanish.
+                    // An entry sitting loose at the root belongs to no group.
+                    // It is counted rather than given a name, because where it
+                    // should go is a question only the user can answer.
                     "Entry" -> {
-                        val entry = readEntry(child, listOf(rootName), stream)
+                        val entry = readEntry(child, emptyList(), stream)
                         if (entry == null) {
                             skipped += 1
                         } else {
                             entries += entry
-                            keyringNames += rootName
+                            ungrouped += 1
                         }
                     }
                 }
             }
         }
-        return KdbxFile(entries, keyringNames.toList(), skipped)
+        return KdbxFile(entries, keyringNames.toList(), ungrouped, skipped)
     }
 
     private fun readEntry(
@@ -322,7 +336,7 @@ object KdbxReader {
 
         return KdbxEntry(
             uuid = uuid,
-            keyringName = path.firstOrNull().orEmpty(),
+            keyringName = path.firstOrNull(),
             folder = path.joinToString(" / "),
             title = title,
             username = username,
