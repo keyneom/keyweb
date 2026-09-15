@@ -663,7 +663,12 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         setImport { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val rings = HashMap<String, String>()
+                // Insertion-ordered: `fallback` below takes the first
+                // value, and a plain HashMap made "first" an arbitrary
+                // consequence of string hashing — so an entry that missed the
+                // map landed in a different folder depending on what the
+                // groups happened to be called.
+                val rings = LinkedHashMap<String, String>()
                 var current = engine.state()
                 for (name in file.keyringNames) {
                     val existing = current.keyrings.values

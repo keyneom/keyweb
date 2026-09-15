@@ -135,8 +135,12 @@ export async function readKeePass(
     if (group.uuid?.id && db.meta.recycleBinUuid?.id === group.uuid.id) return;
 
     const here = [...path, text(group.name)].filter(Boolean);
+    // here[0] is the database's own root group, whose name is the database
+    // name rather than a keyring — so the keyring is the group below it. An
+    // entry sitting loose at the root has no group below, and falls back to
+    // the root's own name: that is what KeePass shows at the top of the tree,
+    // so it arrives somewhere the user recognises rather than nowhere.
     const top = here[1] ?? here[0] ?? "Imported";
-    if (here.length > 1 && !keyringNames.includes(top)) keyringNames.push(top);
 
     for (const entry of group.entries) {
       const title = text(entry.fields.get("Title"));
@@ -151,11 +155,20 @@ export async function readKeePass(
         password,
         url: text(entry.fields.get("URL")),
         note: text(entry.fields.get("Notes")),
-        // Drop the root group from the displayed path; it is always "Database".
-        folder: here.slice(1).join(" / "),
+        // Drop the root group from the displayed path; its name is the
+        // database's, not a folder the user made. An entry that really does
+        // live at the root keeps that name rather than showing no folder.
+        folder: here.slice(1).join(" / ") || top,
       };
       const tags = (entry.tags ?? []).filter(Boolean);
       if (tags.length > 0) fields.tags = tags.join(", ");
+
+      // Registered here rather than on entering the group, so the keyring
+      // list is exactly the keyrings that will hold something. Registering on
+      // entry created empty keyrings for groups that only contain subgroups,
+      // and — worse — left a keyring the entries below name but which was
+      // never created, so they were filed under whichever one came first.
+      if (!keyringNames.includes(top)) keyringNames.push(top);
 
       entries.push({
         itemId: `kdbx:${entry.uuid.id}`,

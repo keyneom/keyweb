@@ -65,6 +65,67 @@ for (const version of [3, 4] as const) {
   console.log(`wrote ${target.pathname} (${bytes.length} bytes)`);
 }
 
+/**
+ * A second database, about shape rather than contents.
+ *
+ * The database above puts every entry in a leaf group, which leaves the
+ * arrangements real databases actually use untested: entries sitting directly
+ * in a top-level group, entries loose at the database root, and subgroups that
+ * share a name under different parents. Where an entry lands is decided by
+ * exactly those cases, so they get a fixture of their own and both readers are
+ * held to the same answer.
+ */
+async function buildStructure(): Promise<ArrayBuffer> {
+  registerArgon2();
+  const credentials = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString(PASSWORD));
+  const db = kdbxweb.Kdbx.create(credentials, "MyVault");
+  const root = db.getDefaultGroup();
+
+  const add = (group: kdbxweb.KdbxGroup, title: string) => {
+    const entry = db.createEntry(group);
+    entry.fields.set("Title", title);
+    entry.fields.set("Password", kdbxweb.ProtectedValue.fromString("x"));
+  };
+
+  add(root, "loose-at-root");
+
+  const banking = db.createGroup(root, "Banking");
+  add(banking, "direct-in-Banking");
+  const bankingPersonal = db.createGroup(banking, "Personal");
+  add(bankingPersonal, "in-Banking-Personal");
+  add(db.createGroup(bankingPersonal, "Deep"), "three-deep");
+
+  const shopping = db.createGroup(root, "Shopping");
+  add(shopping, "direct-in-Shopping");
+  // Same name as Banking's subgroup, under a different parent.
+  add(db.createGroup(shopping, "Personal"), "in-Shopping-Personal");
+
+  add(db.createGroup(root, "Work"), "direct-in-Work");
+
+  // Deleting a whole group moves it into the recycle bin as a subgroup, with
+  // its entries still inside. Skipping only the bin's direct children would
+  // let these back in, and they would arrive wearing the bin's name as their
+  // keyring -- deleted passwords, resurrected into a folder nobody made.
+  const old = db.createGroup(root, "Old Stuff");
+  add(old, "deleted-inside-a-deleted-group");
+  db.remove(old);
+
+  // A single deleted entry, which lands in the bin directly.
+  const alone = db.createEntry(banking);
+  alone.fields.set("Title", "deleted-on-its-own");
+  alone.fields.set("Password", kdbxweb.ProtectedValue.fromString("x"));
+  db.remove(alone);
+
+  return db.save();
+}
+
+{
+  const bytes = new Uint8Array(await buildStructure());
+  const target = new URL("../../../fixtures/keepass-structure.kdbx", import.meta.url);
+  writeFileSync(target, bytes);
+  console.log(`wrote ${target.pathname} (${bytes.length} bytes)`);
+}
+
 writeFileSync(
   new URL("../../../fixtures/keepass-password.txt", import.meta.url),
   `${PASSWORD}\n`,

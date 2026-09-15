@@ -198,12 +198,20 @@ object KdbxReader {
         val keyringNames = linkedSetOf<String>()
         var skipped = 0
 
-        fun walk(group: Element, path: List<String>) {
+        /**
+         * [inBin] is inherited, and that is the whole point of it.
+         *
+         * Deleting a *group* in KeePass does not delete anything: the group is
+         * moved into the recycle bin with its entries still inside it. Testing
+         * only whether this group is the bin therefore catches loose deleted
+         * entries and misses every entry that was deleted as part of a folder
+         * — which came back on import wearing "Recycle Bin" as a keyring, a
+         * folder the user never made, holding passwords they had thrown away.
+         */
+        fun walk(group: Element, path: List<String>, inBin: Boolean = false) {
             val name = group.children("Name").firstOrNull()?.textContent?.trim().orEmpty()
             val uuid = group.children("UUID").firstOrNull()?.textContent?.trim()
-            // Deliberately thrown away in KeePass. Importing it would resurrect
-            // passwords someone chose to delete.
-            val binned = recycleBin != null && uuid == recycleBin
+            val binned = inBin || (recycleBin != null && uuid == recycleBin)
             val here = if (path.isEmpty() && name.isEmpty()) path else path + name
 
             // Children are visited in document order so the keystream stays in
@@ -221,7 +229,7 @@ object KdbxReader {
                         }
                     }
 
-                    "Group" -> walk(child, here)
+                    "Group" -> walk(child, here, binned)
                 }
             }
         }
@@ -230,13 +238,31 @@ object KdbxReader {
         // name is the database name rather than a keyring. Treating it as a
         // group would collapse every keyring into one called "Household".
         for (container in root.children("Group")) {
+            // Loose entries do need a name, though. Left without one they
+            // matched no keyring at commit time and were quietly filed under
+            // whichever keyring came out of the map first — a different folder
+            // on a different run, and never the right one. The root group's
+            // name is what KeePass shows at the top of the tree, so an entry
+            // that lived there arrives somewhere the user recognises.
+            val rootName = container.children("Name").firstOrNull()
+                ?.textContent?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: "Imported"
+
             for (child in container.elements()) {
                 when (child.tagName) {
                     "Group" -> walk(child, emptyList())
-                    // An entry sitting loose at the root belongs to no keyring;
+                    // An entry sitting loose at the root belongs to no group;
                     // it is still someone's password and must not vanish.
-                    "Entry" -> readEntry(child, emptyList(), stream)
-                        ?.let { entries += it } ?: run { skipped += 1 }
+                    "Entry" -> {
+                        val entry = readEntry(child, listOf(rootName), stream)
+                        if (entry == null) {
+                            skipped += 1
+                        } else {
+                            entries += entry
+                            keyringNames += rootName
+                        }
+                    }
                 }
             }
         }
