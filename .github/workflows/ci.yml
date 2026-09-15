@@ -14,6 +14,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check the Linux native bindings are pinned
+        run: node scripts/check-ci-bindings.mjs
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
