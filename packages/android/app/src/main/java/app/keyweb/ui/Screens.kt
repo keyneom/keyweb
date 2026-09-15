@@ -99,6 +99,10 @@ fun VaultListScreen(
     onKeyrings: () -> Unit,
     onSettings: () -> Unit,
     onSetUpBackup: () -> Unit,
+    /** This build's version, so the update notice knows what to compare. */
+    currentVersion: String,
+    /** Opens a link in a browser. Routed through the caller, which has the Activity. */
+    onOpenLink: (String) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
@@ -174,6 +178,14 @@ fun VaultListScreen(
                     )
                 }
             }
+
+            // Above the backup notice: a stale build is the more urgent of the
+            // two, since it can be the reason the rest is misbehaving.
+            UpdateNotice(
+                currentVersion = currentVersion,
+                onGet = onOpenLink,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
 
             BackupStatusLine(
                 status,

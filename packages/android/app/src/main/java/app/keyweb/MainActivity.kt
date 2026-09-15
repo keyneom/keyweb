@@ -193,6 +193,24 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onKeyrings = { route = Route.Keyrings },
                         onSettings = { route = Route.Settings },
                         onSetUpBackup = { route = Route.Backup },
+                        currentVersion = BuildConfig.VERSION_NAME,
+                        // Through GrantBrowser, which knows the things that
+                        // make an https intent fail silently on Android — the
+                        // same ones that had the Picker handoff reporting no
+                        // browser on a phone with three of them.
+                        onOpenLink = { url ->
+                            GrantBrowser.copyLink(activity, url)
+                            if (!GrantBrowser.open(activity, url)) {
+                                // On the screen the person is actually looking
+                                // at. The import screen's error channel would
+                                // have filed this where nobody would see it,
+                                // then surprised them with it days later.
+                                viewModel.showToast(
+                                    "Keyweb couldn't open a browser. The link is copied — " +
+                                        "paste it into any browser.",
+                                )
+                            }
+                        },
                     )
 
                     is Route.Detail -> {

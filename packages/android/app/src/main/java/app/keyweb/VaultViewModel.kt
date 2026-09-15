@@ -312,6 +312,11 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(toast = null)
     }
 
+    /** A passing message on the current screen, for things that need no decision. */
+    fun showToast(message: String) {
+        _state.value = _state.value.copy(toast = message)
+    }
+
     fun saveItem(
         itemId: String?,
         keyringId: String,
