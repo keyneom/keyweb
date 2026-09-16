@@ -79,6 +79,24 @@ abstract class VaultDao {
     @Query("SELECT DISTINCT document FROM outbox WHERE document != '' ORDER BY document")
     abstract suspend fun outboxDocumentIds(): List<String>
 
+    /**
+     * Remove a document and everything queued for it, as one transaction.
+     *
+     * The outbox goes first within it, so there is no moment where queued
+     * operations name a document whose state has gone.
+     */
+    @Transaction
+    open suspend fun forget(document: String) {
+        deleteOutboxFor(document)
+        deleteState(document)
+    }
+
+    @Query("DELETE FROM outbox WHERE document = :document")
+    abstract suspend fun deleteOutboxFor(document: String)
+
+    @Query("DELETE FROM vault_state WHERE document = :document")
+    abstract suspend fun deleteState(document: String)
+
     @Query("SELECT value FROM meta WHERE key = :key")
     abstract suspend fun meta(key: String): String?
 
@@ -257,6 +275,18 @@ class RoomVaultStorage(
     /** Operation ids are unique across documents, so this needs no filter. */
     override suspend fun ack(opIds: List<String>, documentId: String) {
         if (opIds.isNotEmpty()) dao.deleteOutbox(opIds)
+    }
+
+    /**
+     * Remove a document entirely, for leaving a keyring somebody else shared.
+     *
+     * "Remove it from my vault" has to mean the passwords go, not merely that
+     * they stop being listed — an unlisted copy is worse than a visible one,
+     * because nothing would ever prompt anyone to remove it.
+     */
+    override suspend fun forgetDocument(documentId: String) {
+        require(documentId != VAULT_DOCUMENT) { "The vault itself cannot be forgotten." }
+        dao.forget(documentId)
     }
 
     override suspend fun readClock(): Hlc? = dao.meta(CLOCK_KEY)

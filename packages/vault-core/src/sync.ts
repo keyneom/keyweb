@@ -537,6 +537,7 @@ export class VaultSync {
    */
   async leaveKeyring(keyringId: string): Promise<VaultState> {
     const vault = await this.#storage.readState();
+    const datasetId = datasetOf(vault.keyrings[keyringId]);
 
     const ops: VaultOp[] = [
       {
@@ -555,6 +556,17 @@ export class VaultSync {
     ];
 
     await this.#storage.commitAll(ops, applyOps(vault, ops), VAULT_DOCUMENT);
+
+    // The local copy goes too. Leaving it would mean "remove it from my vault"
+    // left every password in it sitting on the device — listed nowhere, which
+    // is worse than visible, because nothing would ever prompt anyone to
+    // remove it. Second, and after the vault write: a crash in between leaves
+    // a document nothing points at, which the next leave clears, rather than
+    // a binding pointing at a document that is gone.
+    if (datasetId) {
+      await this.#storage.forgetDocument(datasetId);
+    }
+
     await this.#storage.writeClock(this.#clock.snapshot());
     await this.#refreshPending();
     return this.state();

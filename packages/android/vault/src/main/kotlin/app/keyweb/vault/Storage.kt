@@ -63,6 +63,21 @@ interface VaultStorage {
      */
     suspend fun knownDocuments(): List<String>
 
+    /**
+     * Remove a document entirely: its state and anything queued for it.
+     *
+     * For leaving a keyring somebody else shared. "Remove it from my vault"
+     * has to mean the passwords go, not merely that they stop being listed —
+     * the same reason [VaultOp.ItemPurge] blanks fields rather than only
+     * tombstoning. A genuine deletion rather than a tombstone because nothing
+     * has to converge on it: the document belongs to somebody else, and this
+     * device is simply no longer carrying a copy.
+     *
+     * Must refuse the vault. Nothing should be able to ask for that by passing
+     * an empty string it did not mean to pass.
+     */
+    suspend fun forgetDocument(documentId: String)
+
     /** Persisted causal time, so a restart cannot rewind the clock. */
     suspend fun readClock(): Hlc?
 
@@ -159,6 +174,12 @@ class MemoryVaultStorage : VaultStorage {
 
     override suspend fun knownDocuments(): List<String> =
         (states.keys + outboxes.keys).filter { it != VAULT_DOCUMENT }.sorted()
+
+    override suspend fun forgetDocument(documentId: String) {
+        require(documentId != VAULT_DOCUMENT) { "The vault itself cannot be forgotten." }
+        states.remove(documentId)
+        outboxes.remove(documentId)
+    }
 
     override suspend fun pending(documentId: String): List<VaultOp> =
         outboxFor(documentId).toList()

@@ -1,6 +1,6 @@
 {
     "note": "Sealed by the Kotlin implementation. TypeScript must open it with the code below.",
-    "recoveryCode": "CSYV-XWM2-9F50-KFK6-9SFT-WA0J-FVBM-CPE0",
+    "recoveryCode": "M06H-KHWF-5VT1-MW85-8TSW-WXQP-CDAP-6MQN",
     "fingerprint": "v1:chase|001700000000000-00001-android-fixture:ring|001700000000000-00001-android-fixture:false|folder=001700000000000-00001-android-fixture:Banking / Personal,password=001700000000000-00001-android-fixture:sealed-on-android,title=001700000000000-00001-android-fixture:Chase Bank#ring|001700000000000-00000-android-fixture:Household|000000000000000-00000-:false",
     "envelope": {
         "schemaVersion": 1,
@@ -8,10 +8,10 @@
         "compression": "gzip",
         "credentialId": "recovery",
         "rpId": "keyweb",
-        "prfInput": "SmHuf7dik8Egb92deSBLy1is-QM8cdsoCjlPrtKZRrc",
-        "kdfSalt": "3kZzn0PKQCbKNKRBUD0jbaZP6jlF0guBILBCGhp-h3k",
-        "nonce": "Br8WqG5KAS2M0ASx",
-        "ciphertext": "hFrjMnzZv771pVevQrLOdqb_q2hGBHZvO7p9DeS0WwD2HKi9KKNd_NTq1AUS2MZptwYy_MHFZBfGyYJv4PX5o8mSGVQXIXExe2kaROBeYySiujiYRmJ24YaxF-m5iIwMOT05S2e0LkdcYNKJoI-MmKr1Bl-mojx2Q2xj18S4UN0l8T6mb0L70Af1eczc1zpjrleIW5gSzA1XD8o1Pbpk00tUIOqzkIR7cmiQ3JUG6qCbCge5cNRnNCZsSmPvZdRUuTCihwHyY9KGLmBVEUhUyiP8u6BHc_ZEpkPS0ezGQyI98R5cSEVXIA",
+        "prfInput": "9P0j6onf1YEBEghAKXdOeH-kffCHuifklKkb0CJzk5U",
+        "kdfSalt": "IDJH_nkjH3dtdO2IyyUpYcoR9Mg6gRGmIUO5P8IehDo",
+        "nonce": "ddprX6kgCfwdaQki",
+        "ciphertext": "ZsbWOM2-Z6eV3HBUP2I2XnmzUFCaUKenOS5PcQ4rttaau4sP6AzwnkV8GXebMwwXsxYimbLW2ZMTLcyL6VlfZhIHCQpeOtsdkAqNxOznyqwz4yorl-lI7BSRmHfQ8EU1TDcKX_9vOrHR3aTIclqVSslwDbbdbtDwabBQoHgjBOUigstAGg7nPinH8Z9I_RGBAjmAKB_kf65aiP_v6nw3JfdDdvHsPSdnwHI8ALh0lWudLD5GZkY121TQn2VlaNTYWW8RQw0-AE3K42x1ecvJRDEGW8DsNiiBZPDq3mrpYm1siLrTjoSR3A",
         "updatedAt": "2026-01-01T00:00:00.000Z"
     }
 }

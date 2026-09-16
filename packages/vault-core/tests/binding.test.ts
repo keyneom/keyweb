@@ -242,6 +242,28 @@ describe("leaving a keyring someone else shared", () => {
     expect(vault.keyrings["house"]?.deleted.value).toBe(true);
     expect(datasetRemote.snapshot().keyrings["house"]?.deleted.value).toBe(false);
   });
+
+  /**
+   * "Remove it from my vault" has to mean the passwords go. An unlisted copy
+   * left on the device is worse than a visible one, because nothing would ever
+   * prompt anyone to remove it.
+   */
+  it("takes the local copy of their passwords with it", async () => {
+    const { storage, sync } = await withHousehold();
+    await sync.bindKeyring("house", "ds-house");
+    expect(await storage.knownDocuments()).toEqual(["ds-house"]);
+
+    await sync.leaveKeyring("house");
+
+    expect(await storage.knownDocuments()).toEqual([]);
+    expect(await storage.readState("ds-house")).toEqual({ items: {}, keyrings: {} });
+    expect(await storage.pending("ds-house")).toEqual([]);
+  });
+
+  it("refuses to forget the vault itself", async () => {
+    const { storage } = await withHousehold();
+    await expect(storage.forgetDocument("")).rejects.toThrow(/cannot be forgotten/);
+  });
 });
 
 describe("moving a password across documents", () => {

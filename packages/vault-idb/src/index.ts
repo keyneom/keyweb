@@ -194,6 +194,33 @@ export class IndexedDbVaultStorage implements VaultStorage {
   }
 
   /**
+   * Remove a document entirely: its state row and everything queued for it.
+   *
+   * For leaving a keyring somebody else shared. "Remove it from my vault" has
+   * to mean the passwords go, not merely that they stop being listed.
+   *
+   * One transaction, and the outbox is cleared first within it, so there is no
+   * moment where queued operations name a document whose state has gone.
+   */
+  async forgetDocument(documentId: string): Promise<void> {
+    if (documentId === VAULT_DOCUMENT) {
+      throw new Error("The vault itself cannot be forgotten.");
+    }
+    await this.#withLock(async () => {
+      const tx = this.#db.transaction([META, OUTBOX], "readwrite");
+      const outbox = tx.objectStore(OUTBOX);
+      const rows = await request<Required<OutboxRow>[]>(outbox.getAll());
+      for (const row of rows) {
+        if ((row.document ?? VAULT_DOCUMENT) === documentId && row.seq !== undefined) {
+          outbox.delete(row.seq);
+        }
+      }
+      tx.objectStore(META).delete(stateKey(documentId));
+      await committed(tx);
+    });
+  }
+
+  /**
    * Write the state and append the operation together, but only if the state
    * has not moved since `expectedRevision`. Returns false so the caller can
    * re-derive and retry rather than overwrite a concurrent write.

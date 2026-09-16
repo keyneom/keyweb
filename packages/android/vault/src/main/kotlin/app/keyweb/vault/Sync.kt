@@ -398,11 +398,22 @@ class VaultSync(
      */
     suspend fun leaveKeyring(keyringId: String): VaultState {
         val vault = storage.readState()
+        val datasetId = datasetOf(vault.keyrings[keyringId])
         val ops = listOf(
             VaultOp.KeyringBind(newId(), clock.now(), keyringId, ""),
             VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
         )
         storage.commitAll(ops, applyOps(vault, ops), VAULT_DOCUMENT)
+
+        // The local copy goes too. Leaving it would mean "remove it from my
+        // vault" left every password in it sitting on the device — listed
+        // nowhere, which is worse than visible, because nothing would ever
+        // prompt anyone to remove it. Second, and after the vault write: a
+        // crash in between leaves a document nothing points at, which the next
+        // leave clears, rather than a binding pointing at a document that has
+        // gone.
+        if (datasetId != null) storage.forgetDocument(datasetId)
+
         storage.writeClock(clock.snapshot())
         refreshPending()
         return state()

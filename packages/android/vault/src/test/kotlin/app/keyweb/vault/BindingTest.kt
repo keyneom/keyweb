@@ -243,6 +243,30 @@ class BindingTest {
         assertTrue(rig.storage.readState(VAULT_DOCUMENT).keyrings.getValue("house").deleted.value)
     }
 
+    /**
+     * "Remove it from my vault" has to mean the passwords go. An unlisted copy
+     * left on the device is worse than a visible one, because nothing would
+     * ever prompt anyone to remove it.
+     */
+    @Test
+    fun `leaving takes the local copy of their passwords with it`() = runTest {
+        val rig = household()
+        rig.sync.bindKeyring("house", "ds-house")
+        assertEquals(listOf("ds-house"), rig.storage.knownDocuments())
+
+        rig.sync.leaveKeyring("house")
+
+        assertEquals(emptyList(), rig.storage.knownDocuments())
+        assertEquals(emptyVault(), rig.storage.readState("ds-house"))
+        assertEquals(emptyList(), rig.storage.pending("ds-house"))
+    }
+
+    @Test
+    fun `refuses to forget the vault itself`() = runTest {
+        val rig = household()
+        assertFailsWith<IllegalArgumentException> { rig.storage.forgetDocument(VAULT_DOCUMENT) }
+    }
+
     @Test
     fun `moving a password out of a shared keyring takes it away`() = runTest {
         val rig = household()

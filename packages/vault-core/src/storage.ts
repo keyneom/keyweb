@@ -62,6 +62,20 @@ export interface VaultStorage {
    * bound on another device arrives before its document does.
    */
   knownDocuments(): Promise<string[]>;
+  /**
+   * Remove a document entirely: its state and anything queued for it.
+   *
+   * For leaving a keyring somebody else shared. "Remove it from my vault" has
+   * to mean the passwords go, not merely that they stop being listed — the
+   * same reason `item.purge` blanks fields rather than only tombstoning. It is
+   * a genuine deletion rather than a tombstone because nothing has to converge
+   * on it: the document belongs to somebody else, and this device is simply no
+   * longer carrying a copy.
+   *
+   * Refuses the vault. Nothing should be able to ask for that by passing an
+   * empty string it did not mean to pass.
+   */
+  forgetDocument(documentId: string): Promise<void>;
   /** Persisted causal time, so a restart cannot rewind the clock. */
   readClock(): Promise<Hlc | undefined>;
   writeClock(value: Hlc): Promise<void>;
@@ -153,6 +167,14 @@ export class MemoryVaultStorage implements VaultStorage {
     const ids = new Set([...this.#states.keys(), ...this.#outboxes.keys()]);
     ids.delete(VAULT_DOCUMENT);
     return [...ids].sort();
+  }
+
+  async forgetDocument(documentId: string): Promise<void> {
+    if (documentId === VAULT_DOCUMENT) {
+      throw new Error("The vault itself cannot be forgotten.");
+    }
+    this.#states.delete(documentId);
+    this.#outboxes.delete(documentId);
   }
 
   #outbox(documentId: string): OutboxEntry[] {

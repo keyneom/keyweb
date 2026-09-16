@@ -218,6 +218,7 @@ describe("crash safety", () => {
       },
       commitAll: (...args: Parameters<typeof storage.commitAll>) => storage.commitAll(...args),
       knownDocuments: () => storage.knownDocuments(),
+      forgetDocument: (id: string) => storage.forgetDocument(id),
       readClock: () => storage.readClock(),
       writeClock: (value: string) => storage.writeClock(value),
     };
