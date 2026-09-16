@@ -3,6 +3,17 @@ import { CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
 import { ItemEdit } from "./screens/ItemEdit";
 import { Grant } from "./screens/Grant";
+import { AcceptShare } from "./screens/AcceptShare";
+import { JoinShare } from "./screens/JoinShare";
+import { ShareKeyring } from "./screens/ShareKeyring";
+import {
+  parseJoinLink,
+  parseResponseLink,
+  stripShareLinkParams,
+  type KeywebJoinLink,
+} from "./vault/sharing/links";
+import { datasetOf } from "@keyweb/vault-core";
+import type { SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
@@ -19,7 +30,8 @@ type Route =
   | { name: "edit"; itemId: string | null }
   | { name: "keyrings" }
   | { name: "settings" }
-  | { name: "import" };
+  | { name: "import" }
+  | { name: "share"; keyringId: string };
 
 export function App() {
   const vault = useVault();
@@ -50,10 +62,39 @@ export function App() {
       new URLSearchParams(window.location.search).get("grant") === "import",
   );
 
+  /**
+   * A share link this page was opened with.
+   *
+   * Read once into state and then wiped from the address bar. Left there, a
+   * reload would re-run the flow — and a share link sitting in the history of
+   * a shared computer outlives the moment it was useful.
+   *
+   * Unlike the Drive grant handoff above, both of these need a vault: joining
+   * puts a keyring into one, and accepting needs the invitation this device
+   * sent. So they are held until the vault is open rather than shown in front
+   * of it.
+   */
+  const [joining, setJoining] = useState<KeywebJoinLink | null>(() =>
+    typeof window === "undefined" ? null : parseJoinLink(window.location.search),
+  );
+  const [accepting, setAccepting] = useState<SharingPublicKeyResponseV1 | null>(() =>
+    typeof window === "undefined"
+      ? null
+      : (parseResponseLink(window.location.search)?.response ?? null),
+  );
+
   // Consumed from the address bar so a refresh does not reopen the handoff.
   useEffect(() => {
     if (granting) window.history.replaceState({}, "", window.location.pathname);
   }, [granting]);
+
+  useEffect(() => {
+    if (!joining && !accepting) return;
+    window.history.replaceState({}, "", stripShareLinkParams(new URL(window.location.href)));
+    // Once: the parameters are already in state, and re-running would only
+    // rewrite an address bar that no longer has them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (toast === null) return;
@@ -121,6 +162,33 @@ export function App() {
     return (
       <main className="app">
         <RecoverySheet code={vault.newRecoveryCode} onDone={vault.dismissRecoveryCode} />
+      </main>
+    );
+  }
+
+  // The two link landings, ahead of the ordinary screens: somebody who opened
+  // a share link came here to finish it, not to browse their passwords.
+  if (joining && vault.sharing) {
+    return (
+      <main className="app">
+        <JoinShare
+          invite={joining}
+          sharing={vault.sharing}
+          onToast={setToast}
+          onDone={() => setJoining(null)}
+        />
+      </main>
+    );
+  }
+
+  if (accepting && vault.sharing) {
+    return (
+      <main className="app">
+        <AcceptShare
+          response={accepting}
+          sharing={vault.sharing}
+          onDone={() => setAccepting(null)}
+        />
       </main>
     );
   }
@@ -194,10 +262,24 @@ export function App() {
         />
       )}
 
+      {route.name === "share" &&
+        vault.sharing &&
+        vault.state.keyrings[route.keyringId] && (
+          <ShareKeyring
+            keyring={vault.state.keyrings[route.keyringId]!}
+            datasetId={datasetOf(vault.state.keyrings[route.keyringId])}
+            sharing={vault.sharing}
+            onToast={setToast}
+            onBack={() => setRoute({ name: "keyrings" })}
+          />
+        )}
+
       {route.name === "keyrings" && (
         <Keyrings
           state={vault.state}
           items={vault.items}
+          canShare={vault.sharing !== null}
+          onShare={(keyringId) => setRoute({ name: "share", keyringId })}
           onBack={() => setRoute({ name: "list" })}
           onAdd={async (name) => {
             await vault.addKeyring(name);
@@ -219,6 +301,7 @@ export function App() {
           onAppearance={display.setAppearance}
           onBack={() => setRoute({ name: "list" })}
           onImport={() => setRoute({ name: "import" })}
+          sharing={vault.sharing}
         />
       )}
 

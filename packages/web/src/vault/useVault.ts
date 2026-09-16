@@ -21,6 +21,20 @@ import {
   parseRecoveryCode,
 } from "./recovery";
 import { GoogleDriveRemote } from "./drive";
+import {
+  createKeywebSharingController,
+  createSharingIdentity,
+  KeywebSharing,
+  SharedKeyringRemote,
+  type Member,
+  type PendingInvite,
+  type ShareRole,
+} from "./sharing";
+import { grantSharedFiles } from "./sharing/picker";
+
+export type { Member, PendingInvite, ShareRole } from "./sharing";
+import type { SharingDatasetFileV1, SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
+import type { SharingInvitationV1 } from "@keyneom/sync-kit/sharing";
 import { importOperations } from "./keepass";
 import type { ImportPreview, UngroupedDestination } from "./keepass";
 
@@ -99,6 +113,43 @@ export type VaultApi = {
   addKeyring(name: string): Promise<string>;
   /** Copy a parsed KeePass file in. Returns how many entries landed. */
   importKeePass(preview: ImportPreview, ungrouped: UngroupedDestination): Promise<number>;
+  /**
+   * Sharing, or null when this build has no Google client and so no Drive.
+   *
+   * Null rather than a stubbed object that throws: a keyring can only be shared
+   * through a Drive file, so a build without one cannot share at all, and the
+   * screens should not offer a button that apologises when pressed.
+   */
+  sharing: SharingApi | null;
+};
+
+/** What the sharing screens need, with the identity and controller already wired. */
+export type SharingApi = {
+  myFingerprint(): Promise<string>;
+  shareKeyring(input: {
+    keyringId: string;
+    email: string;
+    role: ShareRole;
+  }): Promise<{ link: string; exchangeId: string }>;
+  joinFromLink(input: {
+    invitation: SharingInvitationV1;
+    files: SharingDatasetFileV1[];
+    label: string | null;
+  }): Promise<{ link: string }>;
+  acceptResponse(response: SharingPublicKeyResponseV1): Promise<{
+    label: string;
+    email: string;
+    fingerprint: string;
+  }>;
+  members(datasetId: string): Promise<Member[]>;
+  setRole(input: { datasetId: string; keyId: string; role: ShareRole }): Promise<void>;
+  revoke(input: { datasetId: string; keyId: string }): Promise<void>;
+  pendingInvites(keyringId?: string): Promise<PendingInvite[]>;
+  cancelInvite(exchangeId: string): Promise<void>;
+  /** Stop sharing a keyring of your own and bring its passwords home. */
+  stopSharing(keyringId: string): Promise<void>;
+  /** Stop carrying a keyring somebody else shared. */
+  leave(keyringId: string): Promise<void>;
 };
 
 /**
@@ -146,6 +197,8 @@ export function useVault(): VaultApi {
   const storageRef = useRef<IndexedDbVaultStorage | null>(null);
   const cipherRef = useRef<VaultCipher | null>(null);
   const remoteRef = useRef<GoogleDriveRemote | null>(null);
+  const sharingRef = useRef<KeywebSharing | null>(null);
+  const [sharing, setSharing] = useState<SharingApi | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,10 +217,37 @@ export function useVault(): VaultApi {
     };
   }, []);
 
+  /** Re-read everything after a sharing change moved passwords between files. */
+  const refreshFromEngine = useCallback(async () => {
+    const sync = syncRef.current;
+    if (!sync) return;
+    setState(await sync.state());
+    setStatus({ ...sync.status() });
+  }, []);
+
   const refresh = useCallback((next: VaultState) => {
     setState(next);
     const sync = syncRef.current;
     if (sync) setStatus({ ...sync.status() });
+  }, []);
+
+  /**
+   * Pick up a shared keyring that has become readable.
+   *
+   * Run after a sync rather than on a timer, because "readable" changes only
+   * when Drive says so — and by then there is already a token in hand, so this
+   * never causes a sign-in popup nobody asked for.
+   */
+  const adoptShared = useCallback(async () => {
+    const engine = sharingRef.current;
+    if (!engine) return false;
+    try {
+      return (await engine.adoptJoinedKeyrings()).length > 0;
+    } catch {
+      // A share that is not ready yet is the normal case, not an error worth
+      // showing. It will be ready on some later sync.
+      return false;
+    }
   }, []);
 
   /** Publish in the background; the UI already showed "Saved" from the commit. */
@@ -175,10 +255,13 @@ export function useVault(): VaultApi {
     const sync = syncRef.current;
     if (!sync || !BACKUP_CONFIGURED) return;
     void sync.sync().then(
-      () => setStatus({ ...sync.status() }),
+      async () => {
+        if (await adoptShared()) setState(await sync.state());
+        setStatus({ ...sync.status() });
+      },
       () => setStatus({ ...sync.status() }),
     );
-  }, []);
+  }, [adoptShared]);
 
   /** Shared tail of unlock and restore: open storage and start the engine. */
   const start = useCallback(
@@ -232,8 +315,43 @@ export function useVault(): VaultApi {
           })
         : new UnconfiguredRemote();
       remoteRef.current = remote instanceof GoogleDriveRemote ? remote : null;
-      const sync = new VaultSync({ storage, remote, clock });
+
+      // Sharing is wired in before the engine starts, because the engine asks
+      // for a dataset's remote the first time it syncs one — and a keyring
+      // bound on another device can already be waiting in the vault it is
+      // about to pull down.
+      //
+      // One identity object, not one per user of it. It holds the unlocked
+      // keypair for the session and serialises the passkey prompt; two of them
+      // would mean two prompts for one operation, and the second would arrive
+      // while the first was still on screen.
+      const identity = BACKUP_CONFIGURED
+        ? createSharingIdentity(await peekSealedState())
+        : null;
+      const controller = identity ? createKeywebSharingController(identity) : null;
+      const datasetRemotes = new Map<string, SharedKeyringRemote>();
+      const sync = new VaultSync({
+        storage,
+        remote,
+        clock,
+        remoteFor: (documentId) => {
+          if (!controller || documentId === "") return documentId === "" ? remote : null;
+          const existing = datasetRemotes.get(documentId);
+          if (existing) return existing;
+          // Held rather than rebuilt, so the "is this file there" answer is
+          // not re-derived on every sync of every shared keyring.
+          const created = new SharedKeyringRemote(controller, documentId);
+          datasetRemotes.set(documentId, created);
+          return created;
+        },
+      });
       syncRef.current = sync;
+
+      if (controller && identity) {
+        const engine = new KeywebSharing({ sync, controller, identity, store: storage });
+        sharingRef.current = engine;
+        setSharing(sharingApi(engine, sync, refreshFromEngine));
+      }
 
       let current = await sync.state();
       if (seedFromRemote) {
@@ -401,9 +519,10 @@ export function useVault(): VaultApi {
     const sync = syncRef.current;
     if (!sync) return;
     await sync.sync();
+    await adoptShared();
     setStatus({ ...sync.status() });
     setState(await sync.state());
-  }, []);
+  }, [adoptShared]);
 
   const saveItem = useCallback<VaultApi["saveItem"]>(
     async (input) => {
@@ -592,5 +711,53 @@ export function useVault(): VaultApi {
     deleteKeyring,
     addKeyring,
     importKeePass,
+    sharing,
+  };
+}
+
+/**
+ * The sharing engine, wrapped so every operation that can change what is in
+ * the vault refreshes the screen afterwards.
+ *
+ * Sharing a keyring moves its passwords into another file, and leaving one
+ * takes it off the list. Both are invisible to the caller otherwise, because
+ * neither goes through the ordinary edit path.
+ */
+function sharingApi(
+  engine: KeywebSharing,
+  sync: VaultSync,
+  refresh: () => Promise<void>,
+): SharingApi {
+  return {
+    myFingerprint: () => engine.myFingerprint(),
+    async shareKeyring(input) {
+      const result = await engine.shareKeyring(input);
+      await refresh();
+      return result;
+    },
+    joinFromLink: (input) =>
+      engine.joinFromLink({ ...input, grantAccess: grantSharedFiles }),
+    async acceptResponse(response) {
+      const result = await engine.acceptResponse(response);
+      await refresh();
+      return result;
+    },
+    members: (datasetId) => engine.members(datasetId),
+    async setRole(input) {
+      await engine.setRole(input);
+    },
+    async revoke(input) {
+      await engine.revoke(input);
+    },
+    pendingInvites: (keyringId) => engine.pendingInvites(keyringId),
+    cancelInvite: (exchangeId) => engine.cancelInvite(exchangeId),
+    async stopSharing(keyringId) {
+      await sync.unbindKeyring(keyringId);
+      await refresh();
+    },
+    async leave(keyringId) {
+      await sync.leaveKeyring(keyringId);
+      await refresh();
+    },
   };
 }

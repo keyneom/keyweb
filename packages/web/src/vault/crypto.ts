@@ -168,3 +168,19 @@ export async function createRecoveryCipher(
     openOp: (stored) => opCrypto.decrypt(asEnvelope(stored), key),
   };
 }
+
+/**
+ * Which passkey this vault is locked with.
+ *
+ * The sharing identity is wrapped by a key derived from the *same* passkey, so
+ * it needs the credential id the vault envelope already records. Reading it
+ * decrypts nothing — the envelope names its credential in the clear, which is
+ * what makes it openable on a device that has never seen it.
+ */
+export function vaultCredential(
+  sealedState: unknown,
+  rpId: string = keywebRpId(),
+): { credentialId: string; rpId: string } {
+  const metadata = stateCrypto.metadataFromEnvelope(asEnvelope(sealedState));
+  return { credentialId: metadata.credentialId, rpId: metadata.rpId || rpId };
+}

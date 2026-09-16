@@ -151,6 +151,17 @@ export class VaultSync {
     return datasets.size === 0 ? vault : composeVault(vault, datasets);
   }
 
+  /**
+   * One document's own state, without the rest of the vault composed in.
+   *
+   * For a caller that has to publish a document as its own thing — sharing a
+   * keyring is the one — where composing would hand over every other keyring
+   * as well.
+   */
+  documentState(documentId: string): Promise<VaultState> {
+    return this.#storage.readState(documentId);
+  }
+
   /** Every bound document this device actually holds. */
   async #readDatasets(vault: VaultState): Promise<Map<string, VaultState>> {
     const wanted = new Set(boundDatasets(vault).map((binding) => binding.datasetId));
@@ -402,21 +413,34 @@ export class VaultSync {
     const moving = this.#itemsOn(composed, keyringId);
     const relocations = moving.map((item) => this.#relocation(item, keyringId));
 
-    // The name goes into the dataset as a real operation, so an empty keyring
-    // still leaves the document with something pending and the status line can
-    // honestly say the move has not been backed up yet.
-    const datasetOps: VaultOp[] = [
-      {
-        kind: "keyring.put",
-        opId: this.#newId(),
-        ts: this.#clock.now(),
-        keyringId,
-        name: keyring.name.value,
-      },
-      ...relocations.map(([, put]) => put!),
-    ];
-    const dataset = applyOps(datasets.get(datasetId) ?? emptyVault(), datasetOps);
-    await this.#storage.commitAll(datasetOps, dataset, datasetId);
+    // Read rather than taken from the composed map, which only holds documents
+    // that are *already* bound. This one is not, and a document that has just
+    // been pulled down — a keyring somebody else shared — would otherwise be
+    // overwritten with an empty one.
+    const base = await this.#storage.readState(datasetId);
+
+    // The name is written into the dataset only when the dataset does not
+    // already agree with it. Writing it unconditionally would queue an
+    // operation a *reader* has no right to publish, and their status line
+    // would say "1 change still to back up" for as long as they kept the
+    // keyring.
+    const renames: VaultOp[] =
+      base.keyrings[keyringId]?.name.value === keyring.name.value
+        ? []
+        : [
+            {
+              kind: "keyring.put",
+              opId: this.#newId(),
+              ts: this.#clock.now(),
+              keyringId,
+              name: keyring.name.value,
+            },
+          ];
+    const datasetOps: VaultOp[] = [...renames, ...relocations.map(([, put]) => put!)];
+    const dataset = applyOps(base, datasetOps);
+    if (datasetOps.length > 0) {
+      await this.#storage.commitAll(datasetOps, dataset, datasetId);
+    }
 
     const vaultOps: VaultOp[] = [
       ...relocations.map(([tombstone]) => tombstone!),
@@ -435,6 +459,18 @@ export class VaultSync {
     await this.#storage.writeClock(this.#clock.snapshot());
     await this.#refreshPending();
     return composeVault(remaining, datasets);
+  }
+
+  /**
+   * Take a document's remote state in, for one that has just become readable.
+   *
+   * A keyring somebody shared exists in Drive before it exists here. This is
+   * how its contents arrive before there is any binding pointing at them — a
+   * join, in other words, not an assignment, so a document already holding
+   * something keeps it.
+   */
+  adoptDocument(documentId: string, state: VaultState): Promise<VaultState> {
+    return this.#storage.applyRemote(state, documentId);
   }
 
   /**

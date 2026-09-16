@@ -90,6 +90,15 @@ class VaultSync(
         return if (datasets.isEmpty()) vault else composeVault(vault, datasets)
     }
 
+    /**
+     * One document's own state, without the rest of the vault composed in.
+     *
+     * For a caller that has to publish a document as its own thing — sharing a
+     * keyring is the one — where composing would hand over every other keyring
+     * as well.
+     */
+    suspend fun documentState(documentId: String): VaultState = storage.readState(documentId)
+
     /** Every bound document this device actually holds. */
     private suspend fun readDatasets(vault: VaultState): Map<String, VaultState> {
         val wanted = boundDatasets(vault).map { it.datasetId }.toSet()
@@ -288,15 +297,25 @@ class VaultSync(
 
         val relocations = itemsOn(composed, keyringId).map { relocation(it, keyringId) }
 
-        // The name goes into the dataset as a real operation, so an empty
-        // keyring still leaves the document with something pending and the
-        // status line can honestly say the move is not backed up yet.
+        // Read rather than taken from the composed map, which only holds
+        // documents that are *already* bound. This one is not, and a document
+        // just pulled down — a keyring somebody else shared — would otherwise
+        // be overwritten with an empty one.
+        val base = storage.readState(datasetId)
+
+        // The name is written into the dataset only when the dataset does not
+        // already agree with it. Writing it unconditionally would queue an
+        // operation a *reader* has no right to publish, and their status line
+        // would say "1 change still to back up" for as long as they kept the
+        // keyring.
         val datasetOps = buildList {
-            add(VaultOp.KeyringPut(newId(), clock.now(), keyringId, keyring.name.value))
+            if (base.keyrings[keyringId]?.name?.value != keyring.name.value) {
+                add(VaultOp.KeyringPut(newId(), clock.now(), keyringId, keyring.name.value))
+            }
             for (pair in relocations) add(pair[1])
         }
-        val dataset = applyOps(datasets[datasetId] ?: emptyVault(), datasetOps)
-        storage.commitAll(datasetOps, dataset, datasetId)
+        val dataset = applyOps(base, datasetOps)
+        if (datasetOps.isNotEmpty()) storage.commitAll(datasetOps, dataset, datasetId)
 
         val vaultOps = buildList {
             for (pair in relocations) add(pair[0])
@@ -310,6 +329,17 @@ class VaultSync(
         refreshPending()
         return composeVault(remaining, datasets)
     }
+
+    /**
+     * Take a document's remote state in, for one that has just become readable.
+     *
+     * A keyring somebody shared exists in Drive before it exists here. This is
+     * how its contents arrive before there is any binding pointing at them — a
+     * join, in other words, not an assignment, so a document already holding
+     * something keeps it.
+     */
+    suspend fun adoptDocument(documentId: String, state: VaultState): VaultState =
+        storage.applyRemote(state, documentId)
 
     /**
      * Bring a keyring's passwords home and stop treating it as shared.

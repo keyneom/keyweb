@@ -1,8 +1,3 @@
-import { GoogleWebAuthorizationProvider } from "@keyneom/sync-kit/auth/google-web";
-import {
-  GOOGLE_DRIVE_APPDATA_SCOPE,
-  GOOGLE_DRIVE_FILE_SCOPE,
-} from "@keyneom/sync-kit/auth/google-web";
 import { GoogleDriveFileStore } from "@keyneom/sync-kit/stores/google-drive";
 import type { Authorization } from "@keyneom/sync-kit/core";
 import {
@@ -13,6 +8,7 @@ import {
   VersionConflictError,
 } from "@keyweb/vault-core";
 import type { VaultCipher } from "@keyweb/vault-idb";
+import { authorizeGoogle } from "./googleAuth";
 
 /**
  * Encrypted backup in the user's own Google Drive.
@@ -39,7 +35,7 @@ const FOLDER_NAME = "Keyweb";
 const FILE_NAME = "keyweb-vault-v1.json";
 const CONTENT_TYPE = "application/json";
 
-export const KEYWEB_SCOPES = `${GOOGLE_DRIVE_FILE_SCOPE} ${GOOGLE_DRIVE_APPDATA_SCOPE}`;
+export { KEYWEB_SCOPES } from "./googleAuth";
 
 /**
  * What actually sits in the Drive file.
@@ -111,15 +107,9 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     this.#store = options.store ?? new GoogleDriveFileStore();
     this.#cipher = options.cipher;
     this.#recoveryCipher = options.recoveryCipher ?? null;
-    this.#authorize =
-      options.authorize ??
-      (() => {
-        const provider = new GoogleWebAuthorizationProvider({
-          clientId: options.clientId,
-          scope: KEYWEB_SCOPES,
-        });
-        return provider.authorize();
-      });
+    // The page-wide authorizer, so the backup does not open a second popup
+    // after the Picker or the sharing identity already opened one.
+    this.#authorize = options.authorize ?? (() => authorizeGoogle(options.clientId));
   }
 
   /** Translate transport failures into the calm offline state. */

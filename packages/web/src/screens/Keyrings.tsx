@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ItemRecord, VaultState } from "@keyweb/vault-core";
+import { datasetOf, type ItemRecord, type VaultState } from "@keyweb/vault-core";
 import { BackIcon, PlusIcon } from "../ui/icons";
 import { ringColor } from "./VaultList";
 
@@ -9,12 +9,17 @@ export function Keyrings({
   onBack,
   onAdd,
   onDelete,
+  canShare,
+  onShare,
 }: {
   state: VaultState;
   items: ItemRecord[];
   onBack: () => void;
   onAdd: (name: string) => Promise<void>;
   onDelete: (keyringId: string) => Promise<void>;
+  /** False when this build has no Google account and so no way to share. */
+  canShare: boolean;
+  onShare: (keyringId: string) => void;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,6 +58,12 @@ export function Keyrings({
         {rings.map((r) => {
           const count = items.filter((item) => item.keyring.value === r.id).length;
           const last = rings.length === 1;
+          // A keyring in its own file is one that is shared, or is being got
+          // ready to be. Whether *you* shared it or somebody shared it with
+          // you is not something this list can know without asking Drive and
+          // your passkey, so it says the part it is sure of and the sharing
+          // screen says the rest.
+          const shared = datasetOf(r) !== null;
           return (
             <div key={r.id} className="row" style={{ cursor: "default" }}>
               <span
@@ -65,9 +76,24 @@ export function Keyrings({
               <span className="rowtext">
                 <b>{r.name.value}</b>
                 <span>
-                  {count} password{count === 1 ? "" : "s"} · only you
+                  {count} password{count === 1 ? "" : "s"} · {shared ? "shared" : "only you"}
                 </span>
               </span>
+              {canShare && (
+                <button
+                  type="button"
+                  className="iconbtn"
+                  disabled={busy}
+                  onClick={() => onShare(r.id)}
+                  aria-label={
+                    shared
+                      ? `Who can see the ${r.name.value} keyring`
+                      : `Share the ${r.name.value} keyring`
+                  }
+                >
+                  {shared ? "Sharing" : "Share"}
+                </button>
+              )}
               {/* Never the last one: every password lives in a keyring, so a
                   vault with none has nowhere to put the next one. */}
               {!last && (

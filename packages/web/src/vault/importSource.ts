@@ -1,10 +1,11 @@
-import { GoogleWebAuthorizationProvider } from "@keyneom/sync-kit/auth/google-web";
 import {
   GoogleDriveFolderPicker,
   type GoogleDrivePickedFile,
 } from "@keyneom/sync-kit/stores/google-drive/picker";
 import type { Authorization } from "@keyneom/sync-kit/core";
-import { KEYWEB_SCOPES } from "./drive";
+import { authorizeGoogle, hasDriveAccess } from "./googleAuth";
+
+export { hasDriveAccess };
 
 /**
  * Reaching a KeePass file that lives in Google Drive.
@@ -54,47 +55,8 @@ export class PickerUnavailable extends Error {
   }
 }
 
-/**
- * One provider for the page, not one per call.
- *
- * `GoogleWebAuthorizationProvider` caches its access token internally, so a
- * fresh instance per call threw that cache away and asked Google for a new
- * token every time — which means a popup for the Picker, another to read the
- * bytes, another to list. Holding one instance makes it a single sign-in that
- * the rest of the import rides on.
- */
-let provider: GoogleWebAuthorizationProvider | null = null;
-
-/**
- * Whether a token has been obtained in this page session.
- *
- * The provider gives no way to ask, and the question matters: every path to a
- * token goes through a popup, and browsers only allow popups during a user
- * gesture. Calling `authorize()` speculatively — on mount, say — is therefore
- * not a silent no-op that fails politely. It is a blocked popup, an error in
- * the console, and on some browsers a suppressed-popup bar the user has to
- * deal with, all for a list they did not ask for.
- */
-let authorized = false;
-
 async function authorize(): Promise<Authorization> {
-  provider ??= new GoogleWebAuthorizationProvider({
-    clientId: CLIENT_ID,
-    scope: KEYWEB_SCOPES,
-  });
-  const authorization = await provider.authorize();
-  authorized = true;
-  return authorization;
-}
-
-/**
- * True when listing would not have to open a popup.
- *
- * Callers refreshing on their own initiative check this first; callers acting
- * on a tap do not need to.
- */
-export function hasDriveAccess(): boolean {
-  return authorized;
+  return authorizeGoogle(CLIENT_ID);
 }
 
 /**
@@ -162,7 +124,7 @@ export async function listImportableFiles(
   if (!PICKER_CONFIGURED) throw new PickerUnavailable();
   // Asked for on a timer or a mount rather than a tap, and there is no token
   // yet: answer "nothing" rather than opening a popup nobody asked for.
-  if (!interactive && !authorized) return [];
+  if (!interactive && !hasDriveAccess()) return [];
   const authorization = await authorize();
 
   const params = new URLSearchParams({
