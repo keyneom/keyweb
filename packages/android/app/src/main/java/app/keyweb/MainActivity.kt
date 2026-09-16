@@ -40,6 +40,8 @@ import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.AcceptShareScreen
+import app.keyweb.ui.FileViewerScreen
+import app.keyweb.vault.field
 import app.keyweb.ui.JoinShareScreen
 import app.keyweb.ui.KeyringsScreen
 import app.keyweb.ui.ShareKeyringScreen
@@ -62,6 +64,7 @@ private sealed interface Route {
     data object Backup : Route
     data object Import : Route
     data class Share(val keyringId: String) : Route
+    data class File(val itemId: String, val blobId: String) : Route
 }
 
 class MainActivity : FragmentActivity() {
@@ -120,6 +123,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         is Route.Backup -> "backup"
                         is Route.Import -> "import"
                         is Route.Share -> "share:${it.keyringId}"
+                        is Route.File -> "file:${it.itemId}:${it.blobId}"
                     }
                 },
                 restore = {
@@ -129,6 +133,10 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         it == "backup" -> Route.Backup
                         it == "import" -> Route.Import
                         it.startsWith("share:") -> Route.Share(it.removePrefix("share:"))
+                        it.startsWith("file:") -> {
+                            val rest = it.removePrefix("file:")
+                            Route.File(rest.substringBefore(':'), rest.substringAfter(':'))
+                        }
                         it.startsWith("detail:") -> Route.Detail(it.removePrefix("detail:"))
                         it.startsWith("edit:") ->
                             Route.Edit(it.removePrefix("edit:").ifEmpty { null })
@@ -155,6 +163,28 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                 snackbar.showSnackbar(it)
                 viewModel.clearToast()
             }
+        }
+
+        /*
+         * Which password a picked file belongs to, and which file is being
+         * saved out. Held beside the launchers because the result arrives
+         * later, from the system, with nothing but a Uri attached.
+         */
+        var attaching by remember { mutableStateOf<String?>(null) }
+        var saving by remember { mutableStateOf<String?>(null) }
+        val pickFile = rememberLauncherForActivityResult(
+            ActivityResultContracts.GetContent(),
+        ) { uri ->
+            val itemId = attaching
+            attaching = null
+            if (uri != null && itemId != null) viewModel.attachFile(itemId, uri)
+        }
+        val saveFile = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/octet-stream"),
+        ) { uri ->
+            val blobId = saving
+            saving = null
+            if (uri != null && blobId != null) viewModel.saveAttachment(blobId, uri)
         }
 
         val clipboardScope = rememberCoroutineScope()
@@ -296,8 +326,25 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                                     viewModel.deleteItem(item.id) { route = Route.List }
                                 },
                                 onCopy = ::copy,
+                                onOpenFile = { route = Route.File(item.id, it) },
+                                onAttachFile = { attaching = item.id; pickFile.launch("*/*") },
+                                onRemoveFile = { viewModel.removeAttachment(item.id, it) },
                             )
                         }
+                    }
+
+                    is Route.File -> {
+                        val blob = ui.vault.items[current.blobId]
+                        FileViewerScreen(
+                            name = blob?.field("name") ?: "File",
+                            type = blob?.field("type"),
+                            data = blob?.field("secret:data"),
+                            onBack = { route = Route.Detail(current.itemId) },
+                            onSave = {
+                                saving = current.blobId
+                                saveFile.launch(blob?.field("name") ?: "file")
+                            },
+                        )
                     }
 
                     is Route.Edit -> ItemEditScreen(

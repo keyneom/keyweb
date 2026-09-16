@@ -51,7 +51,10 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
+import app.keyweb.vault.field
 import app.keyweb.vault.kdbx.KdbxOversized
+import app.keyweb.vault.kdbx.MAX_ATTACHMENT_BYTES
+import app.keyweb.vault.kdbx.blobIdFor
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
 import app.keyweb.vault.kdbx.KdbxReader
@@ -793,6 +796,92 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+
+    // ---- Files kept on a password -----------------------------------------
+
+    /**
+     * Attach a file the person picked.
+     *
+     * The keyring comes from the item rather than the caller, so a file always
+     * lands in the same document as the password it belongs to — which is what
+     * makes it travel when the keyring is shared.
+     */
+    fun attachFile(itemId: String, uri: android.net.Uri) {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?.use { it.readBytes() }
+                } ?: error("Keyweb couldn't read that file.")
+
+                if (bytes.size > MAX_ATTACHMENT_BYTES) {
+                    _state.value = _state.value.copy(
+                        toast = "That file is %.1f MB. Keyweb can hold files up to %d MB — ".format(
+                            bytes.size / 1024.0 / 1024.0,
+                            MAX_ATTACHMENT_BYTES / 1024 / 1024,
+                        ) + "anything larger would make saving a password slow every time.",
+                    )
+                    return@launch
+                }
+
+                val name = displayName(uri) ?: "file"
+                val keyringId = _state.value.vault.items[itemId]?.keyring?.value ?: return@launch
+                val next = engine.attachFile(
+                    itemId = itemId,
+                    keyringId = keyringId,
+                    blobId = blobIdFor(bytes),
+                    name = name,
+                    type = getApplication<Application>().contentResolver.getType(uri)
+                        ?: "application/octet-stream",
+                    data = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP),
+                )
+                publish(next, toast = "$name was added to this password.")
+                syncNow()
+            } catch (cause: Exception) {
+                _state.value = _state.value.copy(toast = describeShare(cause))
+            }
+        }
+    }
+
+    fun removeAttachment(itemId: String, blobId: String) {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            publish(
+                engine.removeAttachment(itemId, blobId),
+                toast = "That file was removed from your vault.",
+            )
+            syncNow()
+        }
+    }
+
+    /**
+     * Write a file out of the vault to somewhere the person chose.
+     *
+     * Deliberately the only way bytes leave: a saved file is outside
+     * everything the vault protects, which the screen says before offering it.
+     */
+    fun saveAttachment(blobId: String, uri: android.net.Uri) {
+        viewModelScope.launch {
+            val data = _state.value.vault.items[blobId]?.field("secret:data") ?: return@launch
+            try {
+                withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use {
+                        it.write(android.util.Base64.decode(data, android.util.Base64.DEFAULT))
+                    }
+                }
+                _state.value = _state.value.copy(toast = "Saved to this phone.")
+            } catch (cause: Exception) {
+                _state.value = _state.value.copy(toast = "Keyweb couldn't save that file.")
+            }
+        }
+    }
+
+    /** The name the picker gave the file, which is all we have to call it. */
+    private fun displayName(uri: android.net.Uri): String? =
+        getApplication<Application>().contentResolver
+            .query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 
     // ---- Sharing a keyring ------------------------------------------------
     //

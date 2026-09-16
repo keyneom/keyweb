@@ -40,6 +40,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +60,7 @@ import app.keyweb.vault.ItemField
 import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.KeyringRecord
 import app.keyweb.vault.SyncStatus
+import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
@@ -338,6 +341,9 @@ fun ItemDetailScreen(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onCopy: (String, String) -> Unit,
+    onOpenFile: (String) -> Unit = {},
+    onAttachFile: () -> Unit = {},
+    onRemoveFile: (String) -> Unit = {},
 ) {
     var revealed by remember { mutableStateOf(false) }
     val statusColors = LocalKeywebStatus.current
@@ -400,6 +406,10 @@ fun ItemDetailScreen(
                 ReadOnlyField("Note", it)
             }
 
+            item.field(Fields.OTP)?.takeIf { it.isNotBlank() }?.let { secret ->
+                OtpCode(secret) { onCopy(it, "The code") }
+            }
+
             /*
              * Everything else this item carries.
              *
@@ -421,11 +431,91 @@ fun ItemDetailScreen(
                     )
                 }
 
+            FilesSection(
+                item = item,
+                state = state,
+                onOpen = onOpenFile,
+                onAttach = onAttachFile,
+                onRemove = onRemoveFile,
+            )
+
             Spacer(Modifier.height(8.dp))
             SecondaryButton("Edit", onEdit, Modifier.padding(bottom = 10.dp))
             SecondaryButton("Delete this password", onDelete, danger = true)
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * The rotating second-factor code for a password.
+ *
+ * Behind a tap rather than on screen when the page opens, matching the
+ * password above it. `docs/two-factor.md` sets the rule: producing a code is a
+ * separate deliberate act, never something that happens alongside a password
+ * in one gesture — an attacker who gets one keystroke of assent should not get
+ * a whole sign-in.
+ *
+ * The countdown is there because a code with three seconds left will be
+ * rejected by the time somebody has typed it, and being told beforehand is the
+ * difference between waiting four seconds and thinking the code is wrong.
+ */
+@Composable
+private fun OtpCode(secret: String, onCopy: (String) -> Unit) {
+    val colors = LocalKeywebStatus.current
+    val config = remember(secret) { runCatching { Totp.parse(secret) }.getOrNull() }
+    var shown by remember(secret) { mutableStateOf(false) }
+    var code by remember(secret) { mutableStateOf("") }
+    var seconds by remember(secret) { mutableIntStateOf(0) }
+
+    if (config == null) {
+        // A seed that cannot be read is still the person's data, and is shown
+        // as the text it is rather than disappearing because we cannot use it.
+        ReadOnlyField("Second-factor code", secret)
+        Text(
+            "Keyweb can't turn this into a code. It came across from your other app exactly " +
+                "as it was, so nothing is lost.",
+            color = colors.attention,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+        return
+    }
+
+    // Once a second, so the countdown moves and the code changes the moment the
+    // window rolls over rather than up to thirty seconds late.
+    LaunchedEffect(shown, secret) {
+        while (shown) {
+            val now = System.currentTimeMillis()
+            code = runCatching { Totp.at(config, now) }.getOrDefault("")
+            seconds = Totp.secondsRemaining(config, now)
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    Column {
+        ReadOnlyField(
+            "Second-factor code",
+            if (shown && code.isNotEmpty()) Totp.group(code) else "••• •••",
+        )
+        Row {
+            TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") }
+            if (shown && code.isNotEmpty()) {
+                TextButton(onClick = { onCopy(code) }) { Text("Copy") }
+            }
+        }
+        Text(
+            when {
+                !shown -> "A new code every 30 seconds. Type it after your password."
+                seconds <= 5 ->
+                    "About to change — wait $seconds second${if (seconds == 1) "" else "s"} " +
+                        "for a fresh one."
+                else -> "Changes in $seconds seconds."
+            },
+            color = colors.muted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
     }
 }
 
@@ -438,6 +528,8 @@ fun ItemDetailScreen(
  */
 private val PRESENTED_FIELDS = setOf(
     Fields.TITLE, Fields.USERNAME, Fields.PASSWORD, Fields.URL, Fields.NOTE,
+    // Shown as a rotating code by `OtpCode`, not as a field of text.
+    Fields.OTP,
     Fields.FOLDER, Fields.TAGS, "kind",
 )
 
@@ -525,6 +617,14 @@ fun ItemEditScreen(
     var note by remember { mutableStateOf(item?.field(Fields.NOTE).orEmpty()) }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
     var generating by remember { mutableStateOf(false) }
+    /**
+     * Fields this person added themselves, or that came in from another app.
+     *
+     * A list rather than a map so a row keeps its identity while its name is
+     * being typed — keying on the name would rebuild the field on every
+     * keystroke, and take the cursor with it.
+     */
+    var extras by remember(item?.id) { mutableStateOf(editableFields(item)) }
 
     if (generating) {
         GeneratorSheet(
@@ -630,6 +730,58 @@ fun ItemEditScreen(
                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
             )
 
+            Spacer(Modifier.height(16.dp))
+            Text("Anything else", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Security questions, a backup PIN, an account number — whatever this login " +
+                    "needs that a username and password don't cover.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
+            extras.forEachIndexed { index, field ->
+                EditField(
+                    "What is it called?",
+                    field.name,
+                    { value ->
+                        extras = extras.mapIndexed { i, row ->
+                            if (i == index) row.copy(name = value) else row
+                        }
+                    },
+                    "Security question",
+                )
+                EditField(
+                    if (field.secret) "What is it? (hidden)" else "What is it?",
+                    field.value,
+                    { value ->
+                        extras = extras.mapIndexed { i, row ->
+                            if (i == index) row.copy(value = value) else row
+                        }
+                    },
+                    "",
+                    secret = field.secret,
+                )
+                Row(modifier = Modifier.padding(bottom = 8.dp)) {
+                    TextButton(
+                        onClick = {
+                            extras = extras.mapIndexed { i, row ->
+                                if (i == index) row.copy(secret = !row.secret) else row
+                            }
+                        },
+                    ) { Text(if (field.secret) "Hidden" else "Shown") }
+                    TextButton(
+                        onClick = { extras = extras.filterIndexed { i, _ -> i != index } },
+                    ) { Text("Remove", color = statusColors.risk) }
+                }
+            }
+
+            SecondaryButton(
+                "Add another field",
+                onClick = { extras = extras + EditableField("", "", false) },
+                Modifier.padding(bottom = 16.dp),
+            )
+
             PrimaryButton(
                 "Save",
                 onClick = {
@@ -642,7 +794,7 @@ fun ItemEditScreen(
                             Fields.PASSWORD to password,
                             Fields.URL to url,
                             Fields.NOTE to note,
-                        ),
+                        ) + customFields(item, extras),
                     )
                 },
                 enabled = canSave && !readOnly,
@@ -658,12 +810,19 @@ internal fun EditField(
     value: String,
     onChange: (String) -> Unit,
     placeholder: String,
+    /** Masks what is typed, for a field its owner marked as hidden. */
+    secret: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         placeholder = { Text(placeholder) },
+        visualTransformation = if (secret) {
+            androidx.compose.ui.text.input.PasswordVisualTransformation()
+        } else {
+            androidx.compose.ui.text.input.VisualTransformation.None
+        },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
@@ -1031,4 +1190,63 @@ private fun SelectionActions(
         SecondaryButton("Move to…", onAskMove, Modifier.weight(1f))
         SecondaryButton("Delete", onAskDelete, Modifier.weight(1f), danger = true)
     }
+}
+
+/** A custom field while it is being edited. */
+data class EditableField(val name: String, val value: String, val secret: Boolean)
+
+/**
+ * The fields Keyweb lays out itself, which are not editable as custom ones.
+ *
+ * `folder` and `tags` are structure the import maintains and `kind` picks the
+ * template; offering them as free text would let somebody move an item by
+ * typing in a box labelled "what is it called?".
+ */
+private val RESERVED_FIELDS = Fields.KNOWN
+
+private fun editableFields(item: ItemRecord?): List<EditableField> {
+    if (item == null) return emptyList()
+    return item.fields.entries
+        .filter { !RESERVED_FIELDS.contains(it.key) && !it.key.startsWith("file:") }
+        .map { (name, value) ->
+            EditableField(
+                // `secret:` and `custom:` are how the field is *stored*;
+                // neither is part of what it is called, and showing them would
+                // invite somebody to delete the prefix and wonder why the field
+                // stopped being hidden.
+                name = name.removePrefix("secret:").removePrefix("custom:"),
+                value = value.value,
+                secret = Fields.isSecret(name),
+            )
+        }
+        .sortedBy { it.name }
+}
+
+/**
+ * The custom fields to write, including the ones being removed.
+ *
+ * A removed field is written empty rather than left out. A CRDT has no way to
+ * say "this field is gone" except by writing a later value, and leaving it out
+ * would mean the old value stays and quietly comes back.
+ */
+private fun customFields(
+    item: ItemRecord?,
+    extras: List<EditableField>,
+): Map<ItemField, String> = buildMap {
+    for (before in editableFields(item)) put(storedName(before), "")
+    for (field in extras) {
+        if (field.name.isBlank()) continue
+        put(storedName(field), field.value)
+    }
+}
+
+/**
+ * Where a field is stored: hidden ones under `secret:`, which is what makes
+ * them masked, and anything colliding with a name Keyweb uses under `custom:`
+ * so it cannot act like the real one.
+ */
+private fun storedName(field: EditableField): ItemField {
+    val name = field.name.trim()
+    val safe = if (RESERVED_FIELDS.contains(name.lowercase())) "custom:$name" else name
+    return if (field.secret) "secret:$safe" else safe
 }
