@@ -394,10 +394,46 @@ export function Import({
             </div>
           )}
 
+          {stage.preview.versions > 0 && (
+            <p className="screen-sub" style={{ marginTop: "0.9rem" }}>
+              Earlier versions are coming too, so you can still see what a password used to be.
+            </p>
+          )}
+
+          {/*
+            The one thing that genuinely cannot come across, said plainly and
+            before the button rather than in a summary afterwards.
+
+            Somebody who is told which entries have files will keep their
+            original; somebody who is not told will delete it and find out
+            later. That difference is the entire reason this is on screen.
+          */}
+          {stage.preview.attachments.length > 0 && (
+            <p className="status" data-tone="attn" style={{ marginTop: "0.9rem" }}>
+              <AlertIcon />
+              <span>
+                <b>
+                  Keyweb can't store the {countFiles(stage.preview.attachments)} attached to{" "}
+                  {stage.preview.attachments.length}{" "}
+                  {stage.preview.attachments.length === 1 ? "entry" : "entries"} yet.
+                </b>
+                <em>
+                  Everything else comes across. Keep your original file until Keyweb can hold
+                  these: {stage.preview.attachments
+                    .flatMap((entry) => entry.names.map((name) => `${entry.title} — ${name}`))
+                    .join(", ")}
+                  .
+                </em>
+              </span>
+            </p>
+          )}
+
           {stage.preview.skipped > 0 && (
             <p className="screen-sub" style={{ marginTop: "0.9rem" }}>
-              {stage.preview.skipped} empty {stage.preview.skipped === 1 ? "entry was" : "entries were"}{" "}
-              skipped, along with anything in your KeePass recycle bin.
+              {stage.preview.skipped} completely empty{" "}
+              {stage.preview.skipped === 1 ? "entry was" : "entries were"} skipped, along with
+              anything in your KeePass recycle bin. Anything with something in it comes across,
+              even without a title or a password.
             </p>
           )}
           <div className="sticky-actions">
@@ -433,4 +469,10 @@ export function Import({
       )}
     </>
   );
+}
+
+/** "3 files" / "the file", for a sentence that has to read naturally either way. */
+function countFiles(attachments: { names: string[] }[]): string {
+  const total = attachments.reduce((sum, entry) => sum + entry.names.length, 0);
+  return total === 1 ? "file" : `${total} files`;
 }

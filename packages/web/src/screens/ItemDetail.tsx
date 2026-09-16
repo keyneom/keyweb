@@ -1,7 +1,22 @@
 import { useEffect, useState } from "react";
-import { itemField, type ItemRecord, type VaultState } from "@keyweb/vault-core";
+import {
+  isSecretField,
+  itemField,
+  type ItemField,
+  type ItemRecord,
+  type VaultState,
+} from "@keyweb/vault-core";
 import { CodeLegend, CodeText } from "../ui/CodeText";
 import { BackIcon, CopyIcon, EyeIcon } from "../ui/icons";
+
+/**
+ * The fields this screen already lays out by hand, above.
+ *
+ * `folder` and `tags` are structure rather than content and are shown in the
+ * list instead; `kind` picks the template. Everything not named here gets the
+ * generic treatment, which is what makes an imported field visible at all.
+ */
+const PRESENTED: readonly ItemField[] = ["title", "username", "password", "url", "note", "folder", "tags", "kind"];
 
 const CLIPBOARD_CLEAR_SECONDS = 45;
 const REVEAL_SECONDS = 30;
@@ -28,6 +43,20 @@ export function ItemDetail({
   const url = itemField(item, "url") ?? "";
   const note = itemField(item, "note") ?? "";
   const ring = state.keyrings[item.keyring.value];
+
+  /*
+   * Everything else this item carries.
+   *
+   * The screen used to render five fields and no more, which meant a vault
+   * could hold a security answer or a backup PIN — imported, synced, backed
+   * up — that its owner could never see. `ItemField` has always been
+   * open-keyed precisely so a field nobody anticipated survives; showing them
+   * is the other half of that promise.
+   */
+  const extras = Object.keys(item.fields)
+    .filter((name) => !(PRESENTED as readonly string[]).includes(name))
+    .filter((name) => (itemField(item, name) ?? "") !== "")
+    .sort();
 
   // Auto-hide, so a revealed password doesn't sit on screen indefinitely.
   useEffect(() => {
@@ -126,6 +155,15 @@ export function ItemDetail({
         </label>
       )}
 
+      {extras.map((name) => (
+        <ExtraField
+          key={name}
+          name={name}
+          value={itemField(item, name) ?? ""}
+          onCopy={(value, label) => void copy(value, label)}
+        />
+      ))}
+
       <div className="stack">
         <button type="button" className="btn sec big" onClick={onEdit}>
           Edit
@@ -135,5 +173,52 @@ export function ItemDetail({
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * A field Keyweb has no special presentation for.
+ *
+ * Masked when the name says it is a secret, which for anything imported from
+ * KeePass means the field its owner marked protected: those arrive as
+ * `secret:<name>`, so an answer to "first pet's name" is hidden here exactly
+ * as it was hidden there.
+ */
+function ExtraField({
+  name,
+  value,
+  onCopy,
+}: {
+  name: string;
+  value: string;
+  onCopy: (value: string, label: string) => void;
+}) {
+  const [shown, setShown] = useState(false);
+  const secret = isSecretField(name);
+  const label = name.replace(/^secret:/, "").replace(/^custom:/, "");
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <div className="box">
+        {secret && !shown ? (
+          <span className="mono secret-value" aria-label={`${label}, hidden`}>
+            {"\u2022".repeat(Math.min(value.length, 24))}
+          </span>
+        ) : (
+          <input value={value} readOnly aria-label={label} />
+        )}
+        {secret && (
+          <button type="button" className="iconbtn" onClick={() => setShown((v) => !v)}>
+            <EyeIcon />
+            {shown ? "Hide" : "Show"}
+          </button>
+        )}
+        <button type="button" className="iconbtn" onClick={() => onCopy(value, label)}>
+          <CopyIcon />
+          Copy
+        </button>
+      </div>
+    </label>
   );
 }

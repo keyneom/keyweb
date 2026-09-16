@@ -66,6 +66,17 @@ object Fields {
     const val FOLDER = "folder"
     const val TAGS = "tags"
 
+    /**
+     * The keys Keyweb gives special presentation to.
+     *
+     * The mirror of the web's `ITEM_FIELDS`. An imported field whose name
+     * collides with one of these is prefixed rather than allowed to overwrite
+     * it — a KeePass field called "folder" must not be able to move an entry.
+     */
+    val KNOWN: Set<String> = setOf(
+        TITLE, USERNAME, PASSWORD, URL, NOTE, OTP, FOLDER, TAGS, "kind",
+    )
+
     /** True for a field whose value must never be shown without asking. */
     fun isSecret(field: ItemField): Boolean =
         field == PASSWORD ||

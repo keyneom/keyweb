@@ -178,11 +178,50 @@ fun ImportScreen(
                         )
                     }
 
+                    if (state.versions > 0) {
+                        Text(
+                            "Earlier versions are coming too, so you can still see what a " +
+                                "password used to be.",
+                            color = status.muted,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+
+                    /*
+                     * The one thing that genuinely cannot come across, said
+                     * plainly and before the button rather than afterwards.
+                     *
+                     * Somebody told which entries have files will keep their
+                     * original; somebody not told will delete it and find out
+                     * later. That difference is the whole reason this is here.
+                     */
+                    if (state.attachments.isNotEmpty()) {
+                        val files = state.attachments.sumOf { it.names.size }
+                        Text(
+                            "Keyweb can't store the " +
+                                (if (files == 1) "file" else "$files files") +
+                                " attached to ${state.attachments.size} " +
+                                (if (state.attachments.size == 1) "entry" else "entries") +
+                                " yet. Everything else comes across — keep your original file " +
+                                "until Keyweb can hold these: " +
+                                state.attachments.joinToString(", ") { entry ->
+                                    entry.names.joinToString(", ") { "${entry.title} — $it" }
+                                } + ".",
+                            color = status.attention,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+
                     if (state.skipped > 0) {
                         Text(
-                            "${state.skipped} empty or deleted " +
+                            "${state.skipped} completely empty or deleted " +
                                 (if (state.skipped == 1) "entry was" else "entries were") +
-                                " skipped, along with anything in your KeePass recycle bin.",
+                                " skipped, along with anything in your KeePass recycle bin. " +
+                                "Anything with something in it comes across, even without a " +
+                                "title or a password.",
                             color = status.muted,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 10.dp),

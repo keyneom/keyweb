@@ -1,6 +1,8 @@
 import * as kdbxweb from "kdbxweb";
 import { argon2d, argon2i, argon2id } from "hash-wasm";
-import type { ItemField, VaultOp } from "@keyweb/vault-core";
+import { HISTORY_LIMIT, ITEM_FIELDS, type ItemField, type VaultOp } from "@keyweb/vault-core";
+import { formatOtp, parseOtp } from "./totp";
+import { decodeHlc, encodeHlc } from "@keyweb/vault-core";
 
 /**
  * Reading a KeePass / KeeWeb database.
@@ -76,6 +78,31 @@ export type ImportedEntry = {
   /** The full group path, e.g. "Banking / Personal". Empty when in no group. */
   folder: string;
   fields: Partial<Record<ItemField, string>>;
+  /**
+   * Earlier versions of this entry, oldest first.
+   *
+   * KeePass keeps the whole prior entry each time you change one; Keyweb keeps
+   * superseded *values* per field. Rather than translate between the two
+   * shapes, each version is replayed as an ordinary edit stamped at the time
+   * it actually happened, and the vault's own history falls out of that.
+   */
+  versions: ImportedVersion[];
+  /**
+   * Files attached to this entry in KeePass, by name.
+   *
+   * Named rather than carried, because Keyweb has nowhere to put them yet.
+   * Counting them is what turns silent loss into a decision: somebody who
+   * knows three entries have files will keep the original file, and somebody
+   * who is never told will delete it.
+   */
+  attachments: string[];
+};
+
+/** One earlier version of an entry, with the moment it was superseded. */
+export type ImportedVersion = {
+  /** Milliseconds since the epoch, from KeePass's own modification time. */
+  atMs: number;
+  fields: Partial<Record<ItemField, string>>;
 };
 
 /** Where the entries that are in no group should land. */
@@ -89,7 +116,19 @@ export type ImportPreview = {
   keyringNames: string[];
   /** How many entries sit at the database root, in no group. */
   ungrouped: number;
+  /**
+   * Entries with nothing in them at all — no fields, no files, no history.
+   *
+   * The only thing it is safe to leave behind. Anything with content is
+   * imported even if it has no title and no password, because "it had no
+   * password so we dropped it" is how a secure note full of account numbers
+   * disappears.
+   */
   skipped: number;
+  /** Entries carrying files, and the files they carry. Nothing stores these yet. */
+  attachments: { itemId: string; title: string; names: string[] }[];
+  /** How many earlier versions came across, for the preview to report. */
+  versions: number;
 };
 
 /**
@@ -120,6 +159,53 @@ export class UnreadableDatabase extends Error {
     super(message);
     this.name = "UnreadableDatabase";
   }
+}
+
+/**
+ * The five names KeePass gives every entry, which Keyweb has its own names for.
+ *
+ * Everything *not* in here is a field somebody added themselves — a security
+ * question, a backup PIN, an account number — and is exactly what used to be
+ * dropped. `ItemField` is deliberately open-keyed, so these need no schema
+ * change to carry: they come through under the name KeePass knew them by.
+ */
+const KDBX_STANDARD: Record<string, ItemField> = {
+  Title: "title",
+  UserName: "username",
+  Password: "password",
+  URL: "url",
+  Notes: "note",
+};
+
+/**
+ * Where a one-time-code seed hides.
+ *
+ * KeePass has no field for it, so every tool invented one. KeePassXC and
+ * KeeWeb write `otp`; the older KeePass plugin writes `TOTP Seed` with its
+ * settings alongside. All of them hold either an `otpauth://` URI or a bare
+ * base32 secret, and `parseOtp` already accepts both.
+ */
+const OTP_NAMES = new Set(["otp", "totp", "totp seed", "totp-seed", "otpauth"]);
+
+/** Settings that only make sense beside a seed we have already normalised. */
+const OTP_NOISE = new Set(["totp settings", "totp-settings"]);
+
+/**
+ * What to call an imported field inside Keyweb.
+ *
+ * A protected string becomes `secret:<name>`, which is what makes it masked
+ * on screen rather than printed beside the username — `isSecretField` keys off
+ * that prefix, so a KeePass field the user marked as protected stays
+ * protected here without anybody maintaining a list.
+ *
+ * A custom field whose name collides with one of Keyweb's own keys is
+ * prefixed rather than allowed to overwrite it. A KeePass field called
+ * "folder" must not be able to move the entry.
+ */
+function importedFieldName(name: string, protectedValue: boolean): ItemField {
+  const collides = (ITEM_FIELDS as readonly string[]).includes(name.toLowerCase());
+  const safe = collides ? `custom:${name}` : name;
+  return protectedValue ? `secret:${safe}` : safe;
 }
 
 function text(value: unknown): string {
@@ -158,8 +244,10 @@ export async function readKeePass(
 
   const entries: ImportedEntry[] = [];
   const keyringNames: string[] = [];
+  const attachments: ImportPreview["attachments"] = [];
   let ungrouped = 0;
   let skipped = 0;
+  let versionCount = 0;
 
   const walk = (group: kdbxweb.KdbxGroup, path: string[]) => {
     // KeePass keeps a recycle bin as a normal group; importing it would
@@ -174,25 +262,39 @@ export async function readKeePass(
     const top = here[1] ?? null;
 
     for (const entry of group.entries) {
-      const title = text(entry.fields.get("Title"));
-      const password = text(entry.fields.get("Password"));
-      if (!title && !password) {
+      const fields = readFields(entry);
+      const files = [...(entry.binaries?.keys() ?? [])].map(String);
+      const versions = readVersions(entry);
+
+      // The only entry safe to leave behind is one with nothing in it. The
+      // old rule dropped anything with no title and no password, which is
+      // how a secure note holding account numbers and a scanned document
+      // disappears from a vault somebody then deletes the original of.
+      const empty =
+        Object.values(fields).every((value) => !value) &&
+        files.length === 0 &&
+        versions.length === 0;
+      if (empty) {
         skipped += 1;
         continue;
       }
-      const fields: Partial<Record<ItemField, string>> = {
-        title: title || "Untitled",
-        username: text(entry.fields.get("UserName")),
-        password,
-        url: text(entry.fields.get("URL")),
-        note: text(entry.fields.get("Notes")),
-        // Drop the root group from the displayed path; its name is the
-        // database's, not a folder the user made. An entry at the root is in
-        // no folder, and says so by leaving this empty.
-        folder: here.slice(1).join(" / "),
-      };
+
+      fields.title = fields.title || "Untitled";
+      // Drop the root group from the displayed path; its name is the
+      // database's, not a folder the user made. An entry at the root is in
+      // no folder, and says so by leaving this empty.
+      fields.folder = here.slice(1).join(" / ");
       const tags = (entry.tags ?? []).filter(Boolean);
       if (tags.length > 0) fields.tags = tags.join(", ");
+
+      if (files.length > 0) {
+        attachments.push({
+          itemId: `kdbx:${entry.uuid.id}`,
+          title: fields.title,
+          names: files,
+        });
+      }
+      versionCount += versions.length;
 
       // Registered here rather than on entering the group, so the keyring
       // list is exactly the keyrings that will hold something. Registering on
@@ -207,6 +309,8 @@ export async function readKeePass(
         keyringName: top,
         folder: fields.folder ?? "",
         fields,
+        versions,
+        attachments: files,
       });
     }
 
@@ -215,7 +319,74 @@ export async function readKeePass(
 
   for (const group of db.groups) walk(group, []);
 
-  return { entries, keyringNames, ungrouped, skipped };
+  return { entries, keyringNames, ungrouped, skipped, attachments, versions: versionCount };
+}
+
+/**
+ * Every field on an entry, not the five Keyweb happens to have names for.
+ *
+ * This is the whole of the fix. KeePass entries carry whatever their owner
+ * put on them — security questions and their answers, backup PINs, account
+ * numbers, recovery codes — and the import used to read five keys and walk
+ * away from the rest without saying so.
+ */
+function readFields(entry: kdbxweb.KdbxEntry): Partial<Record<ItemField, string>> {
+  const fields: Partial<Record<ItemField, string>> = {};
+  for (const [rawName, rawValue] of entry.fields) {
+    const name = String(rawName);
+    const value = text(rawValue);
+    if (!value) continue;
+
+    const standard = KDBX_STANDARD[name];
+    if (standard) {
+      fields[standard] = value;
+      continue;
+    }
+
+    const lower = name.toLowerCase();
+    // Settings for a seed we are about to normalise into an otpauth URI, which
+    // carries its own digits and period. Keeping them would leave two sources
+    // of truth that can disagree.
+    if (OTP_NOISE.has(lower)) continue;
+    if (OTP_NAMES.has(lower)) {
+      // Both an `otpauth://` URI and a bare base32 seed end up as a URI, which
+      // is the shape Keyweb's own TOTP code reads.
+      try {
+        fields.otp = formatOtp(parseOtp(value));
+      } catch {
+        // Unreadable as a seed — but it is still the user's data, so it is
+        // carried through under its own name rather than thrown away.
+        fields[importedFieldName(name, isProtected(rawValue))] = value;
+      }
+      continue;
+    }
+
+    fields[importedFieldName(name, isProtected(rawValue))] = value;
+  }
+  return fields;
+}
+
+/**
+ * Earlier versions of an entry, oldest first.
+ *
+ * Capped at the vault's own history limit: KeePass will happily keep hundreds
+ * of versions per entry, and every one of them would become an operation in
+ * the outbox and a value in the encrypted vault forever.
+ */
+function readVersions(entry: kdbxweb.KdbxEntry): ImportedVersion[] {
+  const history = entry.history ?? [];
+  return history
+    .slice(-HISTORY_LIMIT)
+    .map((version) => ({
+      atMs: version.times?.lastModTime?.getTime() ?? 0,
+      fields: readFields(version),
+    }))
+    .filter((version) => version.atMs > 0 && Object.keys(version.fields).length > 0)
+    .sort((a, b) => a.atMs - b.atMs);
+}
+
+function isProtected(value: unknown): boolean {
+  return value instanceof kdbxweb.ProtectedValue;
 }
 
 /**
@@ -234,7 +405,7 @@ export function importOperations(
   ungroupedKeyringId: string,
   stamp: () => { opId: string; ts: string },
 ): VaultOp[] {
-  return preview.entries.map((entry) => {
+  return preview.entries.flatMap((entry) => {
     const { opId, ts } = stamp();
     // An entry either names a group, which the caller has mapped, or names
     // none and goes where the caller said ungrouped entries go. There is no
@@ -246,13 +417,50 @@ export function importOperations(
     if (!keyringId) {
       throw new Error(`No keyring was prepared for "${entry.keyringName}".`);
     }
-    return {
-      kind: "item.put",
-      opId,
-      ts,
-      itemId: entry.itemId,
-      keyringId,
-      fields: entry.fields,
-    } satisfies VaultOp;
+    /*
+     * Each earlier version is replayed as the edit it actually was, stamped
+     * at the moment KeePass recorded it.
+     *
+     * Nothing has to translate between the two history shapes, because the
+     * CRDT already keeps a superseded value whenever a later write replaces
+     * it — so replaying old, then new, produces exactly the history Keyweb
+     * would have had if the entry had been edited here all along.
+     *
+     * The timestamps are built directly rather than taken from the clock:
+     * asking the live clock for 2019 is impossible, and *observing* 2019
+     * would do nothing, while a KeePass file with a clock set to 2099 would
+     * otherwise pin this vault's clock forever. They are clamped below the
+     * stamp this import is landing at for the same reason.
+     */
+    // Decoded only when there is history to place, so a caller that supplies
+    // its own stamp shape is not forced to supply a real HLC for entries that
+    // have no history at all.
+    const base = entry.versions.length > 0 ? decodeHlc(ts) : null;
+    const history = (base === null ? [] : entry.versions).map((version, index) =>
+      ({
+        kind: "item.put",
+        opId: `${opId}:v${index}`,
+        ts: encodeHlc({
+          wall: Math.min(version.atMs, base!.wall - 1),
+          counter: index,
+          node: base!.node,
+        }),
+        itemId: entry.itemId,
+        keyringId,
+        fields: version.fields,
+      }) satisfies VaultOp,
+    );
+
+    return [
+      ...history,
+      {
+        kind: "item.put",
+        opId,
+        ts,
+        itemId: entry.itemId,
+        keyringId,
+        fields: entry.fields,
+      } satisfies VaultOp,
+    ];
   });
 }

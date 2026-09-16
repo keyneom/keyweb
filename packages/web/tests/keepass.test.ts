@@ -37,8 +37,14 @@ async function buildDatabase(): Promise<ArrayBuffer> {
   costco.fields.set("Title", "Costco");
   costco.fields.set("Password", kdbxweb.ProtectedValue.fromString("warehouse"));
 
-  const blank = db.createEntry(shopping);
-  blank.fields.set("UserName", "nothing-useful");
+  // A username with no password. KeePass lets you save one and people do —
+  // a membership number, an account with no password yet. The import used to
+  // drop it for having no password, which is the loss this file now guards.
+  const usernameOnly = db.createEntry(shopping);
+  usernameOnly.fields.set("UserName", "nothing-useful");
+
+  // Genuinely nothing in it, which is the only thing safe to leave behind.
+  db.createEntry(shopping);
 
   const binned = db.createEntry(personal);
   binned.fields.set("Title", "Old card");
@@ -103,12 +109,25 @@ describe("reading a KeePass or KeeWeb file", () => {
     expect(chase.fields.tags).toBe("finance, important");
   });
 
-  it("skips empty entries and anything in the recycle bin", async () => {
+  it("skips only entries with nothing in them, and the recycle bin", async () => {
     const preview = await readKeePass(await database(), MASTER);
     const titles = preview.entries.map((e) => e.fields.title);
     // Deliberately thrown away in KeePass; importing it would resurrect it.
     expect(titles).not.toContain("Old card");
-    expect(preview.skipped).toBeGreaterThan(0);
+    // Exactly one entry here is actually empty.
+    expect(preview.skipped).toBe(1);
+  });
+
+  /**
+   * An entry with a username and no password is not blank, and dropping it
+   * was data loss: somebody imports, sees a plausible count, deletes the
+   * original file, and the membership number they saved is gone.
+   */
+  it("keeps an entry that has a username but no password", async () => {
+    const preview = await readKeePass(await database(), MASTER);
+    const kept = preview.entries.find((e) => e.fields.username === "nothing-useful");
+    expect(kept).toBeDefined();
+    expect(kept?.fields.title).toBe("Untitled");
   });
 });
 
@@ -134,7 +153,7 @@ describe("importing into the vault", () => {
       ...ops,
     ]);
 
-    expect(visibleItems(state)).toHaveLength(2);
+    expect(visibleItems(state)).toHaveLength(3);
     const chase = Object.values(state.items).find(
       (item) => itemField(item, "title") === "Chase Bank",
     )!;

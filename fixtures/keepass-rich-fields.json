@@ -1,0 +1,72 @@
+{
+  "note": "Written by packages/web/scripts/emit-kdbx-parity-fixture.ts. Do not edit.",
+  "password": "correct horse battery staple",
+  "skipped": 0,
+  "keyringNames": [
+    "Banking"
+  ],
+  "entries": [
+    {
+      "itemId": "kdbx:8ITPc/Z39HdbV3XUAIz/lA==",
+      "fields": {
+        "folder": "Banking",
+        "otp": "otpauth://totp/Webmail%3Amaria?secret=JBSWY3DPEHPK3PXP&digits=6&period=30&algorithm=SHA1&issuer=Webmail",
+        "password": "mail-password",
+        "title": "Webmail",
+        "username": "maria@example.com"
+      },
+      "versions": 0,
+      "attachments": []
+    },
+    {
+      "itemId": "kdbx:CoL5cKYmaY42rrOAo1CkZg==",
+      "fields": {
+        "folder": "Banking",
+        "note": "Keep this somewhere safe",
+        "secret:Passport number": "X1234567",
+        "Sort code": "20-00-00",
+        "title": "Untitled"
+      },
+      "versions": 0,
+      "attachments": []
+    },
+    {
+      "itemId": "kdbx:n71i55Z93Dwp3qK3VOdUoQ==",
+      "fields": {
+        "folder": "Banking",
+        "password": "unused",
+        "title": "Recovery codes"
+      },
+      "versions": 0,
+      "attachments": [
+        "recovery-codes.txt"
+      ]
+    },
+    {
+      "itemId": "kdbx:U+8edy396WoiVTQtd8Dtpw==",
+      "fields": {
+        "custom:folder": "not-a-real-folder",
+        "custom:kind": "not-a-real-kind",
+        "folder": "Banking",
+        "password": "odd",
+        "title": "Odd names"
+      },
+      "versions": 0,
+      "attachments": []
+    },
+    {
+      "itemId": "kdbx:Yzvnt32hhuBsjS2fJU91QA==",
+      "fields": {
+        "Account number": "00112233",
+        "folder": "Banking",
+        "password": "current-password",
+        "secret:Security answer": "Rufus",
+        "Security question": "First pet's name",
+        "title": "Chase Bank",
+        "username": "maria@example.com"
+      },
+      "versions": 2,
+      "attachments": []
+    }
+  ]
+}

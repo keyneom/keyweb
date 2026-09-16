@@ -51,10 +51,16 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
+import app.keyweb.vault.kdbx.KdbxAttachment
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
 import app.keyweb.vault.kdbx.KdbxReader
+import app.keyweb.vault.kdbx.allFields
+import app.keyweb.vault.kdbx.kdbxFieldsToItemFields
 import app.keyweb.vault.kdbx.suggestedKeyringName
+import app.keyweb.vault.HlcParts
+import app.keyweb.vault.decodeHlc
+import app.keyweb.vault.encodeHlc
 import app.keyweb.vault.kdbx.WrongMasterPassword
 import app.keyweb.vault.emptyVault
 import app.keyweb.vault.visibleItems
@@ -122,6 +128,10 @@ data class ImportUiState(
     /** The keyrings already in the vault, to offer as a destination. */
     val existingKeyrings: List<Pair<String, String>> = emptyList(),
     val skipped: Int = 0,
+    /** Entries carrying files, and the files they carry. Nothing stores these yet. */
+    val attachments: List<KdbxAttachment> = emptyList(),
+    /** How many earlier versions came across, for the preview to report. */
+    val versions: Int = 0,
     val importedCount: Int = 0,
     val busy: Boolean = false,
     val error: String? = null,
@@ -1213,6 +1223,8 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         ),
                         existingKeyrings = rings,
                         skipped = file.skipped,
+                        attachments = file.attachments,
+                        versions = file.versions,
                         busy = false,
                     )
                 }
@@ -1300,6 +1312,40 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         "No keyring was prepared for \"${entry.keyringName}\"."
                     }
                     val stamp = engine.stamp()
+                    /*
+                     * Each earlier version is replayed as the edit it actually
+                     * was, stamped at the moment KeePass recorded it.
+                     *
+                     * Nothing translates between the two history shapes: the
+                     * CRDT already keeps a superseded value whenever a later
+                     * write replaces it, so replaying old then new produces
+                     * exactly the history this vault would have had if the
+                     * entry had been edited here all along.
+                     *
+                     * The timestamps are built rather than taken from the
+                     * clock. Asking a clock for 2019 is impossible, and
+                     * *observing* a KeePass file whose clock reads 2099 would
+                     * pin this vault's clock forever — so they are clamped
+                     * below the stamp this import is landing at.
+                     */
+                    val base = decodeHlc(stamp.ts)
+                    entry.versions.forEachIndexed { index, version ->
+                        val fields = kdbxFieldsToItemFields(version.fields, version.protectedKeys)
+                        if (fields.isEmpty()) return@forEachIndexed
+                        ops += VaultOp.ItemPut(
+                            opId = "${stamp.opId}:v$index",
+                            ts = encodeHlc(
+                                HlcParts(
+                                    wall = minOf(version.atMs, base.wall - 1),
+                                    counter = index,
+                                    node = base.node,
+                                ),
+                            ),
+                            itemId = "kdbx:${entry.uuid}",
+                            keyringId = keyringId,
+                            fields = fields,
+                        )
+                    }
                     ops += VaultOp.ItemPut(
                         opId = stamp.opId,
                         ts = stamp.ts,
@@ -1368,19 +1414,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
  * sensitive-sounding gets the `secret:` prefix so it stays masked.
  */
 private fun KdbxEntry.toFields(): Map<ItemField, String> = buildMap {
-    if (title.isNotEmpty()) put(Fields.TITLE, title)
-    if (username.isNotEmpty()) put(Fields.USERNAME, username)
-    if (password.isNotEmpty()) put(Fields.PASSWORD, password)
-    if (url.isNotEmpty()) put(Fields.URL, url)
-    if (note.isNotEmpty()) put(Fields.NOTE, note)
+    // The naming rule lives beside the reader, because the web reader has to
+    // agree with it exactly: the same file imported on a phone and in a
+    // browser lands in the same vault, and a field called `secret:Answer` on
+    // one side and `Answer` on the other is one field that has become two.
+    putAll(kdbxFieldsToItemFields(allFields(), protectedKeys))
+    // An entry with nothing in it is never imported, so a title always exists
+    // by the time anyone looks at one.
+    if (title.isEmpty()) put(Fields.TITLE, "Untitled")
     if (folder.isNotEmpty()) put(Fields.FOLDER, folder)
     if (tags.isNotEmpty()) put(Fields.TAGS, tags)
-    for ((key, value) in extra) {
-        if (value.isEmpty()) continue
-        // KeePass stores a TOTP key under one of these names; recognising it
-        // means the code shows up rather than sitting there as opaque text.
-        val looksLikeOtp = key.equals("otp", true) || key.equals("TOTP Seed", true) ||
-            key.startsWith("TOTP", true)
-        put(if (looksLikeOtp) Fields.OTP else "secret:$key", value)
-    }
 }

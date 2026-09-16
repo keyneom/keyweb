@@ -400,11 +400,65 @@ fun ItemDetailScreen(
                 ReadOnlyField("Note", it)
             }
 
+            /*
+             * Everything else this item carries.
+             *
+             * The screen used to render five fields and no more, which meant a
+             * vault could hold a security answer or a backup PIN — imported,
+             * synced, backed up — that its owner could never see. Field keys
+             * have always been open precisely so a field nobody anticipated
+             * survives; showing them is the other half of that promise.
+             */
+            item.fields.keys
+                .filter { it !in PRESENTED_FIELDS }
+                .filter { item.field(it)?.isNotBlank() == true }
+                .sorted()
+                .forEach { name ->
+                    ExtraField(
+                        label = name.removePrefix("secret:").removePrefix("custom:"),
+                        value = item.field(name).orEmpty(),
+                        secret = Fields.isSecret(name),
+                    )
+                }
+
             Spacer(Modifier.height(8.dp))
             SecondaryButton("Edit", onEdit, Modifier.padding(bottom = 10.dp))
             SecondaryButton("Delete this password", onDelete, danger = true)
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * The fields this screen already lays out by hand, above.
+ *
+ * `folder` and `tags` are structure rather than content and are shown in the
+ * list instead; `kind` picks the template. Everything not named here gets the
+ * generic treatment, which is what makes an imported field visible at all.
+ */
+private val PRESENTED_FIELDS = setOf(
+    Fields.TITLE, Fields.USERNAME, Fields.PASSWORD, Fields.URL, Fields.NOTE,
+    Fields.FOLDER, Fields.TAGS, "kind",
+)
+
+/**
+ * A field Keyweb has no special presentation for.
+ *
+ * Hidden behind a tap when the name says it is a secret, which for anything
+ * imported from KeePass means the field its owner marked protected: those
+ * arrive as `secret:<name>`, so an answer to "first pet's name" is masked here
+ * exactly as it was masked there.
+ */
+@Composable
+private fun ExtraField(label: String, value: String, secret: Boolean) {
+    var shown by remember(label) { mutableStateOf(false) }
+    if (!secret) {
+        ReadOnlyField(label, value)
+        return
+    }
+    Column {
+        ReadOnlyField(label, if (shown) value else "\u2022".repeat(minOf(value.length, 24)))
+        TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") }
     }
 }
 

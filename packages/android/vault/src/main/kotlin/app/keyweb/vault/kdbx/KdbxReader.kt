@@ -1,5 +1,9 @@
 package app.keyweb.vault.kdbx
 
+import app.keyweb.vault.Fields
+import app.keyweb.vault.HISTORY_LIMIT
+import app.keyweb.vault.ItemField
+import app.keyweb.vault.Totp
 import java.io.ByteArrayInputStream
 import java.util.Base64
 import javax.xml.parsers.DocumentBuilder
@@ -33,6 +37,56 @@ data class KdbxEntry(
     val tags: String,
     /** Anything the database held that Keyweb has no named field for. */
     val extra: Map<String, String>,
+    /**
+     * Which of [extra] the database marked protected.
+     *
+     * Carried because it decides the name the field lands under — a protected
+     * string becomes `secret:<name>` and stays masked, exactly as it was in
+     * KeePass. Guessing from the name instead would mask an account holder's
+     * name and reveal a field called "answer", and would disagree with the web
+     * reader about the same file, which syncs as two fields rather than one.
+     */
+    val protectedKeys: Set<String>,
+    /**
+     * Earlier versions of this entry, oldest first.
+     *
+     * KeePass keeps whole prior entries; Keyweb keeps superseded values per
+     * field. Rather than translate, each version is replayed as the edit it
+     * was, stamped when it happened, and the vault's history falls out of it.
+     */
+    val versions: List<KdbxVersion>,
+    /**
+     * Files attached in KeePass, by name.
+     *
+     * Named rather than carried: Keyweb has nowhere to put them yet, and
+     * counting them is what turns silent loss into a decision somebody can
+     * make before deleting their original file.
+     */
+    val attachments: List<String>,
+)
+
+/**
+ * Every field of an entry back under its KeePass name.
+ *
+ * The reader splits the five standard names out into their own properties;
+ * a history version needs them put back together, because what changed
+ * between two versions might be the password or might be a custom field.
+ */
+fun KdbxEntry.allFields(): Map<String, String> = buildMap {
+    if (title.isNotEmpty()) put("Title", title)
+    if (username.isNotEmpty()) put("UserName", username)
+    if (password.isNotEmpty()) put("Password", password)
+    if (url.isNotEmpty()) put("URL", url)
+    if (note.isNotEmpty()) put("Notes", note)
+    putAll(extra)
+}
+
+/** One earlier version of an entry, with the moment it was superseded. */
+data class KdbxVersion(
+    /** Milliseconds since the epoch, from KeePass's own modification time. */
+    val atMs: Long,
+    val fields: Map<String, String>,
+    val protectedKeys: Set<String>,
 )
 
 data class KdbxFile(
@@ -41,9 +95,22 @@ data class KdbxFile(
     val keyringNames: List<String>,
     /** How many entries sit at the database root, in no group. */
     val ungrouped: Int,
-    /** Entries with nothing worth importing, plus anything in the recycle bin. */
+    /**
+     * Entries with nothing in them at all, plus anything in the recycle bin.
+     *
+     * The only thing safe to leave behind. Anything with content is imported
+     * even without a title or a password, because "it had no password so we
+     * dropped it" is how a membership number or a secure note disappears from
+     * a file its owner then deletes.
+     */
     val skipped: Int,
+    /** Entries carrying files, and the files they carry. Nothing stores these yet. */
+    val attachments: List<KdbxAttachment>,
+    /** How many earlier versions came across, for the preview to report. */
+    val versions: Int,
 )
+
+data class KdbxAttachment(val uuid: String, val title: String, val names: List<String>)
 
 /**
  * The name to suggest for a keyring holding the entries that are in no group.
@@ -280,7 +347,47 @@ object KdbxReader {
                 }
             }
         }
-        return KdbxFile(entries, keyringNames.toList(), ungrouped, skipped)
+        return KdbxFile(
+            entries = entries,
+            keyringNames = keyringNames.toList(),
+            ungrouped = ungrouped,
+            skipped = skipped,
+            attachments = entries
+                .filter { it.attachments.isNotEmpty() }
+                .map {
+                    KdbxAttachment(
+                        uuid = it.uuid,
+                        title = it.title.ifEmpty { "Untitled" },
+                        names = it.attachments,
+                    )
+                },
+            versions = entries.sumOf { it.versions.size },
+        )
+    }
+
+    /**
+     * KeePass writes times as base64 seconds since year 1 in KDBX 4, and as an
+     * ISO-8601 string in 3.1. Both appear in files in the wild, and an
+     * unreadable one is not worth failing an import over — it only costs that
+     * version its place in the history.
+     */
+    /** Seconds from 0001-01-01 to 1970-01-01, which is what .NET counts from. */
+    private val SECONDS_YEAR_1_TO_EPOCH = 62_135_596_800L
+
+    private fun parseKdbxTime(value: String): Long {
+        if (value.isEmpty()) return 0
+        runCatching {
+            return java.time.Instant.parse(value).toEpochMilli()
+        }
+        runCatching {
+            val bytes = Base64.getDecoder().decode(value)
+            if (bytes.size < 8) return 0
+            var seconds = 0L
+            for (i in 7 downTo 0) seconds = (seconds shl 8) or (bytes[i].toLong() and 0xff)
+            // Seconds since 0001-01-01, which is what .NET's DateTime uses.
+            return (seconds - SECONDS_YEAR_1_TO_EPOCH) * 1000
+        }
+        return 0
     }
 
     private fun readEntry(
@@ -291,6 +398,7 @@ object KdbxReader {
         val uuid = element.children("UUID").firstOrNull()?.textContent?.trim().orEmpty()
         val tags = element.children("Tags").firstOrNull()?.textContent?.trim().orEmpty()
         val fields = LinkedHashMap<String, String>()
+        val protectedKeys = LinkedHashSet<String>()
 
         // Every <String> in order, including the protected ones, so the
         // keystream advances exactly as it did when the file was written.
@@ -298,8 +406,8 @@ object KdbxReader {
             val key = field.children("Key").firstOrNull()?.textContent.orEmpty()
             val valueNode = field.children("Value").firstOrNull() ?: continue
             val raw = valueNode.textContent.orEmpty()
-            val protectedAttribute = valueNode.getAttribute("Protected")
-            val value = if (protectedAttribute.equals("True", ignoreCase = true)) {
+            val isProtected = valueNode.getAttribute("Protected").equals("True", ignoreCase = true)
+            val value = if (isProtected) {
                 if (raw.isEmpty()) {
                     ""
                 } else {
@@ -312,12 +420,36 @@ object KdbxReader {
                 raw
             }
             fields[key] = value
+            if (isProtected) protectedKeys += key
+        }
+
+        // Files attached to this entry. Only the names: the bytes are in the
+        // database's binary pool and Keyweb has nowhere to put them yet, so
+        // what matters is being able to say which entries have them.
+        val attachments = element.children("Binary").mapNotNull { binary ->
+            binary.children("Key").firstOrNull()?.textContent?.trim()?.takeIf { it.isNotEmpty() }
         }
 
         // History entries carry their own protected values and must be walked
-        // too, or every value after the first history item decrypts as noise.
+        // in order, or every value after the first history item decrypts as
+        // noise. They are also worth keeping: an earlier password is what
+        // somebody looks for when a change turns out to have been a mistake.
+        val versions = mutableListOf<KdbxVersion>()
         for (history in element.children("History")) {
-            for (past in history.children("Entry")) readEntry(past, path, stream)
+            for (past in history.children("Entry")) {
+                val version = readEntry(past, path, stream) ?: continue
+                val at = past.children("Times").firstOrNull()
+                    ?.children("LastModificationTime")?.firstOrNull()
+                    ?.textContent?.trim().orEmpty()
+                val atMs = parseKdbxTime(at)
+                if (atMs > 0) {
+                    versions += KdbxVersion(
+                        atMs = atMs,
+                        fields = version.allFields(),
+                        protectedKeys = version.protectedKeys,
+                    )
+                }
+            }
         }
 
         val title = fields.remove("Title").orEmpty()
@@ -326,10 +458,12 @@ object KdbxReader {
         val url = fields.remove("URL").orEmpty()
         val note = fields.remove("Notes").orEmpty()
 
-        // Nothing worth carrying across. Importing these would add blank rows
-        // to somebody's list and nothing else.
+        // The only entry safe to leave behind is one with nothing in it at
+        // all. Anything with a field, a file or a past version comes across,
+        // because "no title and no password so we dropped it" is how a secure
+        // note full of account numbers disappears.
         if (title.isEmpty() && username.isEmpty() && password.isEmpty() && url.isEmpty() &&
-            note.isEmpty() && fields.isEmpty()
+            note.isEmpty() && fields.isEmpty() && attachments.isEmpty() && versions.isEmpty()
         ) {
             return null
         }
@@ -346,6 +480,9 @@ object KdbxReader {
             tags = tags.split(';', ',').map { it.trim() }.filter { it.isNotEmpty() }
                 .joinToString(", "),
             extra = fields,
+            protectedKeys = protectedKeys,
+            versions = versions.sortedBy { it.atMs }.takeLast(HISTORY_LIMIT),
+            attachments = attachments,
         )
     }
 }
@@ -395,3 +532,78 @@ private fun Element.elements(): List<Element> {
 }
 
 private fun Element.children(tag: String): List<Element> = elements().filter { it.tagName == tag }
+
+/**
+ * What an imported field is called inside Keyweb.
+ *
+ * Deliberately here rather than in the Android app, because the web reader has
+ * to agree with it exactly: the same file imported on a phone and in a browser
+ * lands in the *same* vault, and a field named `secret:Answer` on one side and
+ * `Answer` on the other is one field that has become two. A frozen fixture
+ * checks the two implementations still agree.
+ *
+ * A protected string becomes `secret:<name>`, which is what makes it masked on
+ * screen — `isSecretField` keys off that prefix, so a field its owner marked
+ * protected in KeePass stays protected here without anybody maintaining a
+ * list. Guessing from the name instead would mask an account holder's name and
+ * reveal a field called "answer".
+ *
+ * A custom field whose name collides with one of Keyweb's own keys is prefixed
+ * rather than allowed to overwrite it: a KeePass field called "folder" must not
+ * be able to move the entry.
+ */
+fun importedFieldName(name: String, isProtected: Boolean): ItemField {
+    val collides = Fields.KNOWN.contains(name.lowercase())
+    val safe = if (collides) "custom:$name" else name
+    return if (isProtected) "secret:$safe" else safe
+}
+
+/** KeePass has no field for a one-time-code seed, so every tool invented one. */
+private val OTP_NAMES = setOf("otp", "totp", "totp seed", "totp-seed", "otpauth")
+
+/** Settings that only make sense beside a seed already normalised into a URI. */
+private val OTP_NOISE = setOf("totp settings", "totp-settings")
+
+/**
+ * Turn one KeePass entry's fields into Keyweb's, keeping all of them.
+ *
+ * The five KeePass names Keyweb has its own names for are mapped; everything
+ * else is somebody's own field — a security question, a backup PIN, an account
+ * number — and comes through under the name they gave it.
+ */
+fun kdbxFieldsToItemFields(
+    fields: Map<String, String>,
+    protectedKeys: Set<String>,
+): Map<ItemField, String> = buildMap {
+    for ((name, value) in fields) {
+        if (value.isEmpty()) continue
+        val standard = KDBX_STANDARD[name]
+        if (standard != null) {
+            put(standard, value)
+            continue
+        }
+        val lower = name.lowercase()
+        // Settings for a seed about to become an otpauth URI, which carries its
+        // own digits and period. Keeping them leaves two sources of truth.
+        if (OTP_NOISE.contains(lower)) continue
+        if (OTP_NAMES.contains(lower)) {
+            val normalised = runCatching { Totp.format(Totp.parse(value)) }.getOrNull()
+            if (normalised != null) {
+                put(Fields.OTP, normalised)
+            } else {
+                // Unreadable as a seed, but still the user's data.
+                put(importedFieldName(name, protectedKeys.contains(name)), value)
+            }
+            continue
+        }
+        put(importedFieldName(name, protectedKeys.contains(name)), value)
+    }
+}
+
+private val KDBX_STANDARD: Map<String, ItemField> = mapOf(
+    "Title" to Fields.TITLE,
+    "UserName" to Fields.USERNAME,
+    "Password" to Fields.PASSWORD,
+    "URL" to Fields.URL,
+    "Notes" to Fields.NOTE,
+)
