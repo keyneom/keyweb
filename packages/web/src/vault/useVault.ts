@@ -145,6 +145,11 @@ export type SharingApi = {
     files: SharingDatasetFileV1[];
     label: string | null;
   }): Promise<{ link: string }>;
+  previewResponse(response: SharingPublicKeyResponseV1): Promise<{
+    label: string;
+    email: string;
+    fingerprint: string;
+  }>;
   acceptResponse(response: SharingPublicKeyResponseV1): Promise<{
     label: string;
     email: string;
@@ -774,6 +779,7 @@ function sharingApi(
     },
     joinFromLink: (input) =>
       engine.joinFromLink({ ...input, grantAccess: grantSharedFiles }),
+    previewResponse: (response) => engine.previewResponse(response),
     async acceptResponse(response) {
       const result = await engine.acceptResponse(response);
       await refresh();

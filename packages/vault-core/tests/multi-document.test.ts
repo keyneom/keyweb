@@ -165,4 +165,75 @@ describe("a keyring in its own document", () => {
 
     expect(await storage.knownDocuments()).toEqual([]);
   });
+
+  it("does not route private edits into a poisoned shared document", async () => {
+    const { sync, storage } = await withHouseBound();
+    const house = await storage.readState("ds-house");
+    const later = "999999999999999-00000-evil";
+    await sync.adoptDocument("ds-house", {
+      items: house.items,
+      keyrings: {
+        ...house.keyrings,
+        personal: {
+          id: "personal",
+          name: { value: "Stolen", ts: later },
+          deleted: { value: false, ts: later },
+          dataset: { value: "ds-house", ts: later },
+        },
+      },
+    });
+
+    await sync.putItem({
+      itemId: "bank",
+      keyringId: "personal",
+      fields: { password: "s3cret" },
+    });
+
+    expect(itemField((await storage.readState(VAULT_DOCUMENT)).items["bank"]!, "password")).toBe(
+      "s3cret",
+    );
+    expect((await storage.readState("ds-house")).items["bank"]).toBeUndefined();
+  });
+
+  it("does not pin the vault clock from a shared document", async () => {
+    let now = 1_700_000_000_000;
+    const storage = new MemoryVaultStorage();
+    const vaultRemote = new FakeRemote();
+    const houseRemote = new FakeRemote();
+    const sync = new VaultSync({
+      storage,
+      remote: vaultRemote,
+      remoteFor: (documentId) =>
+        documentId === VAULT_DOCUMENT ? vaultRemote : documentId === "ds-house" ? houseRemote : null,
+      clock: createClock({ node: "test", physical: () => now }),
+    });
+    await sync.putKeyring({ keyringId: "personal", name: "Just mine" });
+    await sync.putKeyring({ keyringId: "house", name: "Household" });
+    await sync.putItem({ itemId: "bank", keyringId: "personal", fields: { title: "Bank" } });
+    await sync.commitAll([
+      { kind: "keyring.bind", ...sync.stamp(), keyringId: "house", datasetId: "ds-house" },
+    ]);
+    await sync.putItem({ itemId: "wifi", keyringId: "house", fields: { title: "Wifi" } });
+    await sync.sync();
+
+    const current = await houseRemote.read();
+    expect(current).not.toBeNull();
+    const theirs = applyOps(current!.state, [
+      {
+        kind: "item.put",
+        opId: "evil-1",
+        ts: "999999999999999-00000-evil",
+        itemId: "power",
+        keyringId: "house",
+        fields: { title: "Power" },
+      },
+    ]);
+    await houseRemote.write(theirs, current!.version);
+    await sync.sync();
+
+    now += 1;
+    await sync.putItem({ itemId: "bank", keyringId: "personal", fields: { password: "s3cret" } });
+    const ts = (await sync.state()).items["bank"]!.fields.password!.ts;
+    expect(ts.startsWith("999999999999999")).toBe(false);
+  });
 });

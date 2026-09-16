@@ -6,7 +6,7 @@ import type {
 } from "@keyneom/sync-kit/sharing";
 import { sharingKeyFingerprint } from "@keyneom/sync-kit/sharing/web-crypto";
 import type { SharingDatasetFileV1 } from "@keyneom/sync-kit/sharing";
-import { datasetOf, type VaultState, type VaultSync } from "@keyweb/vault-core";
+import { datasetOf, VAULT_DOCUMENT, type VaultState, type VaultSync } from "@keyweb/vault-core";
 import type { SharingController } from "./controller";
 import { buildJoinLink, buildResponseLink } from "./links";
 import type { SharingIdentity } from "./identity";
@@ -239,6 +239,34 @@ export class KeywebSharing {
   }
 
   /**
+   * Look at a reply without letting them in.
+   *
+   * The fingerprint has to be on screen *before* the wrap, not after. The
+   * links travel over ordinary chat, and the one attack that channel allows
+   * is substituting a different key. Once `acceptResponse` has run, the
+   * content key is already wrapped to whoever presented it.
+   */
+  async previewResponse(response: SharingPublicKeyResponseV1): Promise<{
+    label: string;
+    email: string;
+    keyId: string;
+    fingerprint: string;
+  }> {
+    const invite = (await this.#pending())[response.exchangeId];
+    if (!invite) {
+      throw new Error(
+        "That reply doesn't match an invitation from this device. Ask them to use the newest link you sent.",
+      );
+    }
+    return {
+      label: invite.label,
+      email: invite.email,
+      keyId: response.keyId,
+      fingerprint: sharingKeyFingerprint(response.keyId),
+    };
+  }
+
+  /**
    * The owner's last step: let the person in.
    *
    * Verified against the invitation this device sent, which is why the
@@ -317,6 +345,19 @@ export class KeywebSharing {
       const keyring = Object.values(value.keyrings).find((ring) => !ring.deleted.value);
       if (!keyring) {
         remaining.push(entry);
+        continue;
+      }
+      // The keyring's id comes from their document. First-run vaults hardcode
+      // `"personal"`, so an inviter who names their keyring that relocates
+      // every private password into their Drive file the moment we bind.
+      // Refuse any id this vault already has, rather than adopting it.
+      const vault = await this.#sync.documentState(VAULT_DOCUMENT);
+      const existing = vault.keyrings[keyring.id];
+      if (existing && datasetOf(existing) !== entry.datasetId) {
+        continue;
+      }
+      if (existing && datasetOf(existing) === entry.datasetId) {
+        adopted.push(keyring.name.value);
         continue;
       }
       // The contents land first, then the keyring, then the binding that makes

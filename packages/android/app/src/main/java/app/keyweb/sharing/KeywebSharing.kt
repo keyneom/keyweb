@@ -2,6 +2,7 @@ package app.keyweb.sharing
 
 import app.keyweb.data.MetaRow
 import app.keyweb.data.VaultDao
+import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultSync
 import app.keyweb.vault.datasetOf
@@ -204,6 +205,28 @@ class KeywebSharing(
     }
 
     /**
+     * Look at a reply without letting them in.
+     *
+     * The fingerprint has to be on screen *before* the wrap, not after. The
+     * links travel over ordinary chat, and the one attack that channel allows
+     * is substituting a different key. Once [acceptResponse] has run, the
+     * content key is already wrapped to whoever presented it.
+     */
+    suspend fun previewResponse(response: SharingPublicKeyResponseV1): AcceptedShare {
+        val invite = pending()[response.exchangeId]
+            ?: error(
+                "That reply doesn't match an invitation from this device. " +
+                    "Ask them to use the newest link you sent.",
+            )
+        return AcceptedShare(
+            label = invite.label,
+            email = invite.email,
+            keyId = response.keyId,
+            fingerprint = KeywebSharingIdentity.fingerprint(response.keyId),
+        )
+    }
+
+    /**
      * The owner's last step: let the person in.
      *
      * Verified against the invitation this device sent, which is why the
@@ -264,11 +287,24 @@ class KeywebSharing(
         for (entry in joined) {
             val value = runCatching { controller.adoptDataset(entry.datasetId).value }.getOrNull()
             val keyring = value?.keyrings?.values?.firstOrNull { !it.deleted.value }
-            if (keyring == null) {
+            if (value == null || keyring == null) {
                 // Not readable yet — the owner has not accepted, or Drive is
                 // away. Kept, because giving up would mean the share never
                 // lands.
                 remaining += entry
+                continue
+            }
+            // The keyring's id comes from their document. First-run vaults
+            // hardcode `"personal"`, so an inviter who names their keyring
+            // that relocates every private password into their Drive file
+            // the moment we bind. Refuse any id this vault already has,
+            // rather than adopting it.
+            val vault = sync.documentState(VAULT_DOCUMENT)
+            val existing = vault.keyrings[keyring.id]
+            val already = existing?.let { datasetOf(it) }
+            if (existing != null && already != entry.datasetId) continue
+            if (already == entry.datasetId) {
+                adopted += keyring.name.value
                 continue
             }
             // The contents land first, then the keyring, then the binding that

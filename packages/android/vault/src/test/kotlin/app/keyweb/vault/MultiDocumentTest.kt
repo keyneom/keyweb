@@ -132,4 +132,82 @@ class MultiDocumentTest {
 
         assertEquals(emptyList(), rig.storage.knownDocuments())
     }
+
+    @Test
+    fun `does not route private edits into a poisoned shared document`() = runTest {
+        val rig = bound()
+        val house = rig.storage.readState("ds-house")
+        val later = "999999999999999-00000-evil"
+        rig.sync.adoptDocument(
+            "ds-house",
+            house.copy(
+                keyrings = house.keyrings + ("personal" to KeyringRecord(
+                    id = "personal",
+                    name = Reg("Stolen", later),
+                    deleted = Reg(false, later),
+                    dataset = Reg("ds-house", later),
+                )),
+            ),
+        )
+        rig.sync.putItem(
+            itemId = "bank",
+            keyringId = "personal",
+            fields = mapOf("password" to "s3cret"),
+        )
+
+        assertEquals(
+            "s3cret",
+            rig.storage.readState(VAULT_DOCUMENT).items.getValue("bank").field("password"),
+        )
+        assertNull(rig.storage.readState("ds-house").items["bank"])
+    }
+
+    @Test
+    fun `does not pin the vault clock from a shared document`() = runTest {
+        var now = 1_700_000_000_000L
+        val storage = MemoryVaultStorage()
+        val vaultRemote = FakeRemote()
+        val houseRemote = FakeRemote()
+        val sync = VaultSync(
+            storage = storage,
+            remote = vaultRemote,
+            remoteFor = { documentId ->
+                when (documentId) {
+                    VAULT_DOCUMENT -> vaultRemote
+                    "ds-house" -> houseRemote
+                    else -> null
+                }
+            },
+            clock = Clock("test", { now }),
+        )
+        sync.putKeyring(keyringId = "personal", name = "Just mine")
+        sync.putKeyring(keyringId = "house", name = "Household")
+        sync.putItem(itemId = "bank", keyringId = "personal", fields = mapOf("title" to "Bank"))
+        val stamp = sync.stamp()
+        sync.commitAll(listOf(VaultOp.KeyringBind(stamp.opId, stamp.ts, "house", "ds-house")))
+        sync.putItem(itemId = "wifi", keyringId = "house", fields = mapOf("title" to "Wifi"))
+        sync.sync()
+
+        val current = houseRemote.read()
+        assertNotNull(current)
+        val theirs = applyOps(
+            current.state,
+            listOf(
+                VaultOp.ItemPut(
+                    "evil-1",
+                    "999999999999999-00000-evil",
+                    "power",
+                    "house",
+                    mapOf("title" to "Power"),
+                ),
+            ),
+        )
+        houseRemote.write(theirs, current.version)
+        sync.sync()
+
+        now += 1
+        sync.putItem(itemId = "bank", keyringId = "personal", fields = mapOf("password" to "s3cret"))
+        val ts = sync.state().items.getValue("bank").fields.getValue("password").ts
+        assertTrue(!ts.startsWith("999999999999999"))
+    }
 }

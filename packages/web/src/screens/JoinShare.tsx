@@ -33,6 +33,7 @@ export function JoinShare({
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [link, setLink] = useState<string | null>(null);
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
 
   const role = invite.files[0]?.role ?? invite.invitation.requestedGrants[0]?.role ?? "viewer";
   const label = invite.label ?? "a keyring";
@@ -48,6 +49,7 @@ export function JoinShare({
         label: invite.label,
       });
       setLink(result.link);
+      setFingerprint(await sharing.myFingerprint());
       setStage("reply");
     } catch (cause) {
       if (cause instanceof MissingGrant) setMissing(true);
@@ -85,10 +87,10 @@ export function JoinShare({
         <p className="status" data-tone="calm">
           <ShieldIcon />
           <span>
-            <b>Nothing has been handed over yet.</b>
+            <b>Your key is {fingerprint ?? "…"}.</b>
             <em>
-              This reply carries only your public key — the half that locks things, never the half
-              that opens them.
+              They'll ask you to read those out before they let you in. If what they see doesn't
+              match, the reply was tampered with on the way.
             </em>
           </span>
         </p>

@@ -34,16 +34,63 @@ fun withoutDatasetItems(vault: VaultState, keyringId: String): VaultState =
     vault.copy(items = vault.items.filterValues { it.keyring.value != keyringId })
 
 /**
+ * What a shared document is allowed to contribute to the composed vault.
+ *
+ * A shared file is a complete [VaultState], so a collaborator can put
+ * anything in it: a `personal` keyring, a later binding, an item that
+ * collides with one of ours. Merging that in unsandboxed is how private
+ * passwords get routed into someone else's Drive file.
+ *
+ * The vault already recorded which keyring this dataset is. Only that
+ * keyring, under that id, and items already on it, come through. Bindings
+ * stay the vault's: a shared document must not be able to move them.
+ */
+fun sandboxDataset(
+    keyringId: String,
+    dataset: VaultState,
+    vault: VaultState = emptyVault(),
+): VaultState {
+    val keyring = dataset.keyrings[keyringId]
+    val items = dataset.items.filter { (id, item) ->
+        if (item.keyring.value != keyringId) return@filter false
+        val ours = vault.items[id]
+        // An item this vault already holds on a different keyring is ours,
+        // not theirs. Merging the two would let a later HLC on their copy
+        // rebind the register and route the next save into their file.
+        ours == null || ours.keyring.value == keyringId
+    }
+    return VaultState(
+        items = items,
+        keyrings = if (keyring != null) mapOf(keyringId to keyring) else emptyMap(),
+    )
+}
+
+/**
  * The vault as a person sees it: its own items, plus those of every dataset.
  *
- * A plain merge, so the CRDT's guarantees carry across documents unchanged.
  * Datasets are joined in a fixed order so two devices assembling the same set
  * of documents produce identical state, which the fingerprint depends on.
+ *
+ * Each dataset is sandboxed to the keyring the *vault* bound to it before
+ * the merge. A plain [mergeVaults] of the raw documents would treat a
+ * collaborator's file as if it were our vault, which it is not.
  */
 fun composeVault(vault: VaultState, datasets: Map<String, VaultState>): VaultState {
+    val expected = boundDatasets(vault).associate { it.datasetId to it.keyringId }
     var composed = vault
-    for (id in datasets.keys.sorted()) composed = mergeVaults(composed, datasets.getValue(id))
-    return composed
+    for (id in datasets.keys.sorted()) {
+        val keyringId = expected[id] ?: continue
+        composed = mergeVaults(composed, sandboxDataset(keyringId, datasets.getValue(id), vault))
+    }
+    // Bindings are this device's record of where items live. Restore them
+    // from the vault after the merge so a later register in a shared file
+    // cannot re-route writes.
+    val keyrings = composed.keyrings.toMutableMap()
+    for ((id, ring) in vault.keyrings) {
+        val current = keyrings[id] ?: continue
+        keyrings[id] = current.copy(dataset = ring.dataset)
+    }
+    return composed.copy(keyrings = keyrings)
 }
 
 /**

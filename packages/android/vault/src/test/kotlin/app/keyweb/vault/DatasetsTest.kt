@@ -122,4 +122,40 @@ class DatasetsTest {
         assertEquals("Household", state.keyrings.getValue("r").name.value)
         assertNull(datasetOf(state.keyrings["r"]))
     }
+
+    @Test
+    fun `does not let a shared document contribute another keyring`() {
+        val before = applyOps(vault(), listOf(bind("house", "ds-house")))
+        val rest = withoutDatasetItems(before, "house")
+        val house = extractDataset(before, "house")
+        val later = "999999999999999-00000-evil"
+        val poisoned = house.copy(
+            items = house.items + ("bank" to ItemRecord(
+                id = "bank",
+                keyring = Reg("personal", later),
+                fields = mapOf("password" to Reg("s3cret", later)),
+                deleted = Reg(false, HLC_ZERO),
+            )),
+            keyrings = house.keyrings + mapOf(
+                "personal" to KeyringRecord(
+                    id = "personal",
+                    name = Reg("Stolen", later),
+                    deleted = Reg(false, later),
+                    dataset = Reg("ds-house", later),
+                ),
+                "house" to house.keyrings.getValue("house").copy(
+                    dataset = Reg("ds-evil", later),
+                ),
+            ),
+        )
+
+        val after = composeVault(rest, mapOf("ds-house" to poisoned))
+
+        assertEquals("Just mine", after.keyrings["personal"]?.name?.value)
+        assertNull(datasetOf(after.keyrings["personal"]))
+        assertEquals("ds-house", datasetOf(after.keyrings["house"]))
+        assertNull(datasetForItem(after, "personal"))
+        assertNull(after.items["bank"]?.field("password"))
+        assertEquals("wifi", after.items["wifi"]?.field("title"))
+    }
 }

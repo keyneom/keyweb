@@ -7,6 +7,7 @@ import {
   MemoryVaultStorage,
   VaultSync,
   visibleItems,
+  itemField,
   type VaultState,
 } from "@keyweb/vault-core";
 import type {
@@ -286,6 +287,17 @@ describe("accepting a reply", () => {
     ).rejects.toThrow(/doesn't match an invitation/);
   });
 
+  it("shows the fingerprint without wrapping the key", async () => {
+    const { sharing } = await withHousehold();
+    await sharing.shareKeyring({ keyringId: "house", email: "rachel@example.com", role: "viewer" });
+    const reply = await aResponse("exchange-1");
+    const preview = await sharing.previewResponse(reply);
+    expect(preview.email).toBe("rachel@example.com");
+    expect(preview.label).toBe("Household");
+    expect(preview.fingerprint).toBeTruthy();
+    expect(await sharing.pendingInvites("house")).toHaveLength(1);
+  });
+
   it("finishes the invitation and stops it being reusable", async () => {
     const { controller, sharing } = await withHousehold();
     await sharing.shareKeyring({ keyringId: "house", email: "rachel@example.com", role: "viewer" });
@@ -419,6 +431,37 @@ describe("joining a keyring somebody shared", () => {
     await sharing.adoptJoinedKeyrings();
 
     expect((await sync.state()).keyrings["house"]?.name.value).toBe("Household");
+  });
+
+  it("does not adopt a keyring whose id this vault already has", async () => {
+    // First-run vaults hardcode `"personal"`. Binding that id to their file
+    // relocates every private password into it.
+    const { sharing, sync, controller, storage } = await withHousehold();
+    await sync.putItem({
+      itemId: "bank",
+      keyringId: "personal",
+      fields: { password: "s3cret" },
+    });
+    controller.datasets.set("ds-1", {
+      items: {},
+      keyrings: {
+        personal: {
+          id: "personal",
+          name: { value: "Household", ts: "001700000000000-00001-owner" },
+          deleted: { value: false, ts: "001700000000000-00000-owner" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+      },
+    });
+    await sharing.joinFromLink({
+      invitation: await anInvite(), files, label: "Household", grantAccess: async () => {} });
+
+    expect(await sharing.adoptJoinedKeyrings()).toEqual([]);
+
+    const state = await sync.state();
+    expect(datasetOf(state.keyrings["personal"])).toBeNull();
+    expect(itemField(state.items["bank"]!, "password")).toBe("s3cret");
+    expect((await storage.readState("ds-1")).items["bank"]).toBeUndefined();
   });
 
   it("does not adopt the same keyring twice", async () => {
@@ -650,6 +693,65 @@ describe("what a reader may do", () => {
     expect(members[0]?.you).toBe(true);
 
     expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual([]);
+  });
+});
+
+describe("a hostile share", () => {
+  /**
+   * The inviter controls every byte of their document, including the keyring
+   * id. First-run vaults hardcode "personal", so naming their keyring that
+   * would relocate every private password into their Drive file on bind.
+   */
+  function hostileDocument(keyringId: string): VaultState {
+    return {
+      items: {},
+      keyrings: {
+        [keyringId]: {
+          id: keyringId,
+          name: { value: "Household", ts: "001900000000000-00001-attacker" },
+          deleted: { value: false, ts: "000000000000000-00000-" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+      },
+    };
+  }
+
+  async function joinHostile(keyringId: string) {
+    const parts = await withHousehold();
+    parts.controller.datasets.set("ds-evil", hostileDocument(keyringId));
+    await parts.sharing.joinFromLink({
+      invitation: await anInvitation({
+        exchangeId: "exchange-9",
+        grants: [{ datasetId: "ds-evil", role: "viewer" }],
+      }),
+      files: [{ datasetId: "ds-evil", fileId: "file-evil", role: "viewer" }],
+      label: "Household",
+      grantAccess: async () => {},
+    });
+    return parts;
+  }
+
+  it("cannot capture a keyring this vault already has", async () => {
+    const { sharing, sync, storage } = await joinHostile("personal");
+    await sharing.adoptJoinedKeyrings();
+
+    // The private keyring is still private, and its passwords never moved.
+    const state = await sync.state();
+    expect(datasetOf(state.keyrings["personal"])).toBeNull();
+    expect(itemField(state.items["bank"]!, "title")).toBe("Bank");
+    expect(await storage.readState("ds-evil")).toEqual({ items: {}, keyrings: {} });
+  });
+
+  it("cannot rename the keyring it tried to capture", async () => {
+    const { sharing, sync } = await joinHostile("personal");
+    await sharing.adoptJoinedKeyrings();
+    expect((await sync.state()).keyrings["personal"]?.name.value).toBe("Just mine");
+  });
+
+  it("still works for an id that is genuinely theirs", async () => {
+    const { sharing, sync } = await joinHostile("their-ring");
+    expect(await sharing.adoptJoinedKeyrings()).toEqual(["Household"]);
+    expect(datasetOf((await sync.state()).keyrings["their-ring"])).toBe("ds-evil");
   });
 });
 

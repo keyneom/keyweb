@@ -687,8 +687,12 @@ export class VaultSync {
         }
 
         // Adopt remote causal time so our next local write sorts after it,
-        // even if this device's wall clock is behind.
-        if (remote) {
+        // even if this device's wall clock is behind. Only the vault document
+        // is ours to trust: a collaborator who publishes a year-3000
+        // timestamp in a shared file would otherwise pin this clock — and
+        // every other device we own, once they sync the vault — so that
+        // every later conflict in the private vault is lost forever.
+        if (remote && documentId === VAULT_DOCUMENT) {
           this.#clock.observe(maxHlc(remote.state));
           await this.#storage.writeClock(this.#clock.snapshot());
         }

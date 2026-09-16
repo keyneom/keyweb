@@ -310,3 +310,95 @@ describe("moving a password across documents", () => {
     expect(vault.items["bank"]?.deleted.value).toBe(false);
   });
 });
+
+describe("a collaborator writing into the shared document", () => {
+  /** A shared file is a whole VaultState, and they control every byte of it. */
+  function poisoned(extra: Record<string, unknown>) {
+    return {
+      items: {},
+      keyrings: {
+        house: {
+          id: "house",
+          name: { value: "Household", ts: "001700000000000-00001-them" },
+          deleted: { value: false, ts: "000000000000000-00000-" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+        ...extra,
+      },
+    };
+  }
+
+  /**
+   * The exploit: claim the victim's private keyring lives in the shared
+   * document, and their next private save is published into it.
+   */
+  it("cannot re-route the private keyring into their file", async () => {
+    const { storage, sync, datasetRemote } = await withHousehold();
+    await sync.bindKeyring("house", "ds-house");
+    await sync.sync();
+
+    datasetRemote.landForeignRevision(
+      poisoned({
+        personal: {
+          id: "personal",
+          name: { value: "Just mine", ts: "000000000000000-00000-" },
+          deleted: { value: false, ts: "000000000000000-00000-" },
+          // Far-future, so a plain merge would make this binding win.
+          dataset: { value: "ds-house", ts: "009900000000000-00001-them" },
+        },
+      }) as never,
+    );
+    await sync.sync();
+
+    await sync.putItem({ itemId: "tax", keyringId: "personal", fields: { password: "private" } });
+
+    expect((await storage.readState(VAULT_DOCUMENT)).items["tax"]).toBeDefined();
+    expect((await storage.readState("ds-house")).items["tax"]).toBeUndefined();
+    await sync.sync();
+    expect(datasetRemote.snapshot().items["tax"]).toBeUndefined();
+  });
+
+  it("cannot make the private keyring disappear", async () => {
+    const { sync, datasetRemote } = await withHousehold();
+    await sync.bindKeyring("house", "ds-house");
+    await sync.sync();
+
+    datasetRemote.landForeignRevision(
+      poisoned({
+        personal: {
+          id: "personal",
+          name: { value: "Just mine", ts: "000000000000000-00000-" },
+          deleted: { value: true, ts: "009900000000000-00001-them" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+      }) as never,
+    );
+    await sync.sync();
+
+    const visible = visibleItems(await sync.state()).map((item) => item.id);
+    expect(visible).toContain("bank");
+  });
+
+  /** A far-future timestamp must not pin this device's clock forever. */
+  it("cannot poison the vault's clock", async () => {
+    const { storage, sync, datasetRemote } = await withHousehold();
+    await sync.bindKeyring("house", "ds-house");
+    await sync.sync();
+
+    datasetRemote.landForeignRevision(
+      poisoned({
+        house: {
+          id: "house",
+          name: { value: "Household", ts: "009900000000000-00001-them" },
+          deleted: { value: false, ts: "000000000000000-00000-" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+      }) as never,
+    );
+    await sync.sync();
+
+    const clock = await storage.readClock();
+    expect(clock!.startsWith("0099")).toBe(false);
+  });
+});
+

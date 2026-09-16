@@ -191,6 +191,9 @@ enum class ShareStage {
     /** The reply is made and needs sending back to the person who invited. */
     REPLY_READY,
 
+    /** A reply came back; waiting for the fingerprint check before wrapping. */
+    CONFIRM_ACCEPT,
+
     /** A reply came back and is being turned into access. */
     ACCEPTING,
 
@@ -213,6 +216,10 @@ data class ShareUiState(
     /** The invitation this phone was sent, while it is being decided on. */
     val invite: PendingShareInvite? = null,
     val accepted: AcceptedShare? = null,
+    /** Shown before wrapping, so the fingerprint can still stop the share. */
+    val preview: AcceptedShare? = null,
+    /** This person's own key, for reading aloud on the reply screen. */
+    val fingerprint: String? = null,
     /** Held so a failed accept can be retried without the link being sent again. */
     val reply: SharingPublicKeyResponseV1? = null,
     val busy: Boolean = false,
@@ -951,7 +958,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             return true
         }
         ShareLinks.parseResponse(url)?.let { response ->
-            acceptShareResponse(response)
+            previewShareResponse(response)
             return true
         }
         return false
@@ -971,7 +978,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         setShare { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
-                engine.myFingerprint()
+                val fingerprint = engine.myFingerprint()
                 val url = GrantBrowser.shareGrantUrl(
                     encodeSharingDatasetFilesV1(invite.files),
                 )
@@ -982,6 +989,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 setShare {
                     it.copy(
                         stage = ShareStage.AWAITING_GRANT,
+                        fingerprint = fingerprint,
                         busy = false,
                         error = if (opened) {
                             null
@@ -1026,6 +1034,20 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         error = describeShare(cause),
                     )
                 }
+            }
+        }
+    }
+
+    /** Show the fingerprint; wrapping waits until they confirm it. */
+    fun previewShareResponse(response: SharingPublicKeyResponseV1) {
+        val engine = sharing ?: return
+        setShare { ShareUiState(stage = ShareStage.CONFIRM_ACCEPT, reply = response) }
+        viewModelScope.launch {
+            try {
+                val preview = engine.previewResponse(response)
+                setShare { it.copy(preview = preview) }
+            } catch (cause: Exception) {
+                setShare { it.copy(error = describeShare(cause)) }
             }
         }
     }

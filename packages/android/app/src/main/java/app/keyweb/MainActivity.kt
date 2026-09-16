@@ -232,11 +232,13 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     )
                     return@Box
                 }
-                if (ui.share.stage == ShareStage.ACCEPTING ||
+                if (ui.share.stage == ShareStage.CONFIRM_ACCEPT ||
+                    ui.share.stage == ShareStage.ACCEPTING ||
                     ui.share.stage == ShareStage.ACCEPTED
                 ) {
                     AcceptShareScreen(
                         share = ui.share,
+                        onConfirm = viewModel::retryAccept,
                         onRetry = viewModel::retryAccept,
                         onDone = {
                             viewModel.closeSharing()

@@ -319,13 +319,16 @@ fun JoinShareScreen(
                     )
                     share.link?.let { PrimaryButton("Copy the reply", { onCopy(it) }) }
                     Spacer(Modifier.height(16.dp))
-                    Text(
-                        "Nothing has been handed over yet. This reply carries only your public " +
-                            "key — the half that locks things, never the half that opens them.",
-                        color = colors.muted,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 12.dp),
-                    )
+                    share.fingerprint?.let { fingerprint ->
+                        Text(
+                            "Your key is $fingerprint. They'll ask you to read those out " +
+                                "before they let you in. If what they see doesn't match, the " +
+                                "reply was tampered with on the way.",
+                            color = colors.muted,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
                     SecondaryButton("I've sent it", onDone)
                 }
 
@@ -403,17 +406,23 @@ fun JoinShareScreen(
 /**
  * They replied. This is the step that actually lets them in.
  *
- * The key fingerprint is on the screen rather than hidden, because the two
- * links travel over ordinary chat and the one thing an attacker on that channel
- * can do is substitute their own key. Six characters read out loud is the whole
- * defence, so it belongs where it can still be acted on.
+ * The wrap waits behind a button. The two links travel over ordinary chat
+ * and the one thing an attacker on that channel can do is substitute their
+ * own key. Six characters read out loud is the whole defence, so they belong
+ * on screen *before* the content key is wrapped to whoever presented it.
  */
 @Composable
-fun AcceptShareScreen(share: ShareUiState, onRetry: () -> Unit, onDone: () -> Unit) {
+fun AcceptShareScreen(
+    share: ShareUiState,
+    onConfirm: () -> Unit,
+    onRetry: () -> Unit,
+    onDone: () -> Unit,
+) {
     val colors = LocalKeywebStatus.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
             val accepted = share.accepted
+            val preview = share.preview
             if (accepted != null) {
                 Text(
                     "${accepted.email} can see ${accepted.label} now",
@@ -423,14 +432,6 @@ fun AcceptShareScreen(share: ShareUiState, onRetry: () -> Unit, onDone: () -> Un
                     "It will show up on their device the next time Keyweb saves. There is " +
                         "nothing else to send.",
                     color = colors.muted,
-                    modifier = Modifier.padding(bottom = 16.dp),
-                )
-                Text(
-                    "Their key is ${accepted.fingerprint}. If you want to be certain the reply " +
-                        "came from them and not from someone who got hold of the link, ask them " +
-                        "to read those six characters out. Keyweb shows them the same ones.",
-                    color = colors.muted,
-                    style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(bottom = 16.dp),
                 )
                 PrimaryButton("Done", onDone)
@@ -445,10 +446,37 @@ fun AcceptShareScreen(share: ShareUiState, onRetry: () -> Unit, onDone: () -> Un
                 PrimaryButton("Try again", onRetry)
                 Spacer(Modifier.height(8.dp))
                 SecondaryButton("Not now", onDone)
-            } else {
+            } else if (share.stage == ShareStage.ACCEPTING) {
                 Text("Letting them in…", style = MaterialTheme.typography.titleLarge)
                 Text(
                     "Confirming it's you, then giving them the key.",
+                    color = colors.muted,
+                )
+            } else if (preview != null) {
+                Text(
+                    "Let ${preview.email} into ${preview.label}?",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    "Ask them to read their key out. If it doesn't match, don't let them in — " +
+                        "someone else may have got hold of the link.",
+                    color = colors.muted,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+                Text(
+                    "Their key is ${preview.fingerprint}. Keyweb shows them the same ones. " +
+                        "This is the check, not a formality after it.",
+                    color = colors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+                PrimaryButton("Their key matches — let them in", onConfirm)
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton("Not this person", onDone)
+            } else {
+                Text("Checking the reply…", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Confirming the invitation this reply belongs to.",
                     color = colors.muted,
                 )
             }

@@ -160,4 +160,47 @@ describe("moving a keyring into its own document", () => {
     ]);
     expect(boundDatasets(state)).toEqual([]);
   });
+
+  it("does not let a shared document contribute another keyring", () => {
+    // The attack: share a folder, and in that file publish a later `personal`
+    // keyring that rebinds private writes into the shared Drive file.
+    const before = applyOps(vault(), [bind("house", "ds-house")]);
+    const rest = withoutDatasetItems(before, "house");
+    const house = extractDataset(before, "house");
+    const later = "999999999999999-00000-evil";
+    const poisoned = {
+      items: {
+        ...house.items,
+        bank: {
+          id: "bank",
+          keyring: { value: "personal", ts: later },
+          fields: { password: { value: "s3cret", ts: later } },
+          deleted: { value: false, ts: "000000000000000-00000-" },
+          history: [],
+        },
+      },
+      keyrings: {
+        ...house.keyrings,
+        personal: {
+          id: "personal",
+          name: { value: "Stolen", ts: later },
+          deleted: { value: false, ts: later },
+          dataset: { value: "ds-house", ts: later },
+        },
+        house: {
+          ...house.keyrings["house"]!,
+          dataset: { value: "ds-evil", ts: later },
+        },
+      },
+    };
+
+    const after = composeVault(rest, new Map([["ds-house", poisoned]]));
+
+    expect(after.keyrings["personal"]?.name.value).toBe("Just mine");
+    expect(datasetOf(after.keyrings["personal"])).toBeNull();
+    expect(datasetOf(after.keyrings["house"])).toBe("ds-house");
+    expect(datasetForItem(after, "personal")).toBeNull();
+    expect(itemField(after.items["bank"]!, "password")).toBeUndefined();
+    expect(itemField(after.items["wifi"]!, "title")).toBe("wifi");
+  });
 });

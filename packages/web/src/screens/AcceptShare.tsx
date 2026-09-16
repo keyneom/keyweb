@@ -6,16 +6,11 @@ import type { SharingApi } from "../vault/useVault";
 /**
  * They replied. This is the step that actually lets them in.
  *
- * Runs on arrival rather than behind a button, because by this point the owner
- * has already decided — they typed the address, they chose what the person may
- * do, and they sent the link. Asking again here would be asking the same
- * question twice.
- *
- * What it does show, and does not hide, is the key fingerprint. The two links
- * travel over ordinary chat, and the one thing an attacker on that channel can
- * do is substitute their own key for the recipient's. Six characters read out
- * loud is the whole defence, so it is on the screen at the moment it can still
- * be acted on rather than in a settings page nobody opens.
+ * The wrap waits behind a button. The two links travel over ordinary chat,
+ * and the one thing an attacker on that channel can do is substitute their
+ * own key for the recipient's. Six characters read out loud is the whole
+ * defence, so they have to be on screen *before* the content key is wrapped
+ * to whoever presented it — not on a confirmation that already happened.
  */
 export function AcceptShare({
   response,
@@ -27,12 +22,26 @@ export function AcceptShare({
   onDone: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    label: string;
+    email: string;
+    fingerprint: string;
+  } | null>(null);
   const [done, setDone] = useState<{ label: string; email: string; fingerprint: string } | null>(
     null,
   );
   const started = useRef(false);
 
-  const run = useCallback(async () => {
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setPreview(await sharing.previewResponse(response));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Keyweb couldn't finish that.");
+    }
+  }, [response, sharing]);
+
+  const accept = useCallback(async () => {
     setError(null);
     try {
       setDone(await sharing.acceptResponse(response));
@@ -41,13 +50,13 @@ export function AcceptShare({
     }
   }, [response, sharing]);
 
-  // Once, guarded by a ref rather than by state: a failure puts an error on
-  // screen and must not immediately try again behind it.
+  // Preview once. A failure puts an error on screen and must not immediately
+  // try again behind it.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void run();
-  }, [run]);
+    void load();
+  }, [load]);
 
   if (done) {
     return (
@@ -63,20 +72,40 @@ export function AcceptShare({
           send.
         </p>
 
+        <button type="button" className="btn pri big" onClick={onDone}>
+          Done
+        </button>
+      </section>
+    );
+  }
+
+  if (preview && !error) {
+    return (
+      <section className="unlock">
+        <span className="unlock-mark" aria-hidden="true">
+          <ShieldIcon />
+        </span>
+        <h1 className="unlock-title">
+          Let {preview.email} into {preview.label}?
+        </h1>
+        <p className="unlock-sub">
+          Ask them to read their key out. If it doesn't match, don't let them in — someone else
+          may have got hold of the link.
+        </p>
+
         <p className="status" data-tone="calm">
           <ShieldIcon />
           <span>
-            <b>Their key is {done.fingerprint}.</b>
-            <em>
-              If you want to be certain the reply came from them and not from someone who got hold
-              of the link, ask them to read those six characters out. Keyweb shows them the same
-              ones.
-            </em>
+            <b>Their key is {preview.fingerprint}.</b>
+            <em>Keyweb shows them the same ones. This is the check, not a formality after it.</em>
           </span>
         </p>
 
-        <button type="button" className="btn pri big" onClick={onDone}>
-          Done
+        <button type="button" className="btn pri big" onClick={() => void accept()}>
+          Their key matches — let them in
+        </button>
+        <button type="button" className="btn sec" onClick={onDone}>
+          Not this person
         </button>
       </section>
     );
@@ -87,7 +116,7 @@ export function AcceptShare({
       <span className="unlock-mark" aria-hidden="true">
         <ShieldIcon />
       </span>
-      <h1 className="unlock-title">{error ? "That didn't work" : "Letting them in…"}</h1>
+      <h1 className="unlock-title">{error ? "That didn't work" : "Checking the reply…"}</h1>
 
       {error ? (
         <>
@@ -101,7 +130,7 @@ export function AcceptShare({
             type="button"
             className="btn pri big"
             onClick={() => {
-              void run();
+              void (preview ? accept() : load());
             }}
           >
             Try again
@@ -111,7 +140,7 @@ export function AcceptShare({
           </button>
         </>
       ) : (
-        <p className="unlock-sub">Confirming it's you, then giving them the key.</p>
+        <p className="unlock-sub">Confirming the invitation this reply belongs to.</p>
       )}
     </section>
   );
