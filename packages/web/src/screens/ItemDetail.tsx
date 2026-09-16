@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  attachmentsOf,
   isSecretField,
   itemField,
   type ItemField,
@@ -7,6 +8,8 @@ import {
   type VaultState,
 } from "@keyweb/vault-core";
 import { CodeLegend, CodeText } from "../ui/CodeText";
+import { OtpCode } from "../ui/OtpCode";
+import { attachmentUrl, humanSize, isViewableImage, revokeAttachmentUrl } from "../vault/attachments";
 import { BackIcon, CopyIcon, EyeIcon } from "../ui/icons";
 
 /**
@@ -16,7 +19,18 @@ import { BackIcon, CopyIcon, EyeIcon } from "../ui/icons";
  * list instead; `kind` picks the template. Everything not named here gets the
  * generic treatment, which is what makes an imported field visible at all.
  */
-const PRESENTED: readonly ItemField[] = ["title", "username", "password", "url", "note", "folder", "tags", "kind"];
+const PRESENTED: readonly ItemField[] = [
+  "title",
+  "username",
+  "password",
+  "url",
+  "note",
+  // Shown as a rotating code by `OtpCode`, not as a field of text.
+  "otp",
+  "folder",
+  "tags",
+  "kind",
+];
 
 const CLIPBOARD_CLEAR_SECONDS = 45;
 const REVEAL_SECONDS = 30;
@@ -28,6 +42,9 @@ export function ItemDetail({
   onEdit,
   onDelete,
   onCopied,
+  onOpenFile,
+  onAttach,
+  onRemoveFile,
 }: {
   item: ItemRecord;
   state: VaultState;
@@ -35,6 +52,9 @@ export function ItemDetail({
   onEdit: () => void;
   onDelete: () => void;
   onCopied: (message: string) => void;
+  onOpenFile: (blobId: string) => void;
+  onAttach: (file: File) => Promise<void>;
+  onRemoveFile: (blobId: string) => Promise<void>;
 }) {
   const [revealed, setRevealed] = useState(false);
   const title = itemField(item, "title") ?? "Untitled";
@@ -137,6 +157,10 @@ export function ItemDetail({
       {/* Only while something is actually on screen to decode. */}
       {revealed && <CodeLegend />}
 
+      {itemField(item, "otp") && (
+        <OtpCode secret={itemField(item, "otp")!} onCopy={(value, label) => void copy(value, label)} />
+      )}
+
       {url && (
         <label className="field">
           <span>Website</span>
@@ -154,6 +178,15 @@ export function ItemDetail({
           </div>
         </label>
       )}
+
+      <Files
+        item={item}
+        state={state}
+        onOpen={onOpenFile}
+        onAttach={onAttach}
+        onRemove={onRemoveFile}
+        onError={onCopied}
+      />
 
       {extras.map((name) => (
         <ExtraField
@@ -220,5 +253,149 @@ function ExtraField({
         </button>
       </div>
     </label>
+  );
+}
+
+/**
+ * The files kept on a password.
+ *
+ * Images get a thumbnail, because a row of identical paperclips is useless for
+ * telling one scan from another — and a scan is the thing people most often
+ * keep here. Everything else says what it is and offers to be saved.
+ */
+function Files({
+  item,
+  state,
+  onOpen,
+  onAttach,
+  onRemove,
+  onError,
+}: {
+  item: ItemRecord;
+  state: VaultState;
+  onOpen: (blobId: string) => void;
+  onAttach: (file: File) => Promise<void>;
+  onRemove: (blobId: string) => Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const files = attachmentsOf(item);
+
+  return (
+    <>
+      {files.length > 0 && (
+        <label className="field">
+          <span>Files</span>
+          <div className="files">
+            {files.map((file) => {
+              const blob = state.items[file.blobId];
+              const type = blob ? (itemField(blob, "type") ?? "") : "";
+              const size = Number(blob ? (itemField(blob, "size") ?? "0") : "0");
+              return (
+                <div key={file.blobId} className="file-row">
+                  <Thumbnail blob={blob} type={type} name={file.name} />
+                  <span className="rowtext" style={{ flex: 1 }}>
+                    <b>{file.name}</b>
+                    <span>
+                      {blob
+                        ? // The stored size is of the base64, which is a third
+                          // larger than the file somebody recognises.
+                          humanSize(Math.round((size * 3) / 4))
+                        : "Still arriving from your other device"}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    disabled={!blob}
+                    onClick={() => onOpen(file.blobId)}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await onRemove(file.blobId);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </label>
+      )}
+
+      <label className="field">
+        <span>{files.length > 0 ? "Attach another file" : "Attach a file"}</span>
+        <div className="box">
+          <input
+            type="file"
+            disabled={busy}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              // Cleared straight away so picking the same file twice in a row
+              // still fires a change.
+              event.target.value = "";
+              if (!file) return;
+              setBusy(true);
+              try {
+                await onAttach(file);
+              } catch (cause) {
+                onError(
+                  cause instanceof Error ? cause.message : "Keyweb couldn't read that file.",
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
+        </div>
+        <span className="hint">
+          Scans, recovery-code sheets, key files. They are locked with everything else and go
+          wherever this keyring goes.
+        </span>
+      </label>
+    </>
+  );
+}
+
+/** A small preview for an image, and nothing at all for anything else. */
+function Thumbnail({
+  blob,
+  type,
+  name,
+}: {
+  blob: ItemRecord | undefined;
+  type: string;
+  name: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const data = blob ? itemField(blob, "secret:data") : undefined;
+  const viewable = isViewableImage(type);
+
+  useEffect(() => {
+    if (!viewable || !data) return;
+    const created = attachmentUrl(data, type);
+    setUrl(created);
+    return () => {
+      revokeAttachmentUrl(created);
+      setUrl(null);
+    };
+  }, [data, type, viewable]);
+
+  if (url) return <img className="thumb" src={url} alt={name} />;
+  return (
+    <span className="avatar" aria-hidden="true">
+      {name.toLowerCase().replace(/^.*\./, "").slice(0, 3).toUpperCase() || "FILE"}
+    </span>
   );
 }

@@ -782,3 +782,68 @@
   opacity: 0.55;
   cursor: default;
 }
+
+/*
+ * Looking at a file kept in the vault.
+ *
+ * The stage clips rather than scrolls: a zoomed image is moved by dragging it,
+ * which is the same gesture on a phone and a trackpad, and scrollbars on a
+ * zoomable image end up fighting the drag.
+ */
+.viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.viewer-stage {
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  min-height: 40vh;
+  max-height: 60vh;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+}
+
+.viewer-stage img {
+  max-width: 100%;
+  max-height: 60vh;
+  /* The transform origin is the centre so zooming does not walk the image
+     off-screen, and the transition is short enough not to lag a drag. */
+  transform-origin: center;
+  transition: transform 120ms ease-out;
+  user-select: none;
+}
+
+/* A file on a password: a row that is a button, with room for the name. */
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0.7rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  text-align: left;
+}
+
+.file-row .thumb {
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--paper);
+  flex: 0 0 auto;
+}

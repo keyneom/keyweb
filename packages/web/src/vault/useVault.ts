@@ -36,6 +36,7 @@ export type { Member, PendingInvite, ShareRole } from "./sharing";
 import type { SharingDatasetFileV1, SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import type { SharingInvitationV1 } from "@keyneom/sync-kit/sharing";
 import { importOperations } from "./keepass";
+import { prepareFile } from "./attachments";
 import type { ImportPreview, UngroupedDestination } from "./keepass";
 
 /**
@@ -120,6 +121,10 @@ export type VaultApi = {
   /** Deletes the keyring *and* the passwords in it. */
   deleteKeyring(keyringId: string): Promise<void>;
   addKeyring(name: string): Promise<string>;
+  /** Attach a file to a password. Throws `FileTooBig` past the size ceiling. */
+  attachFile(itemId: string, file: File): Promise<void>;
+  /** Take a file off, and out of the vault if nothing else references it. */
+  removeAttachment(itemId: string, blobId: string): Promise<void>;
   /** Copy a parsed KeePass file in. Returns how many entries landed. */
   importKeePass(preview: ImportPreview, ungrouped: UngroupedDestination): Promise<number>;
   /**
@@ -645,6 +650,45 @@ export function useVault(): VaultApi {
     [refresh, backgroundSync],
   );
 
+  /**
+   * Attach a file to a password.
+   *
+   * The keyring comes from the item rather than the caller, so a file always
+   * lands in the same document as the password it belongs to — which is what
+   * makes it travel when the keyring is shared.
+   */
+  const attachFile = useCallback(
+    async (itemId: string, file: File) => {
+      const sync = syncRef.current;
+      if (!sync) return;
+      const prepared = await prepareFile(file);
+      const keyringId = state.items[itemId]?.keyring.value;
+      if (!keyringId) return;
+      refresh(
+        await sync.attachFile({
+          itemId,
+          keyringId,
+          blobId: prepared.blobId,
+          name: prepared.name,
+          type: prepared.type,
+          data: prepared.data,
+        }),
+      );
+      backgroundSync();
+    },
+    [state.items, refresh, backgroundSync],
+  );
+
+  const removeAttachment = useCallback(
+    async (itemId: string, blobId: string) => {
+      const sync = syncRef.current;
+      if (!sync) return;
+      refresh(await sync.removeAttachment(itemId, blobId));
+      backgroundSync();
+    },
+    [refresh, backgroundSync],
+  );
+
   const addKeyring = useCallback(
     async (name: string) => {
       const sync = syncRef.current;
@@ -752,6 +796,8 @@ export function useVault(): VaultApi {
     deleteKeyring,
     addKeyring,
     importKeePass,
+    attachFile,
+    removeAttachment,
     readOnlyKeyrings,
     sharing,
   };

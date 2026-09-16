@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
+import { FileViewer } from "./screens/FileViewer";
 import { ItemEdit } from "./screens/ItemEdit";
 import { Grant } from "./screens/Grant";
 import { AcceptShare } from "./screens/AcceptShare";
@@ -13,7 +14,7 @@ import {
   type KeywebJoinLink,
 } from "./vault/sharing/links";
 import { decodeSharingDatasetFilesV1 } from "@keyneom/sync-kit/sharing";
-import { datasetOf } from "@keyweb/vault-core";
+import { datasetOf, itemField } from "@keyweb/vault-core";
 import type { SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
@@ -40,6 +41,13 @@ export function App() {
   const generator = useGeneratorRules();
   const [route, setRoute] = useState<Route>({ name: "list" });
   const [toast, setToast] = useState<string | null>(null);
+  /**
+   * A file being looked at, by the id of the item holding its bytes.
+   *
+   * Held rather than routed, so closing the viewer returns to the password
+   * exactly as it was — including anything half-typed on the way there.
+   */
+  const [viewing, setViewing] = useState<string | null>(null);
 
   /**
    * Arriving from the phone to hand a Drive file over.
@@ -255,10 +263,28 @@ export function App() {
         />
       )}
 
-      {route.name === "detail" && current && (
+      {route.name === "detail" && current && viewing && vault.state.items[viewing] && (
+        <FileViewer
+          name={itemField(vault.state.items[viewing]!, "name") ?? "File"}
+          type={itemField(vault.state.items[viewing]!, "type") ?? ""}
+          data={itemField(vault.state.items[viewing]!, "secret:data") ?? ""}
+          bytes={Math.round(
+            (Number(itemField(vault.state.items[viewing]!, "size") ?? "0") * 3) / 4,
+          )}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
+      {route.name === "detail" && current && !viewing && (
         <ItemDetail
           item={current}
           state={vault.state}
+          onOpenFile={setViewing}
+          onAttach={(file) => vault.attachFile(current.id, file)}
+          onRemoveFile={async (blobId) => {
+            await vault.removeAttachment(current.id, blobId);
+            setToast("That file was removed from your vault.");
+          }}
           onBack={() => setRoute({ name: "list" })}
           onEdit={() => setRoute({ name: "edit", itemId: current.id })}
           onDelete={() => {
