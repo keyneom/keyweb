@@ -370,6 +370,9 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             }.apply()
                         },
                         onBack = ::goBack,
+                        canShare = viewModel.canShare,
+                        sharingKey = ui.sharingKey,
+                        onShowSharingKey = viewModel::showSharingKey,
                         onBackup = { route = Route.Backup },
                         onImport = {
                             // Quietly: if Drive access already exists the list

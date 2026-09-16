@@ -58,10 +58,30 @@ writes a checksum.
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
+## Sharing a keyring
+
+Built, against the same Drive files and the same two links the web app uses —
+see `docs/keyring-sharing.md`. The Drive half comes from
+`com.keyneom:sync-kit-android`, which is published to **GitHub Packages** and
+needs authentication even to read: set `gpr.user` and `gpr.key` in
+`~/.gradle/gradle.properties`, or export `GITHUB_ACTOR` and `GITHUB_TOKEN`.
+Without them the build fails at dependency resolution rather than at compile.
+
+Two things about sharing on a phone specifically:
+
+- **Granting a file leaves the app.** `drive.file` is a per-file grant and
+  Google issues it only through the Picker, which runs only in a browser. The
+  app hands the *file list* out to the web app's grant page and the person comes
+  straight back; the vault stays here and does the joining itself.
+- **Tapping a share link may not open Keyweb.** The app claims
+  `keyneom.github.io/keyweb/`, but Android only honours that once an
+  `assetlinks.json` naming it is served from the root of that domain — which is
+  a different repository. Until then the keyrings screen takes a pasted link,
+  which works on every phone regardless.
+
 ## Not in this build
 
-Encrypted Drive backup, keyring sharing, Android Autofill, and Credential
-Manager passkey unlock. The vault is local-first and says so on screen rather
-than implying it is backing anything up. Backup arrives via
-`com.keyneom:sync-kit-android`, which supplies the Drive transport, passkey PRF
-and background sync; see `docs/google-setup.md` for the Cloud configuration.
+Credential Manager passkey unlock. Keyweb answers password requests but is not
+a passkey provider: issuing one needs a relying party to register it against,
+and Keyweb has no server. See `docs/google-setup.md` for the Cloud
+configuration behind backup and sharing.

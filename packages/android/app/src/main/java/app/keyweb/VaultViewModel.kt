@@ -164,6 +164,8 @@ data class VaultUiState(
     /** What the generator opens with: whatever was used last. */
     val lastRules: PasswordRules = PasswordRules(),
     val share: ShareUiState = ShareUiState(),
+    /** This person's own sharing key, once they have asked to see it. */
+    val sharingKey: String? = null,
     val toast: String? = null,
 )
 
@@ -766,6 +768,18 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     /** True when this build can share at all: it needs a Google account. */
     val canShare: Boolean get() = sharing != null
+
+    /** The six characters naming this person, for reading aloud to someone. */
+    fun showSharingKey() {
+        val engine = sharing ?: return
+        viewModelScope.launch {
+            try {
+                _state.value = _state.value.copy(sharingKey = engine.myFingerprint())
+            } catch (cause: Exception) {
+                _state.value = _state.value.copy(toast = describeShare(cause))
+            }
+        }
+    }
 
     /**
      * Open the sharing screen for one keyring.

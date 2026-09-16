@@ -4,18 +4,16 @@ Design, written before any code, because the first decision changes the vault
 format and is expensive to reverse. Modelled on easy-bc, which has shipped this
 and whose mistakes are therefore already paid for.
 
-## What the app currently promises
+## Status
 
-Three screens already tell people this works:
+**Built, on both platforms.** The sentence three screens already showed —
 
 > A keyring is a group of passwords you can share as one. You share a keyring —
 > never a single password.
 
-Nothing behind it exists. `packages/android/README.md` is honest — "keyring
-sharing" sits under *Not in this build* — but the copy is not, and anyone
-reading it goes looking for a button. That is the first thing to fix whatever
-else is decided, and it is fixed by building this rather than by softening the
-sentence.
+— is now true. What follows is the design as written before any code, kept
+because the reasoning is still the reasoning; a *What actually shipped* section
+at the end records where the build diverged from it and why.
 
 ## What easy-bc does
 
@@ -97,7 +95,7 @@ one where sharing a keyring shares a keyring.
 
 ## Staging
 
-Each stage is shippable and leaves the app working:
+Each stage is shippable and leaves the app working. All four are done.
 
 1. **Dataset-backed keyrings, alone.** A keyring can live in its own document
    and sync, with no sharing at all. This is the vault-format work and the
@@ -109,16 +107,79 @@ Each stage is shippable and leaves the app working:
 3. **Invite and join.** The two links, the Picker grant hand-off (reusing
    `GrantBrowser`, which already solves the Android browser problem), and the
    accept step.
-4. **Membership and roles**, then revocation.
+4. **Membership and roles**, then revocation. Reader and writer, who can see
+   it, and taking access away — which re-encrypts for everyone else and drops
+   the Drive permission, and says plainly that it cannot unsee what was already
+   seen.
 
-## Open questions
+## What actually shipped
 
-- **Does a shared keyring keep working offline?** It must. The vault is
-  local-first and says so; a shared keyring that is unreadable on a train would
-  break that promise for the passwords most likely to be needed.
-- **What does the recipient see it as?** A keyring in their own vault, or a
-  separate thing? Their own, probably — but then deleting it must mean
-  "leave", not "delete everyone's".
-- **TOTP in a shared keyring.** `docs/two-factor.md` already says never to fill
-  a password and a code in one action. A shared second factor is a further
-  question and is out of scope for now.
+Four places where building it changed the design.
+
+**The sharing identity is wrapped by the recovery code, not the passkey.** The
+plan assumed sync-kit's passkey-wrapped identity carried over. It does not:
+Keyweb on Android is locked by the Android Keystore and a fingerprint, and
+opens the Drive backup through the *recovery* envelope precisely because there
+is no WebAuthn PRF on that side. An identity only the browser could unwrap
+would have left the phone making its own — one person appearing as two
+participants, unable to open the keyrings they shared themselves. The recovery
+secret is the one secret both platforms genuinely hold, and deriving from it
+adds no exposure, since anyone holding it can already restore the whole vault.
+
+A cross-platform fixture pins this: the browser writes an identity record, a
+Kotlin test unwraps that exact file, and the key ids have to match.
+
+The cost is narrow: a browser that has the passkey but was never given the
+printed code can read and back up the vault but cannot share until the code is
+entered. That device already knows it is in that state and already says so.
+
+**Moving a password between documents needed a new operation.** A CRDT cannot
+forget — leaving an item out of a document's next state does not remove it, it
+comes back on the next merge. So a move is a *purge* in the document it leaves
+and a full copy in the one it arrives in, stamped later so the live copy wins
+wherever the two meet. `item.purge` blanks the fields and drops the history
+rather than only tombstoning, because "I took that one out of the shared
+folder" has to be true of the file the other person reads, not just of the
+screen.
+
+**Renames follow the keyring; deletes do not.** The name is part of what was
+shared, so it lives in the shared document. A delete stays in the vault: for a
+keyring somebody else shared, "delete" means *leave*, and a tombstone published
+into the shared document would delete it out from under everyone else.
+
+**The phone hands the file grant to a browser, and hands over the file list
+rather than the join link.** `drive.file` is per-file and Google issues it only
+through the Picker, which runs only in a browser. Opening the *join link* over
+there would join the keyring into whatever vault that browser has — the wrong
+vault, and often no vault at all. So the phone keeps the vault and the join,
+and the browser does the one thing only it can.
+
+## The open questions, answered
+
+- **Does a shared keyring keep working offline?** Yes. The identity is cached
+  on the device in its wrapped form — unreadable without the recovery secret,
+  which is the same reason it is safe to leave in Drive — and read before Drive
+  rather than after. A device that has joined needs no network to open what it
+  joined. A device that has *never* fetched the identity does need one, and
+  says "couldn't reach" rather than "no identity", because the second answer
+  would make it mint a duplicate.
+- **What does the recipient see it as?** A keyring in their own vault. Removing
+  it means *leave*: the keyring is tombstoned locally and the binding cleared,
+  and the shared document is not touched. The screen says so — "the person who
+  shared it keeps their copy" — because the word on the button is the same word
+  that deletes things elsewhere.
+- **TOTP in a shared keyring.** Still open, still out of scope.
+  `docs/two-factor.md` says never to fill a password and a code in one action;
+  a shared second factor is a further question.
+
+## Still to build
+
+- **Roles beyond reader and writer.** `admin` exists in the protocol and is not
+  offered: a second person who can invite more people is a bigger decision than
+  a checkbox.
+- **Ownership transfer.** sync-kit supports it. Keyweb does not offer it, so a
+  shared keyring dies with its owner's account.
+- **Link verification on Android.** The app claims its own web address, but
+  Android will not honour that until an `assetlinks.json` naming it is served
+  from the root of `keyneom.github.io` — a file in another repository. Until
+  then a pasted link is the path that works.

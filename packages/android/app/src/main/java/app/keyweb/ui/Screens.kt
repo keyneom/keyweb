@@ -767,6 +767,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onBackup: () -> Unit,
     onImport: () -> Unit,
+    /** Null when this build has no Google account and so cannot share at all. */
+    sharingKey: String? = null,
+    canShare: Boolean = false,
+    onShowSharingKey: () -> Unit = {},
 ) {
     val statusColors = LocalKeywebStatus.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -791,6 +795,34 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Backup and recovery", onBackup)
+
+            if (canShare) {
+                Spacer(Modifier.height(24.dp))
+                Text("Your sharing key", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "When somebody shares a keyring with you, this is how their Keyweb knows " +
+                        "it is really you. It is the same on every device you sign in to with " +
+                        "this Google account.",
+                    color = statusColors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                if (sharingKey != null) {
+                    Text(sharingKey, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Read these out to the person you are sharing with. If what they see " +
+                            "doesn't match, the link was tampered with on the way.",
+                        color = statusColors.muted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    // Behind a button rather than shown on arrival: reading it
+                    // needs the vault open, and a settings screen that demands
+                    // that the moment it opens teaches people to tap past
+                    // prompts without reading them.
+                    SecondaryButton("Show my sharing key", onShowSharingKey)
+                }
+            }
 
             Spacer(Modifier.height(24.dp))
             Text("Coming from another password app", style = MaterialTheme.typography.labelLarge)
