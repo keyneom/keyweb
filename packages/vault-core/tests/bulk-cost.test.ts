@@ -132,3 +132,69 @@ describe("cost of a bulk change", () => {
     expect(storage.commits).toBe(1);
   });
 });
+
+describe("cost of an import", () => {
+  it("writes a 200-password import once, whatever the keyring count", async () => {
+    const storage = new CountingStorage();
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock: createClock({ node: "bench" }),
+    });
+
+    // What importKeePass / confirmImport build: a keyring op per new group,
+    // then an item op per entry, handed over as one batch.
+    const ops: VaultOp[] = [];
+    for (const name of ["Banking", "Shopping", "Work", "Email", "Misc"]) {
+      const { opId, ts } = sync.stamp();
+      ops.push({ kind: "keyring.put", opId, ts, keyringId: `r-${name}`, name });
+    }
+    for (let i = 0; i < 200; i += 1) {
+      const { opId, ts } = sync.stamp();
+      ops.push({
+        kind: "item.put",
+        opId,
+        ts,
+        itemId: `kdbx:${i}`,
+        keyringId: "r-Banking",
+        fields: { title: `t${i}` },
+      });
+    }
+
+    const after = await sync.commitAll(ops);
+
+    expect(Object.keys(after.items)).toHaveLength(200);
+    expect(Object.keys(after.keyrings)).toHaveLength(5);
+    expect(storage.batches).toBe(1);
+    expect(storage.commits).toBe(0);
+    expect(storage.clockWrites).toBe(1);
+  });
+
+  it("stamps every operation separately, so a re-import still merges", async () => {
+    // The tempting shortcut is one op for the whole import. It would break
+    // re-importing: each entry needs its own causal timestamp to win or lose
+    // against an edit made in Keyweb since the last import.
+    const storage = new CountingStorage();
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock: createClock({ node: "bench" }),
+    });
+
+    const stamps = Array.from({ length: 10 }, () => sync.stamp());
+    expect(new Set(stamps.map((s) => s.opId)).size).toBe(10);
+    expect(new Set(stamps.map((s) => s.ts)).size).toBe(10);
+
+    await sync.commitAll(
+      stamps.map((s, i) => ({
+        kind: "item.put" as const,
+        opId: s.opId,
+        ts: s.ts,
+        itemId: `i${i}`,
+        keyringId: "r",
+        fields: { title: `t${i}` },
+      })),
+    );
+    expect(await storage.pending()).toHaveLength(10);
+  });
+});

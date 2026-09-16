@@ -7,6 +7,7 @@ import {
   type RemoteVaultStore,
   RemoteUnavailableError,
   type SyncStatus,
+  type VaultOp,
   type VaultState,
   VaultSync,
   visibleItems,
@@ -20,6 +21,7 @@ import {
   parseRecoveryCode,
 } from "./recovery";
 import { GoogleDriveRemote } from "./drive";
+import { importOperations } from "./keepass";
 import type { ImportPreview, UngroupedDestination } from "./keepass";
 
 /**
@@ -500,8 +502,13 @@ export function useVault(): VaultApi {
    *
    * Each top-level group becomes a keyring, and entries keep their KeePass
    * UUIDs, so importing the same file again updates rather than duplicates.
-   * Every operation goes through the normal commit path, so an import is as
-   * durable and as recoverable as anything typed by hand.
+   *
+   * One write, not one per password. Importing a file of two hundred used to
+   * commit two hundred times, each re-encrypting the whole vault and re-reading
+   * a growing outbox — the same cost that made deleting a large keyring slow,
+   * and on the path people meet first. Every operation is still stamped
+   * individually by the live clock, so a re-import still beats edits made in
+   * between and the outbox still carries each change to other devices.
    */
   const importKeePass = useCallback(
     async (preview: ImportPreview, ungrouped: UngroupedDestination) => {
@@ -509,17 +516,29 @@ export function useVault(): VaultApi {
       if (!sync) return 0;
 
       const existing = Object.values(state.keyrings).filter((ring) => !ring.deleted.value);
+      const keyringOps: VaultOp[] = [];
       const keyringIds: Record<string, string> = {};
-      const keyringFor = async (name: string) => {
+      // Remembers what it has already queued, not just what the vault already
+      // had. Two callers can ask for the same name in one import — the
+      // ungrouped keyring defaults to the file's name, which may well match a
+      // group in it — and without this they would each mint an id and the
+      // import would end with two keyrings wearing the same name.
+      const minted = new Map<string, string>();
+      const keyringFor = (name: string) => {
+        const seen = minted.get(name);
+        if (seen !== undefined) return seen;
         const already = existing.find((ring) => ring.name.value === name);
-        if (already) return already.id;
-        const id = crypto.randomUUID();
-        await sync.putKeyring({ keyringId: id, name });
+        const id = already?.id ?? crypto.randomUUID();
+        if (!already) {
+          const { opId, ts } = sync.stamp();
+          keyringOps.push({ kind: "keyring.put", opId, ts, keyringId: id, name });
+        }
+        minted.set(name, id);
         return id;
       };
 
       for (const name of preview.keyringNames) {
-        keyringIds[name] = await keyringFor(name);
+        keyringIds[name] = keyringFor(name);
       }
 
       // Where the entries in no group go. Asked of the user rather than
@@ -530,23 +549,16 @@ export function useVault(): VaultApi {
           ? ""
           : ungrouped.kind === "existing"
             ? ungrouped.keyringId
-            : await keyringFor(ungrouped.name);
+            : keyringFor(ungrouped.name);
 
-      // Committed one at a time through the normal path, so each entry is
-      // stamped by the live clock and lands in the outbox like any other edit.
-      // That ordering is what lets a re-import beat edits made in Keyweb
-      // since the last one, and what makes a half-finished import durable
-      // rather than lost.
-      let next = await sync.state();
-      for (const entry of preview.entries) {
-        next = await sync.putItem({
-          itemId: entry.itemId,
-          keyringId:
-            entry.keyringName === null ? ungroupedKeyringId : keyringIds[entry.keyringName]!,
-          fields: entry.fields,
-        });
-      }
-      refresh(next);
+      // The same op builder the import tests exercise, rather than a second
+      // copy of the mapping inline here. It throws on a keyring it was not
+      // given, which is the behaviour those tests pin down.
+      const itemOps = importOperations(preview, keyringIds, ungroupedKeyringId, () => sync.stamp());
+
+      // Keyrings first: an item op naming a keyring that does not exist yet
+      // would be replayed in that order by another device.
+      refresh(await sync.commitAll([...keyringOps, ...itemOps]));
       backgroundSync();
       return preview.entries.length;
     },

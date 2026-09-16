@@ -159,3 +159,62 @@ describe("suggesting a name for the ungrouped keyring", () => {
     expect(suggestedKeyringName("   ")).toBe("Imported");
   });
 });
+
+describe("the ungrouped keyring colliding with a group name", () => {
+  /**
+   * The suggested name for the ungrouped keyring is the file's own, so it can
+   * easily match a group inside that same file — "Family passwords.kdbx" with
+   * a "Family passwords" group in it. Both then ask for a keyring of that
+   * name, and if the second ask does not see the first, the import ends with
+   * two keyrings wearing the same name and the passwords split between them.
+   *
+   * Nothing errors when that happens, which is why it is worth a test: it
+   * looks like a duplicate folder appearing for no reason.
+   */
+  async function fileWithGroupNamedLikeTheFile(): Promise<ArrayBuffer> {
+    registerArgon2();
+    const credentials = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString("pw"));
+    const db = kdbxweb.Kdbx.create(credentials, "MyVault");
+    const root = db.getDefaultGroup();
+    const add = (group: kdbxweb.KdbxGroup, title: string) => {
+      const entry = db.createEntry(group);
+      entry.fields.set("Title", title);
+      entry.fields.set("Password", kdbxweb.ProtectedValue.fromString("x"));
+    };
+    add(root, "loose-one");
+    add(db.createGroup(root, "Family passwords"), "in-the-group");
+    return db.save();
+  }
+
+  it("uses one keyring, not two, when the names collide", async () => {
+    const preview = await readKeePass(await fileWithGroupNamedLikeTheFile(), "pw");
+    expect(preview.ungrouped).toBe(1);
+    expect(preview.keyringNames).toEqual(["Family passwords"]);
+
+    // Both paths ask for "Family passwords": the group, and the ungrouped
+    // destination named after the file.
+    const minted = new Map<string, string>();
+    let next = 0;
+    const keyringFor = (name: string) => {
+      const seen = minted.get(name);
+      if (seen !== undefined) return seen;
+      const id = `ring-${++next}`;
+      minted.set(name, id);
+      return id;
+    };
+    const keyringIds = Object.fromEntries(
+      preview.keyringNames.map((name) => [name, keyringFor(name)]),
+    );
+    const ungroupedId = keyringFor("Family passwords");
+
+    expect(minted.size).toBe(1);
+    expect(ungroupedId).toBe(keyringIds["Family passwords"]);
+
+    const ops = importOperations(preview, keyringIds, ungroupedId, () => ({
+      opId: `op-${++next}`,
+      ts: `0017000000000${next}-00000-test`,
+    }));
+    const rings = new Set(ops.map((op) => (op as { keyringId: string }).keyringId));
+    expect(rings.size).toBe(1);
+  });
+});

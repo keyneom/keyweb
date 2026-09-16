@@ -158,6 +158,19 @@ export class VaultSync {
     return next;
   }
 
+  /**
+   * A fresh operation id and causal timestamp from this engine's clock.
+   *
+   * For callers that build their own operations — the KeePass import is the
+   * one — so they can hand a whole batch to `commitAll`. The stamp has to come
+   * from here rather than from the caller: the clock is what orders an import
+   * against edits made in between, and a clock of the caller's own would not
+   * be the one the engine persists.
+   */
+  stamp(): { opId: string; ts: Hlc } {
+    return { opId: this.#newId(), ts: this.#clock.now() };
+  }
+
   /** Stamp and delete several items in one write. */
   deleteItems(itemIds: readonly string[]): Promise<VaultState> {
     return this.commitAll(

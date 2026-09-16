@@ -796,28 +796,36 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 // map landed in a different folder depending on what the
                 // groups happened to be called.
                 val rings = LinkedHashMap<String, String>()
-                var current = engine.state()
-                for (name in file.keyringNames) {
+                val current = engine.state()
+                val ops = mutableListOf<VaultOp>()
+
+                // Remembers what it has already queued, not just what the
+                // vault already had. Two callers can ask for the same name in
+                // one import — the ungrouped keyring defaults to the file's
+                // name, which may well match a group in it — and without this
+                // they would each mint an id and the import would end with two
+                // keyrings wearing the same name.
+                val minted = mutableMapOf<String, String>()
+                fun keyringFor(name: String): String {
+                    minted[name]?.let { return it }
                     val existing = current.keyrings.values
                         .firstOrNull { !it.deleted.value && it.name.value == name }
-                    rings[name] = existing?.id ?: UUID.randomUUID().toString().also { id ->
-                        current = engine.putKeyring(keyringId = id, name = name)
-                    }
+                    if (existing != null) return existing.id.also { minted[name] = it }
+                    val id = UUID.randomUUID().toString()
+                    val stamp = engine.stamp()
+                    ops += VaultOp.KeyringPut(stamp.opId, stamp.ts, id, name)
+                    minted[name] = id
+                    return id
                 }
+
+                for (name in file.keyringNames) rings[name] = keyringFor(name)
                 // Where the entries in no group go. Resolved before any
                 // entry is written, so a half-finished import cannot leave
                 // them somewhere arbitrary.
                 val ungroupedId = when {
                     file.ungrouped == 0 -> ""
                     choice is UngroupedDestination.Existing -> choice.keyringId
-                    else -> {
-                        val name = (choice as UngroupedDestination.New).name.trim()
-                        val already = current.keyrings.values
-                            .firstOrNull { !it.deleted.value && it.name.value == name }
-                        already?.id ?: UUID.randomUUID().toString().also { id ->
-                            current = engine.putKeyring(keyringId = id, name = name)
-                        }
-                    }
+                    else -> keyringFor((choice as UngroupedDestination.New).name.trim())
                 }
 
                 for (entry in file.entries) {
@@ -830,15 +838,27 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     check(keyringId.isNotEmpty()) {
                         "No keyring was prepared for \"${entry.keyringName}\"."
                     }
-                    current = engine.putItem(
+                    val stamp = engine.stamp()
+                    ops += VaultOp.ItemPut(
+                        opId = stamp.opId,
+                        ts = stamp.ts,
                         itemId = "kdbx:${entry.uuid}",
                         keyringId = keyringId,
                         fields = entry.toFields(),
                     )
                 }
+
+                // One write. Importing a file of two hundred passwords used to
+                // commit two hundred times, each re-encrypting the whole vault
+                // and re-reading a growing outbox — the same cost that made
+                // deleting a large keyring slow, on the path people meet
+                // first. The keyring ops are ahead of the item ops, so a
+                // device replaying the outbox never sees an item naming a
+                // keyring that does not exist yet.
+                val next = engine.commitAll(ops)
                 pendingBytes = null
                 pendingFile = null
-                publish(current)
+                publish(next)
                 setImport {
                     it.copy(
                         stage = ImportStage.DONE,
