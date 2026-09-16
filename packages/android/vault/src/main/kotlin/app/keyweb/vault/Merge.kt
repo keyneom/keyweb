@@ -26,6 +26,10 @@ private fun mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord =
         id = a.id,
         name = pickReg(a.name, b.name) ?: a.name,
         deleted = pickReg(a.deleted, b.deleted) ?: a.deleted,
+        // A register like the rest, so two devices that move the same keyring
+        // into its own document at the same moment converge on one dataset
+        // instead of each keeping their own and splitting the passwords in two.
+        dataset = pickReg(a.dataset, b.dataset) ?: Reg("", HLC_ZERO),
     )
 
 /**

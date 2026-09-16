@@ -36,7 +36,12 @@ function sampleState(): VaultState {
   const ts = "001700000000000-00001-test";
   return {
     keyrings: {
-      ring: { id: "ring", name: { value: "Household", ts }, deleted: { value: false, ts } },
+      ring: {
+        id: "ring",
+        name: { value: "Household", ts },
+        deleted: { value: false, ts },
+        dataset: { value: "", ts: "000000000000000-00000-" },
+      },
     },
     items: {
       bank: {

@@ -105,7 +105,27 @@ data class KeyringRecord(
     val id: String,
     val name: Reg<String>,
     val deleted: Reg<Boolean>,
+    /**
+     * Where this keyring's items live, when it is not the vault.
+     *
+     * Empty means local: the items sit in the vault document alongside every
+     * other keyring's, which is how every keyring works until someone shares
+     * one. A dataset id means they live in their own document, with their own
+     * key, in their own Drive file.
+     *
+     * That split exists because Drive shares *files*, not parts of files. A
+     * recipient needs access to the file the keyring is in, so a shared
+     * keyring left in the vault document would hand them every other
+     * keyring's ciphertext too. The reasoning in full is in
+     * `docs/keyring-sharing.md`.
+     *
+     * Defaulted, so a vault written before this existed still decodes.
+     */
+    val dataset: Reg<String> = Reg("", HLC_ZERO),
 )
+
+/** Where a keyring's items are kept, or null when they are in the vault. */
+fun datasetOf(keyring: KeyringRecord?): String? = keyring?.dataset?.value?.takeIf { it.isNotEmpty() }
 
 @Serializable
 data class VaultState(
@@ -125,7 +145,12 @@ fun newItem(id: String, keyringId: String, ts: Hlc): ItemRecord =
     )
 
 fun newKeyring(id: String, name: String, ts: Hlc): KeyringRecord =
-    KeyringRecord(id = id, name = Reg(name, ts), deleted = Reg(false, HLC_ZERO))
+    KeyringRecord(
+        id = id,
+        name = Reg(name, ts),
+        deleted = Reg(false, HLC_ZERO),
+        dataset = Reg("", HLC_ZERO),
+    )
 
 /** Items a person can actually see: not deleted, on a keyring that exists. */
 fun visibleItems(state: VaultState): List<ItemRecord> =

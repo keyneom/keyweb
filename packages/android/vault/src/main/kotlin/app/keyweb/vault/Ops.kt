@@ -57,6 +57,22 @@ sealed interface VaultOp {
         val name: String,
     ) : VaultOp
 
+    /**
+     * Move a keyring's items into their own document, or back into the vault.
+     *
+     * An empty [datasetId] means the vault. The operation records *where* the
+     * items belong; moving them is the caller's job, because it spans two
+     * documents and only storage can do that atomically.
+     */
+    @Serializable
+    @SerialName("keyring.bind")
+    data class KeyringBind(
+        override val opId: String,
+        override val ts: Hlc,
+        val keyringId: String,
+        val datasetId: String,
+    ) : VaultOp
+
     @Serializable
     @SerialName("keyring.delete")
     data class KeyringDelete(
@@ -83,6 +99,13 @@ fun applyOp(state: VaultState, op: VaultOp): VaultState = when (op) {
         val next = existing.copy(
             name = pickReg(existing.name, Reg(op.name, op.ts)) ?: Reg(op.name, op.ts),
         )
+        state.copy(keyrings = state.keyrings + (op.keyringId to next))
+    }
+
+    is VaultOp.KeyringBind -> {
+        val existing = state.keyrings[op.keyringId] ?: newKeyring(op.keyringId, "", op.ts)
+        val incoming = Reg(op.datasetId, op.ts)
+        val next = existing.copy(dataset = pickReg(existing.dataset, incoming) ?: incoming)
         state.copy(keyrings = state.keyrings + (op.keyringId to next))
     }
 

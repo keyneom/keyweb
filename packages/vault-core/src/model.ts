@@ -122,6 +122,25 @@ export type KeyringRecord = {
   id: string;
   name: Reg<string>;
   deleted: Reg<boolean>;
+  /**
+   * Where this keyring's items live, when it is not the vault.
+   *
+   * Empty means local: the items sit in the vault document alongside every
+   * other keyring's, which is how every keyring works until someone shares
+   * one. A dataset id means they live in their own document, with their own
+   * key, in their own Drive file.
+   *
+   * That split exists because Drive shares *files*, not parts of files. A
+   * recipient needs access to the file the keyring is in, so a shared keyring
+   * that stayed in the vault document would hand them every other keyring's
+   * ciphertext as well — unreadable today, held indefinitely, and one cipher
+   * weakness away from being readable. The reasoning in full is in
+   * `docs/keyring-sharing.md`.
+   *
+   * A register like everything else, so two devices deciding to share the same
+   * keyring at once converge rather than producing two datasets.
+   */
+  dataset: Reg<string>;
 };
 
 export type VaultState = {
@@ -144,7 +163,18 @@ export function newItem(id: string, keyringId: string, ts: Hlc): ItemRecord {
 }
 
 export function newKeyring(id: string, name: string, ts: Hlc): KeyringRecord {
-  return { id, name: reg(name, ts), deleted: reg(false, HLC_ZERO) };
+  return {
+    id,
+    name: reg(name, ts),
+    deleted: reg(false, HLC_ZERO),
+    dataset: reg("", HLC_ZERO),
+  };
+}
+
+/** Where a keyring's items are kept, or null when they are in the vault. */
+export function datasetOf(keyring: KeyringRecord | undefined): string | null {
+  const id = keyring?.dataset?.value;
+  return id ? id : null;
 }
 
 /** Items a person can actually see: not deleted, on a keyring that exists. */

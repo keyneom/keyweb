@@ -25,7 +25,15 @@ export type VaultOp =
   | { kind: "item.restore"; opId: string; ts: Hlc; itemId: string }
   | { kind: "item.move"; opId: string; ts: Hlc; itemId: string; keyringId: string }
   | { kind: "keyring.put"; opId: string; ts: Hlc; keyringId: string; name: string }
-  | { kind: "keyring.delete"; opId: string; ts: Hlc; keyringId: string };
+  | { kind: "keyring.delete"; opId: string; ts: Hlc; keyringId: string }
+  /**
+   * Move a keyring's items into their own document, or back into the vault.
+   *
+   * An empty `datasetId` means the vault. The operation records *where* the
+   * items belong; actually moving them is the caller's job, because it spans
+   * two documents and only the storage layer can do that atomically.
+   */
+  | { kind: "keyring.bind"; opId: string; ts: Hlc; keyringId: string; datasetId: string };
 
 function pushHistory(history: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
   const deduped = history.filter((h) => !(h.field === entry.field && h.ts === entry.ts));
@@ -47,6 +55,14 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
       const next = {
         ...existing,
         name: pickReg(existing.name, reg(op.name, op.ts)) ?? reg(op.name, op.ts),
+      };
+      return { ...state, keyrings: { ...state.keyrings, [op.keyringId]: next } };
+    }
+    case "keyring.bind": {
+      const existing = state.keyrings[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
+      const next = {
+        ...existing,
+        dataset: pickReg(existing.dataset, reg(op.datasetId, op.ts)) ?? reg(op.datasetId, op.ts),
       };
       return { ...state, keyrings: { ...state.keyrings, [op.keyringId]: next } };
     }

@@ -6,7 +6,8 @@ import type {
   Reg,
   VaultState,
 } from "./model.js";
-import { HISTORY_LIMIT, pickReg } from "./model.js";
+import { HISTORY_LIMIT, pickReg, reg } from "./model.js";
+import { HLC_ZERO } from "./hlc.js";
 
 function mergeHistory(a: HistoryEntry[], b: HistoryEntry[]): HistoryEntry[] {
   const seen = new Set<string>();
@@ -41,6 +42,15 @@ function mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord {
     id: a.id,
     name: pickReg(a.name, b.name) ?? a.name,
     deleted: pickReg(a.deleted, b.deleted) ?? a.deleted,
+    // A register like the rest, so two devices that move the same keyring into
+    // its own document at the same moment converge on one dataset instead of
+    // each keeping their own and silently splitting the passwords in two.
+    //
+    // Falling back to an empty register rather than to `a.dataset`: a state
+    // written before this field existed carries no register at all, and a
+    // merge must not fault on one. Empty reads as "in the vault", which is
+    // exactly what those states meant.
+    dataset: pickReg(a.dataset, b.dataset) ?? reg("", HLC_ZERO),
   };
 }
 
