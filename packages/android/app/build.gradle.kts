@@ -128,6 +128,11 @@ dependencies {
 
     implementation("androidx.activity:activity-ktx:1.9.3")
 
+    // Being a Credential Manager provider. Only the provider half is used --
+    // Keyweb answers requests, it does not make them -- and the service it
+    // registers exists only on Android 14 and later.
+    implementation("androidx.credentials:credentials:1.3.0")
+
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 

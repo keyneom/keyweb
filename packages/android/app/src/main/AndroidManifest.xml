@@ -60,6 +60,32 @@
         </service>
 
         <!--
+          The same thing for apps that ask through Credential Manager rather
+          than by showing a form. Android 14 and later only; the system simply
+          does not bind it on older releases, where the autofill service above
+          is the whole answer.
+        -->
+        <service
+            android:name=".autofill.KeywebCredentialService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <meta-data
+                android:name="android.credentials.provider"
+                android:resource="@xml/credential_provider" />
+            <intent-filter>
+                <action android:name="android.service.credentials.CredentialProviderService" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name=".autofill.CredentialUnlockActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
+        <!--
           Launched only by the platform, with the request it is answering.
           Not exported: nothing else has any business starting it.
         -->
