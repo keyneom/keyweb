@@ -229,11 +229,23 @@ internal class KdbxHeader(
 }
 
 /** The inner header, which only KDBX 4 has. */
-internal class KdbxInnerHeader(val streamId: Int, val streamKey: ByteArray) {
+internal class KdbxInnerHeader(
+    val streamId: Int,
+    val streamKey: ByteArray,
+    /**
+     * Attached files, in the order the header lists them.
+     *
+     * Position *is* the identity: an entry refers to a file by the index it
+     * appeared at, so these must be collected even when a particular file is
+     * never referenced, or every later reference points at the wrong file.
+     */
+    val binaries: List<ByteArray>,
+) {
     companion object {
         fun parse(reader: LittleEndianReader): KdbxInnerHeader {
             var streamId: Int? = null
             var streamKey: ByteArray? = null
+            val binaries = mutableListOf<ByteArray>()
             while (true) {
                 val id = reader.byte()
                 val size = reader.int32()
@@ -243,15 +255,16 @@ internal class KdbxInnerHeader(val streamId: Int, val streamKey: ByteArray) {
                     InnerHeaderField.STREAM_ID ->
                         streamId = LittleEndianReader(data).uint32().toInt()
                     InnerHeaderField.STREAM_KEY -> streamKey = data
-                    // Attachments are skipped deliberately: Keyweb has nowhere
-                    // to put them yet, and dropping them is better than failing
-                    // the whole import over a file nobody asked to bring in.
-                    InnerHeaderField.BINARY -> Unit
+                    // The first byte is a flags byte — bit 0 means the file is
+                    // memory-protected — and the rest is the file itself.
+                    InnerHeaderField.BINARY ->
+                        binaries += if (data.isEmpty()) data else data.copyOfRange(1, data.size)
                 }
             }
             return KdbxInnerHeader(
                 streamId ?: throw KdbxException("This file is missing its inner header."),
                 streamKey ?: throw KdbxException("This file is missing its inner header key."),
+                binaries,
             )
         }
     }

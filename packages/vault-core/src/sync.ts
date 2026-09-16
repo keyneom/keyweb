@@ -2,7 +2,16 @@ import type { Clock, Hlc } from "./hlc.js";
 import { HLC_ZERO } from "./hlc.js";
 import { mergeVaults } from "./merge.js";
 import type { ItemField, ItemRecord, VaultState } from "./model.js";
-import { datasetOf, emptyVault, fingerprint, visibleItems } from "./model.js";
+import {
+  attachmentField,
+  attachmentsOf,
+  BLOB_KIND,
+  isBlobItem,
+  datasetOf,
+  emptyVault,
+  fingerprint,
+  itemsOnKeyrings,
+} from "./model.js";
 import type { VaultOp } from "./ops.js";
 import { applyOp, applyOps } from "./ops.js";
 import type { RemoteVaultStore, VaultStorage } from "./storage.js";
@@ -270,16 +279,70 @@ export class VaultSync {
     return { opId: this.#newId(), ts: this.#clock.now() };
   }
 
-  /** Stamp and delete several items in one write. */
-  deleteItems(itemIds: readonly string[]): Promise<VaultState> {
-    return this.commitAll(
-      itemIds.map((itemId) => ({
-        kind: "item.delete" as const,
+  /**
+   * Stamp and delete several items in one write, with their files.
+   *
+   * A file left behind when its password is deleted is worse than a visible
+   * one: it is somebody's scanned passport, still in the vault and still in
+   * the backup, with nothing on any screen to remind them it is there. It is
+   * purged rather than tombstoned for the same reason `item.purge` exists —
+   * in a password manager, deleted has to mean the bytes go.
+   *
+   * A file referenced by a password that is *not* being deleted survives.
+   * Blobs are content-addressed, so the same file attached twice is stored
+   * once, and deleting one of the two must not empty the other.
+   */
+  async deleteItems(itemIds: readonly string[]): Promise<VaultState> {
+    return this.commitAll(this.#deletionOps(await this.state(), itemIds));
+  }
+
+  /**
+   * Deleting these items, and emptying whatever files only they were holding.
+   *
+   * Shared by deleting one password, several, and a whole keyring, because the
+   * rule has to be the same in all three: a file left behind when its password
+   * goes is somebody's scanned passport, still in the vault and still in the
+   * backup, with nothing on any screen to remind them it is there.
+   *
+   * A file is purged rather than tombstoned, for the reason `item.purge`
+   * exists — in a password manager, deleted has to mean the bytes go. The
+   * passwords themselves are only tombstoned, because their superseded values
+   * are the undo window and a password is small.
+   */
+  #deletionOps(composed: VaultState, itemIds: readonly string[]): VaultOp[] {
+    const doomed = new Set(itemIds);
+
+    // A file referenced by a password that is *not* being deleted survives.
+    // Blobs are content-addressed, so the same file attached twice is stored
+    // once, and deleting one of the two must not empty the other.
+    const orphaned = new Set<string>();
+    for (const itemId of itemIds) {
+      const item = composed.items[itemId];
+      if (!item) continue;
+      for (const { blobId } of attachmentsOf(item)) orphaned.add(blobId);
+      if (isBlobItem(item)) orphaned.add(item.id);
+    }
+    for (const item of itemsOnKeyrings(composed)) {
+      if (doomed.has(item.id)) continue;
+      for (const { blobId } of attachmentsOf(item)) orphaned.delete(blobId);
+    }
+
+    return [
+      ...itemIds
+        .filter((itemId) => !orphaned.has(itemId))
+        .map((itemId) => ({
+          kind: "item.delete" as const,
+          opId: this.#newId(),
+          ts: this.#clock.now(),
+          itemId,
+        })),
+      ...[...orphaned].map((blobId) => ({
+        kind: "item.purge" as const,
         opId: this.#newId(),
         ts: this.#clock.now(),
-        itemId,
+        itemId: blobId,
       })),
-    );
+    ];
   }
 
   /**
@@ -326,15 +389,13 @@ export class VaultSync {
    * that vanished.
    */
   async deleteKeyringWithItems(keyringId: string): Promise<VaultState> {
-    const current = await this.#storage.readState();
-    const doomed = visibleItems(current).filter((item) => item.keyring.value === keyringId);
+    const current = await this.state();
+    // Files too: a keyring's attachments are items on it, and leaving them
+    // would keep somebody's scanned passport in the vault after they deleted
+    // the folder they put it in.
+    const doomed = itemsOnKeyrings(current).filter((item) => item.keyring.value === keyringId);
     return this.commitAll([
-      ...doomed.map((item) => ({
-        kind: "item.delete" as const,
-        opId: this.#newId(),
-        ts: this.#clock.now(),
-        itemId: item.id,
-      })),
+      ...this.#deletionOps(current, doomed.map((item) => item.id)),
       {
         kind: "keyring.delete" as const,
         opId: this.#newId(),
@@ -380,9 +441,16 @@ export class VaultSync {
     ];
   }
 
-  /** The live passwords currently on a keyring, wherever they are stored. */
+  /**
+   * Everything live on a keyring, files included.
+   *
+   * `visibleItems` would be wrong here: it hides the files attached to
+   * passwords, and moving a keyring without them would leave them behind in
+   * the document it came from — orphaned, and still readable by whoever holds
+   * that document.
+   */
   #itemsOn(composed: VaultState, keyringId: string): ItemRecord[] {
-    return visibleItems(composed).filter((item) => item.keyring.value === keyringId);
+    return itemsOnKeyrings(composed).filter((item) => item.keyring.value === keyringId);
   }
 
   /**
@@ -589,13 +657,96 @@ export class VaultSync {
     });
   }
 
+  /** One password, and any file that was only attached to it. */
   deleteItem(itemId: string): Promise<VaultState> {
-    return this.commit({
-      kind: "item.delete",
-      opId: this.#newId(),
-      ts: this.#clock.now(),
-      itemId,
-    });
+    return this.deleteItems([itemId]);
+  }
+
+  /**
+   * Attach a file to a password.
+   *
+   * The bytes become an item of their own on the same keyring, so they are
+   * encrypted, merged, shared and deleted by the machinery that already
+   * exists — and the password gains one field pointing at them.
+   *
+   * `blobId` is content-derived and supplied by the caller, because hashing is
+   * the one part of this that is platform-specific and vault-core deliberately
+   * touches no crypto. Content-addressing is what makes the same file attached
+   * to two passwords cost one copy, and what makes two devices attaching the
+   * same file converge instead of duplicating it.
+   */
+  attachFile(input: {
+    itemId: string;
+    keyringId: string;
+    blobId: string;
+    name: string;
+    type: string;
+    data: string;
+  }): Promise<VaultState> {
+    return this.commitAll([
+      {
+        kind: "item.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId: input.blobId,
+        keyringId: input.keyringId,
+        fields: {
+          kind: BLOB_KIND,
+          name: input.name,
+          type: input.type,
+          size: String(input.data.length),
+          // Prefixed so it is masked, never rendered, and never logged.
+          "secret:data": input.data,
+        },
+      },
+      {
+        kind: "item.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId: input.itemId,
+        keyringId: input.keyringId,
+        fields: { [attachmentField(input.blobId)]: input.name },
+      },
+    ]);
+  }
+
+  /**
+   * Take a file off a password, and out of the vault if nothing else wants it.
+   *
+   * Purged rather than tombstoned, so the bytes actually go. Kept when another
+   * password still references the same content, which content-addressing makes
+   * possible to know.
+   */
+  async removeAttachment(itemId: string, blobId: string): Promise<VaultState> {
+    const composed = await this.state();
+    const referenced = itemsOnKeyrings(composed).some(
+      (item) =>
+        item.id !== itemId && attachmentsOf(item).some((file) => file.blobId === blobId),
+    );
+
+    return this.commitAll([
+      {
+        kind: "item.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId,
+        keyringId: composed.items[itemId]?.keyring.value ?? "",
+        // Emptied rather than removed: a CRDT has no way to say "this field is
+        // gone" except by writing a later value, and empty is what the readers
+        // already treat as no attachment.
+        fields: { [attachmentField(blobId)]: "" },
+      },
+      ...(referenced
+        ? []
+        : [
+            {
+              kind: "item.purge" as const,
+              opId: this.#newId(),
+              ts: this.#clock.now(),
+              itemId: blobId,
+            },
+          ]),
+    ]);
   }
 
   restoreItem(itemId: string): Promise<VaultState> {

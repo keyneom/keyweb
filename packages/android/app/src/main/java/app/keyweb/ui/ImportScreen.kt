@@ -189,24 +189,20 @@ fun ImportScreen(
                     }
 
                     /*
-                     * The one thing that genuinely cannot come across, said
-                     * plainly and before the button rather than afterwards.
-                     *
-                     * Somebody told which entries have files will keep their
-                     * original; somebody not told will delete it and find out
-                     * later. That difference is the whole reason this is here.
+                     * A file too big to carry, named so the person can keep
+                     * their original for it. Everything else comes across, so
+                     * this is a sentence about one file rather than a warning
+                     * about the import.
                      */
-                    if (state.attachments.isNotEmpty()) {
-                        val files = state.attachments.sumOf { it.names.size }
+                    if (state.oversized.isNotEmpty()) {
                         Text(
-                            "Keyweb can't store the " +
-                                (if (files == 1) "file" else "$files files") +
-                                " attached to ${state.attachments.size} " +
-                                (if (state.attachments.size == 1) "entry" else "entries") +
-                                " yet. Everything else comes across — keep your original file " +
-                                "until Keyweb can hold these: " +
-                                state.attachments.joinToString(", ") { entry ->
-                                    entry.names.joinToString(", ") { "${entry.title} — $it" }
+                            (if (state.oversized.size == 1) "One file is" else "Some files are") +
+                                " too big for Keyweb to hold. Everything else comes across, " +
+                                "files included. Keep your original file for " +
+                                state.oversized.joinToString(", ") {
+                                    "${it.name} (%.1f MB, on ${it.title})".format(
+                                        it.bytes / 1024.0 / 1024.0,
+                                    )
                                 } + ".",
                             color = status.attention,
                             fontWeight = FontWeight.SemiBold,

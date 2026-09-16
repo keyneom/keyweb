@@ -39,7 +39,13 @@
       },
       "versions": 0,
       "attachments": [
-        "recovery-codes.txt"
+        {
+          "blobId": "blob:-x35yL4XedZbcx_3cHX4deDxmhmpVLR9XZvCp_B3ja8",
+          "name": "recovery-codes.txt",
+          "type": "text/plain",
+          "data": "MTExMTExMTEKMjIyMjIyMjIK",
+          "bytes": 18
+        }
       ]
     },
     {

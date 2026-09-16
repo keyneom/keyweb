@@ -51,7 +51,7 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
-import app.keyweb.vault.kdbx.KdbxAttachment
+import app.keyweb.vault.kdbx.KdbxOversized
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
 import app.keyweb.vault.kdbx.KdbxReader
@@ -59,6 +59,8 @@ import app.keyweb.vault.kdbx.allFields
 import app.keyweb.vault.kdbx.kdbxFieldsToItemFields
 import app.keyweb.vault.kdbx.suggestedKeyringName
 import app.keyweb.vault.HlcParts
+import app.keyweb.vault.BLOB_KIND
+import app.keyweb.vault.attachmentField
 import app.keyweb.vault.decodeHlc
 import app.keyweb.vault.encodeHlc
 import app.keyweb.vault.kdbx.WrongMasterPassword
@@ -128,8 +130,8 @@ data class ImportUiState(
     /** The keyrings already in the vault, to offer as a destination. */
     val existingKeyrings: List<Pair<String, String>> = emptyList(),
     val skipped: Int = 0,
-    /** Entries carrying files, and the files they carry. Nothing stores these yet. */
-    val attachments: List<KdbxAttachment> = emptyList(),
+    /** Files too large to carry, named so the person can keep their original. */
+    val oversized: List<KdbxOversized> = emptyList(),
     /** How many earlier versions came across, for the preview to report. */
     val versions: Int = 0,
     val importedCount: Int = 0,
@@ -1223,7 +1225,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         ),
                         existingKeyrings = rings,
                         skipped = file.skipped,
-                        attachments = file.attachments,
+                        oversized = file.oversized,
                         versions = file.versions,
                         busy = false,
                     )
@@ -1346,12 +1348,37 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                             fields = fields,
                         )
                     }
+                    /*
+                     * Each attached file becomes an item of its own on the
+                     * same keyring, and the password gains a field pointing at
+                     * it — the same shape as a file attached by hand, because
+                     * it is the same thing. The blob ops come first so a
+                     * device replaying the outbox never sees a password
+                     * referring to bytes that have not arrived yet.
+                     */
+                    val files = entry.attachments.filter { it.data.isNotEmpty() }
+                    for (attached in files) {
+                        ops += VaultOp.ItemPut(
+                            opId = "${stamp.opId}:${attached.blobId}",
+                            ts = stamp.ts,
+                            itemId = attached.blobId,
+                            keyringId = keyringId,
+                            fields = mapOf(
+                                "kind" to BLOB_KIND,
+                                "name" to attached.name,
+                                "type" to guessAttachmentType(attached.name),
+                                "size" to attached.data.length.toString(),
+                                "secret:data" to attached.data,
+                            ),
+                        )
+                    }
                     ops += VaultOp.ItemPut(
                         opId = stamp.opId,
                         ts = stamp.ts,
                         itemId = "kdbx:${entry.uuid}",
                         keyringId = keyringId,
-                        fields = entry.toFields(),
+                        fields = entry.toFields() +
+                            files.associate { attachmentField(it.blobId) to it.name },
                     )
                 }
 
@@ -1424,4 +1451,19 @@ private fun KdbxEntry.toFields(): Map<ItemField, String> = buildMap {
     if (title.isEmpty()) put(Fields.TITLE, "Untitled")
     if (folder.isNotEmpty()) put(Fields.FOLDER, folder)
     if (tags.isNotEmpty()) put(Fields.TAGS, tags)
+}
+
+/**
+ * Enough to decide whether a viewer can show it; the name is the only clue
+ * KeePass gives. Matches the web's guess so the same file gets the same type.
+ */
+private fun guessAttachmentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "png" -> "image/png"
+    "jpg", "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "pdf" -> "application/pdf"
+    "txt" -> "text/plain"
+    else -> "application/octet-stream"
 }

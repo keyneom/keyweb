@@ -2,7 +2,7 @@ import * as kdbxweb from "kdbxweb";
 import { argon2d, argon2i, argon2id } from "hash-wasm";
 import { HISTORY_LIMIT, ITEM_FIELDS, type ItemField, type VaultOp } from "@keyweb/vault-core";
 import { formatOtp, parseOtp } from "./totp";
-import { decodeHlc, encodeHlc } from "@keyweb/vault-core";
+import { attachmentField, BLOB_KIND, decodeHlc, encodeHlc } from "@keyweb/vault-core";
 
 /**
  * Reading a KeePass / KeeWeb database.
@@ -87,15 +87,24 @@ export type ImportedEntry = {
    * it actually happened, and the vault's own history falls out of that.
    */
   versions: ImportedVersion[];
-  /**
-   * Files attached to this entry in KeePass, by name.
-   *
-   * Named rather than carried, because Keyweb has nowhere to put them yet.
-   * Counting them is what turns silent loss into a decision: somebody who
-   * knows three entries have files will keep the original file, and somebody
-   * who is never told will delete it.
-   */
-  attachments: string[];
+  /** Files attached to this entry, with their bytes. */
+  attachments: ImportedFile[];
+};
+
+/**
+ * One attached file, ready to become an item of its own.
+ *
+ * `blobId` is the content hash, so the same document attached to three entries
+ * is stored once and a re-import finds the copy it made last time rather than
+ * making another.
+ */
+export type ImportedFile = {
+  blobId: string;
+  name: string;
+  type: string;
+  /** Base64. Empty when the file was past the size Keyweb will carry. */
+  data: string;
+  bytes: number;
 };
 
 /** One earlier version of an entry, with the moment it was superseded. */
@@ -125,8 +134,15 @@ export type ImportPreview = {
    * disappears.
    */
   skipped: number;
-  /** Entries carrying files, and the files they carry. Nothing stores these yet. */
-  attachments: { itemId: string; title: string; names: string[] }[];
+  /**
+   * Files too large to carry, named so the person can keep their original.
+   *
+   * A ceiling exists because the vault is re-encrypted and re-uploaded as one
+   * document: a 200 MB video would make every later password change cost 200
+   * MB. Refusing loudly is better than a vault that becomes unusable and
+   * better than losing the file in silence.
+   */
+  oversized: { title: string; name: string; bytes: number }[];
   /** How many earlier versions came across, for the preview to report. */
   versions: number;
 };
@@ -244,12 +260,12 @@ export async function readKeePass(
 
   const entries: ImportedEntry[] = [];
   const keyringNames: string[] = [];
-  const attachments: ImportPreview["attachments"] = [];
+  const oversized: ImportPreview["oversized"] = [];
   let ungrouped = 0;
   let skipped = 0;
   let versionCount = 0;
 
-  const walk = (group: kdbxweb.KdbxGroup, path: string[]) => {
+  const walk = async (group: kdbxweb.KdbxGroup, path: string[]): Promise<void> => {
     // KeePass keeps a recycle bin as a normal group; importing it would
     // resurrect things the user deliberately threw away.
     if (group.uuid?.id && db.meta.recycleBinUuid?.id === group.uuid.id) return;
@@ -263,7 +279,7 @@ export async function readKeePass(
 
     for (const entry of group.entries) {
       const fields = readFields(entry);
-      const files = [...(entry.binaries?.keys() ?? [])].map(String);
+      const files = await readAttachments(entry, oversized, fields.title ?? "Untitled");
       const versions = readVersions(entry);
 
       // The only entry safe to leave behind is one with nothing in it. The
@@ -287,13 +303,6 @@ export async function readKeePass(
       const tags = (entry.tags ?? []).filter(Boolean);
       if (tags.length > 0) fields.tags = tags.join(", ");
 
-      if (files.length > 0) {
-        attachments.push({
-          itemId: `kdbx:${entry.uuid.id}`,
-          title: fields.title,
-          names: files,
-        });
-      }
       versionCount += versions.length;
 
       // Registered here rather than on entering the group, so the keyring
@@ -314,12 +323,12 @@ export async function readKeePass(
       });
     }
 
-    for (const child of group.groups) walk(child, here);
+    for (const child of group.groups) await walk(child, here);
   };
 
-  for (const group of db.groups) walk(group, []);
+  for (const group of db.groups) await walk(group, []);
 
-  return { entries, keyringNames, ungrouped, skipped, attachments, versions: versionCount };
+  return { entries, keyringNames, ungrouped, skipped, oversized, versions: versionCount };
 }
 
 /**
@@ -390,6 +399,95 @@ function isProtected(value: unknown): boolean {
 }
 
 /**
+ * How big a single attached file Keyweb will carry.
+ *
+ * The vault is one encrypted document: it is sealed and uploaded whole, so the
+ * size of the largest thing in it is paid on every later change. 10 MB covers
+ * the scans, photos and recovery-code sheets people actually keep in a
+ * password manager, and refuses the holiday video that would make the vault
+ * unusable. Refusing out loud beats both a vault nobody can sync and a file
+ * that disappears quietly.
+ */
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/** The files on an entry, with their bytes, content-addressed. */
+async function readAttachments(
+  entry: kdbxweb.KdbxEntry,
+  oversized: ImportPreview["oversized"],
+  title: string,
+): Promise<ImportedFile[]> {
+  const files: ImportedFile[] = [];
+  for (const [rawName, binary] of entry.binaries ?? []) {
+    const name = String(rawName);
+    const bytes = binaryBytes(binary);
+    if (!bytes) continue;
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+      oversized.push({ title, name, bytes: bytes.byteLength });
+      continue;
+    }
+    files.push({
+      blobId: await blobIdFor(bytes),
+      name,
+      type: guessType(name),
+      data: base64(bytes),
+      bytes: bytes.byteLength,
+    });
+  }
+  return files;
+}
+
+/** kdbxweb hands back a protected value, a raw buffer, or a reference. */
+function binaryBytes(binary: unknown): Uint8Array | null {
+  if (binary instanceof kdbxweb.ProtectedValue) return binary.getBinary();
+  if (binary instanceof ArrayBuffer) return new Uint8Array(binary);
+  if (binary instanceof Uint8Array) return binary;
+  const value = (binary as { value?: unknown } | null)?.value;
+  return value === undefined || value === binary ? null : binaryBytes(value);
+}
+
+/**
+ * The item id a file's bytes are stored under: the hash of those bytes.
+ *
+ * Content-addressed so the same document attached to three entries is stored
+ * once, and so re-importing the same file finds the copy it made last time
+ * rather than making another.
+ */
+export async function blobIdFor(bytes: Uint8Array): Promise<string> {
+  const view = new Uint8Array(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", view.buffer as ArrayBuffer);
+  return `blob:${base64Url(new Uint8Array(digest))}`;
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  // Chunked: spreading a multi-megabyte array into apply blows the stack.
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function base64Url(bytes: Uint8Array): string {
+  return base64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Enough to decide whether a viewer can show it; the name is the only clue. */
+function guessType(name: string): string {
+  const extension = name.toLowerCase().replace(/^.*\./, "");
+  const known: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    pdf: "application/pdf",
+    txt: "text/plain",
+  };
+  return known[extension] ?? "application/octet-stream";
+}
+
+/**
  * Turn a preview into operations.
  *
  * `keyringIds` maps a top-level group name to the keyring it should land on,
@@ -451,15 +549,48 @@ export function importOperations(
       }) satisfies VaultOp,
     );
 
+    /*
+     * Each attached file becomes an item of its own on the same keyring, and
+     * the password gains a field pointing at it — the same shape as a file
+     * attached by hand, because it is the same thing.
+     *
+     * The blob ops come first so a device replaying the outbox never sees a
+     * password referring to bytes that have not arrived yet.
+     */
+    const files = entry.attachments.filter((file) => file.data !== "");
+    const blobs = files.map(
+      (file) =>
+        ({
+          kind: "item.put",
+          opId: `${opId}:${file.blobId}`,
+          ts,
+          itemId: file.blobId,
+          keyringId,
+          fields: {
+            kind: BLOB_KIND,
+            name: file.name,
+            type: file.type,
+            size: String(file.data.length),
+            "secret:data": file.data,
+          },
+        }) satisfies VaultOp,
+    );
+
     return [
       ...history,
+      ...blobs,
       {
         kind: "item.put",
         opId,
         ts,
         itemId: entry.itemId,
         keyringId,
-        fields: entry.fields,
+        fields: {
+          ...entry.fields,
+          ...Object.fromEntries(
+            files.map((file) => [attachmentField(file.blobId), file.name]),
+          ),
+        },
       } satisfies VaultOp,
     ];
   });

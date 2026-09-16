@@ -164,13 +164,68 @@ fun newKeyring(id: String, name: String, ts: Hlc): KeyringRecord =
     )
 
 /** Items a person can actually see: not deleted, on a keyring that exists. */
-fun visibleItems(state: VaultState): List<ItemRecord> =
+/**
+ * A file attached to a password, stored as an item of its own.
+ *
+ * Deliberately an ordinary item rather than a new kind of record. It then
+ * inherits every property the vault already guarantees without a line of new
+ * machinery: encrypted by the same envelope, merged by the same CRDT, carried
+ * into a shared keyring's document by the same extraction, tombstoned by the
+ * same delete and scrubbed by the same purge. A parallel blob store would have
+ * had to re-earn all of that, and would have got some of it wrong.
+ *
+ * It lives on the same keyring as the password it belongs to, which is what
+ * makes sharing work for nothing: sharing a keyring moves its items, and the
+ * files are items.
+ */
+const val BLOB_KIND = "blob"
+
+/** Items that are files rather than passwords. */
+fun ItemRecord.isBlob(): Boolean = fields["kind"]?.value == BLOB_KIND
+
+/**
+ * The field on a password that points at one of its files.
+ *
+ * One field per file rather than a list in a single field, so attaching and
+ * removing are ordinary per-field writes and two devices doing both at once
+ * merge instead of overwriting each other's list.
+ */
+fun attachmentField(blobId: String): ItemField = "file:$blobId"
+
+/** Every file attached to an item: the blob's id, and the name to show. */
+fun ItemRecord.attachments(): List<Attachment> =
+    fields.entries
+        .filter { it.key.startsWith("file:") && it.value.value.isNotEmpty() }
+        .map { Attachment(it.key.removePrefix("file:"), it.value.value) }
+        .sortedBy { it.name }
+
+data class Attachment(val blobId: String, val name: String)
+
+/**
+ * Everything live on a keyring that exists, files included.
+ *
+ * What moves when a keyring moves. Using [visibleItems] here would leave a
+ * password's files behind in the document it came from — present, orphaned,
+ * and readable by whoever still has that document.
+ */
+fun itemsOnKeyrings(state: VaultState): List<ItemRecord> =
     state.items.values
         .filter { !it.deleted.value }
         .filter { item ->
             val ring = state.keyrings[item.keyring.value]
             ring != null && !ring.deleted.value
         }
+
+/**
+ * Items a person can actually see: not deleted, on a keyring that exists, and
+ * not one of the files hanging off another item.
+ *
+ * Files are excluded here rather than stored somewhere separate because this
+ * is the only question they are the wrong answer to — every other part of the
+ * vault should and does treat them as the ordinary items they are.
+ */
+fun visibleItems(state: VaultState): List<ItemRecord> =
+    itemsOnKeyrings(state).filter { !it.isBlob() }
 
 fun ItemRecord.field(field: ItemField): String? = fields[field]?.value
 

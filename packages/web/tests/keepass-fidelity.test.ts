@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { applyOps, createClock, emptyVault, itemField } from "@keyweb/vault-core";
+import {
+  applyOps,
+  attachmentsOf,
+  createClock,
+  emptyVault,
+  isBlobItem,
+  itemField,
+  visibleItems,
+} from "@keyweb/vault-core";
 import { importOperations, readKeePass } from "../src/vault/keepass";
 
 /**
@@ -29,7 +37,16 @@ async function imported() {
     "ring",
     () => ({ opId: `op-${++n}`, ts: clock.now() }),
   );
-  return { preview, state: applyOps(emptyVault(), ops) };
+  // The keyring has to exist or `visibleItems` hides everything on it, which
+  // is the app's own rule rather than anything about importing.
+  const keyring = {
+    kind: "keyring.put" as const,
+    opId: "ring",
+    ts: clock.now(),
+    keyringId: "ring",
+    name: "Imported",
+  };
+  return { preview, state: applyOps(emptyVault(), [keyring, ...ops]) };
 }
 
 function byTitle(state: Awaited<ReturnType<typeof imported>>["state"], title: string) {
@@ -100,16 +117,27 @@ describe("what survives an import", () => {
     expect(itemField(odd, "custom:kind")).toBe("not-a-real-kind");
   });
 
-  /**
-   * Attachments have nowhere to go yet. What must not happen is losing them
-   * quietly — the preview names them so the person can decide to keep their
-   * original file rather than discovering the gap after deleting it.
-   */
-  it("names the files it cannot store instead of ignoring them", async () => {
-    const { preview } = await imported();
-    expect(preview.attachments).toHaveLength(1);
-    expect(preview.attachments[0]?.title).toBe("Recovery codes");
-    expect(preview.attachments[0]?.names).toEqual(["recovery-codes.txt"]);
+  /** The file itself, not a note about it having existed. */
+  it("brings the attached file across, bytes and all", async () => {
+    const { preview, state } = await imported();
+    expect(preview.oversized).toEqual([]);
+
+    const codes = byTitle(state, "Recovery codes");
+    const files = attachmentsOf(codes);
+    expect(files.map((file) => file.name)).toEqual(["recovery-codes.txt"]);
+
+    const blob = state.items[files[0]!.blobId]!;
+    expect(isBlobItem(blob)).toBe(true);
+    expect(itemField(blob, "type")).toBe("text/plain");
+    expect(atob(itemField(blob, "secret:data")!)).toBe("11111111\n22222222\n");
+  });
+
+  /** The bytes are an item, but they are not a password. */
+  it("does not put the file in the password list", async () => {
+    const { state } = await imported();
+    const titles = visibleItems(state).map((item) => itemField(item, "title"));
+    expect(titles).toContain("Recovery codes");
+    expect(visibleItems(state).filter(isBlobItem)).toEqual([]);
   });
 
   it("reports how much history came across", async () => {

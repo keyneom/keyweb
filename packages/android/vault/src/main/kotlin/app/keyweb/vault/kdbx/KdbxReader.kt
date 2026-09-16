@@ -55,14 +55,23 @@ data class KdbxEntry(
      * was, stamped when it happened, and the vault's history falls out of it.
      */
     val versions: List<KdbxVersion>,
-    /**
-     * Files attached in KeePass, by name.
-     *
-     * Named rather than carried: Keyweb has nowhere to put them yet, and
-     * counting them is what turns silent loss into a decision somebody can
-     * make before deleting their original file.
-     */
-    val attachments: List<String>,
+    /** Files attached in KeePass, with their bytes. */
+    val attachments: List<KdbxFileRef>,
+)
+
+/**
+ * One attached file, ready to become an item of its own.
+ *
+ * [blobId] is the content hash, so the same document attached to three entries
+ * is stored once and a re-import finds the copy it made last time rather than
+ * making another. [data] is empty, and [blobId] with it, when the file was
+ * past the size the vault will carry.
+ */
+data class KdbxFileRef(
+    val name: String,
+    val bytes: Int,
+    val data: String,
+    val blobId: String,
 )
 
 /**
@@ -104,13 +113,20 @@ data class KdbxFile(
      * a file its owner then deletes.
      */
     val skipped: Int,
-    /** Entries carrying files, and the files they carry. Nothing stores these yet. */
-    val attachments: List<KdbxAttachment>,
+    /**
+     * Files too large to carry, named so the person can keep their original.
+     *
+     * A ceiling exists because the vault is sealed and uploaded as one
+     * document: a 200 MB video would make every later password change cost
+     * 200 MB.
+     */
+    val oversized: List<KdbxOversized>,
     /** How many earlier versions came across, for the preview to report. */
     val versions: Int,
 )
 
-data class KdbxAttachment(val uuid: String, val title: String, val names: List<String>)
+/** A file too large to carry, named so its owner can keep their original. */
+data class KdbxOversized(val title: String, val name: String, val bytes: Int)
 
 /**
  * The name to suggest for a keyring holding the entries that are in no group.
@@ -152,10 +168,21 @@ object KdbxReader {
             readVersion3(reader, header, masterKey)
         }
 
-        return parseXml(payload.xml, payload.stream)
+        return parseXml(payload.xml, payload.stream, payload.binaries)
     }
 
-    private class Payload(val xml: ByteArray, val stream: InnerStream)
+    private class Payload(
+        val xml: ByteArray,
+        val stream: InnerStream,
+        /**
+         * Attached files by reference id.
+         *
+         * KDBX 4 lists them in the inner header and entries refer to them by
+         * position; KDBX 3.1 puts them in `<Meta><Binaries>` with an explicit
+         * ID. Both end up here keyed the way the entry will ask for them.
+         */
+        val binaries: Map<String, ByteArray> = emptyMap(),
+    )
 
     private fun transformKey(header: KdbxHeader, composite: ByteArray): ByteArray {
         if (!header.isVersion4) {
@@ -221,7 +248,11 @@ object KdbxReader {
 
         val bodyReader = LittleEndianReader(body)
         val inner = KdbxInnerHeader.parse(bodyReader)
-        return Payload(bodyReader.rest(), KdbxCrypto.innerStream(inner.streamId, inner.streamKey))
+        return Payload(
+            bodyReader.rest(),
+            KdbxCrypto.innerStream(inner.streamId, inner.streamKey),
+            inner.binaries.withIndex().associate { (index, bytes) -> index.toString() to bytes },
+        )
     }
 
     private fun readVersion3(
@@ -267,7 +298,11 @@ object KdbxReader {
      * first as noise. That constraint is why this is a manual walk rather than
      * a set of queries.
      */
-    private fun parseXml(xml: ByteArray, stream: InnerStream): KdbxFile {
+    private fun parseXml(
+        xml: ByteArray,
+        stream: InnerStream,
+        pool: Map<String, ByteArray>,
+    ): KdbxFile {
         val document = try {
             safeDocumentBuilder().parse(ByteArrayInputStream(xml))
         } catch (cause: Exception) {
@@ -277,6 +312,9 @@ object KdbxReader {
         val root = document.documentElement
             ?.children("Root")?.firstOrNull()
             ?: throw KdbxException("This file has no entries in it.")
+
+        // KDBX 3.1 keeps its files in the XML rather than an inner header.
+        val binaries = pool + readLegacyBinaries(document.documentElement)
 
         val recycleBin = document.documentElement
             ?.children("Meta")?.firstOrNull()
@@ -311,7 +349,7 @@ object KdbxReader {
             for (child in group.elements()) {
                 when (child.tagName) {
                     "Entry" -> {
-                        val entry = readEntry(child, here, stream)
+                        val entry = readEntry(child, here, stream, binaries)
                         if (binned || entry == null) {
                             skipped += 1
                         } else {
@@ -336,7 +374,7 @@ object KdbxReader {
                     // It is counted rather than given a name, because where it
                     // should go is a question only the user can answer.
                     "Entry" -> {
-                        val entry = readEntry(child, emptyList(), stream)
+                        val entry = readEntry(child, emptyList(), stream, binaries)
                         if (entry == null) {
                             skipped += 1
                         } else {
@@ -352,15 +390,11 @@ object KdbxReader {
             keyringNames = keyringNames.toList(),
             ungrouped = ungrouped,
             skipped = skipped,
-            attachments = entries
-                .filter { it.attachments.isNotEmpty() }
-                .map {
-                    KdbxAttachment(
-                        uuid = it.uuid,
-                        title = it.title.ifEmpty { "Untitled" },
-                        names = it.attachments,
-                    )
-                },
+            oversized = entries.flatMap { entry ->
+                entry.attachments.filter { it.data.isEmpty() }.map {
+                    KdbxOversized(entry.title.ifEmpty { "Untitled" }, it.name, it.bytes)
+                }
+            },
             versions = entries.sumOf { it.versions.size },
         )
     }
@@ -371,6 +405,25 @@ object KdbxReader {
      * unreadable one is not worth failing an import over — it only costs that
      * version its place in the history.
      */
+    /**
+     * KDBX 3.1 keeps attached files in the XML, base64 and often gzipped,
+     * under `<Meta><Binaries>` with an explicit ID per file.
+     */
+    private fun readLegacyBinaries(root: Element?): Map<String, ByteArray> {
+        val container = root?.children("Meta")?.firstOrNull()
+            ?.children("Binaries")?.firstOrNull() ?: return emptyMap()
+        return buildMap {
+            for (binary in container.children("Binary")) {
+                val id = binary.getAttribute("ID")?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+                val raw = binary.textContent?.trim().orEmpty()
+                if (raw.isEmpty()) continue
+                val decoded = runCatching { Base64.getDecoder().decode(raw) }.getOrNull() ?: continue
+                val compressed = binary.getAttribute("Compressed").equals("True", true)
+                put(id, if (compressed) runCatching { gunzip(decoded) }.getOrDefault(decoded) else decoded)
+            }
+        }
+    }
+
     /** Seconds from 0001-01-01 to 1970-01-01, which is what .NET counts from. */
     private val SECONDS_YEAR_1_TO_EPOCH = 62_135_596_800L
 
@@ -394,6 +447,7 @@ object KdbxReader {
         element: Element,
         path: List<String>,
         stream: InnerStream,
+        pool: Map<String, ByteArray>,
     ): KdbxEntry? {
         val uuid = element.children("UUID").firstOrNull()?.textContent?.trim().orEmpty()
         val tags = element.children("Tags").firstOrNull()?.textContent?.trim().orEmpty()
@@ -423,11 +477,48 @@ object KdbxReader {
             if (isProtected) protectedKeys += key
         }
 
-        // Files attached to this entry. Only the names: the bytes are in the
-        // database's binary pool and Keyweb has nowhere to put them yet, so
-        // what matters is being able to say which entries have them.
+        // Files attached to this entry, with their bytes. The entry names the
+        // file and points at the pool by reference; the pool is the inner
+        // header in KDBX 4 and `<Meta><Binaries>` in 3.1.
         val attachments = element.children("Binary").mapNotNull { binary ->
-            binary.children("Key").firstOrNull()?.textContent?.trim()?.takeIf { it.isNotEmpty() }
+            val name = binary.children("Key").firstOrNull()?.textContent?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val valueNode = binary.children("Value").firstOrNull() ?: return@mapNotNull null
+
+            /*
+             * Two shapes, both of which real files use.
+             *
+             * Usually the entry points at the shared pool by reference, so one
+             * file attached to three entries is stored once. But a value can
+             * also sit inline, and when it does it may be protected — in which
+             * case it is a slice of the same keystream every protected string
+             * comes from, and skipping it would leave every later value in the
+             * file decrypting as noise.
+             */
+            val ref = valueNode.getAttribute("Ref")?.trim()?.takeIf { it.isNotEmpty() }
+            val raw = valueNode.textContent?.trim().orEmpty()
+            val isProtected = valueNode.getAttribute("Protected").equals("True", ignoreCase = true)
+            val bytes = when {
+                ref != null -> pool[ref]
+                raw.isEmpty() -> null
+                isProtected ->
+                    runCatching { stream.decrypt(Base64.getDecoder().decode(raw)) }.getOrNull()
+                else -> runCatching { Base64.getDecoder().decode(raw) }.getOrNull()
+            } ?: return@mapNotNull null
+            if (bytes.size > MAX_ATTACHMENT_BYTES) {
+                // Named but not carried. The vault is sealed and uploaded as
+                // one document, so the largest thing in it is paid for on
+                // every later change — refusing out loud beats a vault nobody
+                // can sync, and beats losing the file in silence.
+                KdbxFileRef(name = name, bytes = bytes.size, data = "", blobId = "")
+            } else {
+                KdbxFileRef(
+                    name = name,
+                    bytes = bytes.size,
+                    data = Base64.getEncoder().encodeToString(bytes),
+                    blobId = blobIdFor(bytes),
+                )
+            }
         }
 
         // History entries carry their own protected values and must be walked
@@ -437,7 +528,7 @@ object KdbxReader {
         val versions = mutableListOf<KdbxVersion>()
         for (history in element.children("History")) {
             for (past in history.children("Entry")) {
-                val version = readEntry(past, path, stream) ?: continue
+                val version = readEntry(past, path, stream, pool) ?: continue
                 val at = past.children("Times").firstOrNull()
                     ?.children("LastModificationTime")?.firstOrNull()
                     ?.textContent?.trim().orEmpty()
@@ -607,3 +698,26 @@ private val KDBX_STANDARD: Map<String, ItemField> = mapOf(
     "URL" to Fields.URL,
     "Notes" to Fields.NOTE,
 )
+
+/**
+ * How big a single attached file Keyweb will carry.
+ *
+ * Matches the web's `MAX_ATTACHMENT_BYTES`. The vault is one encrypted
+ * document, sealed and uploaded whole, so the size of the largest thing in it
+ * is paid on every later change. 10 MB covers the scans, photos and
+ * recovery-code sheets people actually keep in a password manager.
+ */
+const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+/**
+ * The item id a file's bytes are stored under: the hash of those bytes.
+ *
+ * Content-addressed so the same document attached to three entries is stored
+ * once, and so re-importing the same file finds the copy it made last time.
+ * Base64url without padding, matching the web exactly — the two platforms
+ * import into one vault and must agree on the id or the file arrives twice.
+ */
+fun blobIdFor(bytes: ByteArray): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+    return "blob:" + Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+}

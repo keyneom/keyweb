@@ -186,9 +186,126 @@ class VaultSync(
      */
     fun stamp(): Stamp = Stamp(newId(), clock.now())
 
-    /** Stamp and delete several items in one write. */
+    /**
+     * Stamp and delete several items in one write, with their files.
+     *
+     * A file left behind when its password is deleted is worse than a visible
+     * one: it is somebody's scanned passport, still in the vault and still in
+     * the backup, with nothing on any screen to remind them it is there.
+     */
     suspend fun deleteItems(itemIds: List<String>): VaultState =
-        commitAll(itemIds.map { VaultOp.ItemDelete(newId(), clock.now(), it) })
+        commitAll(deletionOps(state(), itemIds))
+
+    /**
+     * Deleting these items, and emptying whatever files only they were holding.
+     *
+     * Shared by deleting one password, several, and a whole keyring, because
+     * the rule has to be the same in all three.
+     *
+     * A file is purged rather than tombstoned, for the reason
+     * [VaultOp.ItemPurge] exists — in a password manager, deleted has to mean
+     * the bytes go. The passwords themselves are only tombstoned, because
+     * their superseded values are the undo window and a password is small.
+     */
+    private fun deletionOps(composed: VaultState, itemIds: List<String>): List<VaultOp> {
+        val doomed = itemIds.toSet()
+
+        // A file referenced by a password that is *not* being deleted
+        // survives. Blobs are content-addressed, so the same file attached
+        // twice is stored once, and deleting one of the two must not empty
+        // the other.
+        val orphaned = linkedSetOf<String>()
+        for (itemId in itemIds) {
+            val item = composed.items[itemId] ?: continue
+            for (file in item.attachments()) orphaned += file.blobId
+            if (item.isBlob()) orphaned += item.id
+        }
+        for (item in itemsOnKeyrings(composed)) {
+            if (doomed.contains(item.id)) continue
+            for (file in item.attachments()) orphaned -= file.blobId
+        }
+
+        return itemIds.filterNot { orphaned.contains(it) }
+            .map { VaultOp.ItemDelete(newId(), clock.now(), it) } +
+            orphaned.map { VaultOp.ItemPurge(newId(), clock.now(), it) }
+    }
+
+    /**
+     * Attach a file to a password.
+     *
+     * The bytes become an item of their own on the same keyring, so they are
+     * encrypted, merged, shared and deleted by the machinery that already
+     * exists — and the password gains one field pointing at them.
+     *
+     * [blobId] is content-derived and supplied by the caller, because hashing
+     * is the one platform-specific part and this module deliberately touches
+     * no crypto. Content-addressing is what makes the same file attached to
+     * two passwords cost one copy, and what makes two devices attaching the
+     * same file converge instead of duplicating it.
+     */
+    suspend fun attachFile(
+        itemId: String,
+        keyringId: String,
+        blobId: String,
+        name: String,
+        type: String,
+        data: String,
+    ): VaultState = commitAll(
+        listOf(
+            VaultOp.ItemPut(
+                opId = newId(),
+                ts = clock.now(),
+                itemId = blobId,
+                keyringId = keyringId,
+                fields = mapOf(
+                    "kind" to BLOB_KIND,
+                    "name" to name,
+                    "type" to type,
+                    "size" to data.length.toString(),
+                    // Prefixed so it is masked, never rendered, never logged.
+                    "secret:data" to data,
+                ),
+            ),
+            VaultOp.ItemPut(
+                opId = newId(),
+                ts = clock.now(),
+                itemId = itemId,
+                keyringId = keyringId,
+                fields = mapOf(attachmentField(blobId) to name),
+            ),
+        ),
+    )
+
+    /**
+     * Take a file off a password, and out of the vault if nothing else wants it.
+     *
+     * Purged rather than tombstoned, so the bytes actually go. Kept when
+     * another password still references the same content, which
+     * content-addressing makes possible to know.
+     */
+    suspend fun removeAttachment(itemId: String, blobId: String): VaultState {
+        val composed = state()
+        val referenced = itemsOnKeyrings(composed).any { item ->
+            item.id != itemId && item.attachments().any { it.blobId == blobId }
+        }
+        return commitAll(
+            buildList {
+                add(
+                    VaultOp.ItemPut(
+                        opId = newId(),
+                        ts = clock.now(),
+                        itemId = itemId,
+                        keyringId = composed.items[itemId]?.keyring?.value.orEmpty(),
+                        // Emptied rather than removed: a CRDT has no way to say
+                        // "this field is gone" except by writing a later value,
+                        // and empty is what the readers already treat as none.
+                        fields = mapOf(attachmentField(blobId) to ""),
+                    ),
+                )
+                if (!referenced) add(VaultOp.ItemPurge(newId(), clock.now(), blobId))
+            },
+        )
+    }
 
     /**
      * Stamp and move several items in one write.
@@ -228,10 +345,13 @@ class VaultSync(
      * keyring that vanished.
      */
     suspend fun deleteKeyringWithItems(keyringId: String): VaultState {
-        val current = storage.readState()
-        val doomed = visibleItems(current).filter { it.keyring.value == keyringId }
+        // Composed, and files included: a keyring's attachments are items on
+        // it, and leaving them would keep somebody's scanned passport in the
+        // vault after they deleted the folder they put it in.
+        val current = state()
+        val doomed = itemsOnKeyrings(current).filter { it.keyring.value == keyringId }
         return commitAll(
-            doomed.map { VaultOp.ItemDelete(newId(), clock.now(), it.id) } +
+            deletionOps(current, doomed.map { it.id }) +
                 VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
         )
     }
@@ -267,9 +387,16 @@ class VaultSync(
         ),
     )
 
-    /** The live passwords currently on a keyring, wherever they are stored. */
+    /**
+     * Everything live on a keyring, files included.
+     *
+     * [visibleItems] would be wrong here: it hides the files attached to
+     * passwords, and moving a keyring without them would leave them behind in
+     * the document it came from — orphaned, and still readable by whoever
+     * holds that document.
+     */
     private fun itemsOn(composed: VaultState, keyringId: String): List<ItemRecord> =
-        visibleItems(composed).filter { it.keyring.value == keyringId }
+        itemsOnKeyrings(composed).filter { it.keyring.value == keyringId }
 
     /**
      * Move a keyring's passwords into their own document, so it can be shared.
@@ -435,8 +562,8 @@ class VaultSync(
         ),
     )
 
-    suspend fun deleteItem(itemId: String): VaultState =
-        commit(VaultOp.ItemDelete(newId(), clock.now(), itemId))
+    /** One password, and any file that was only attached to it. */
+    suspend fun deleteItem(itemId: String): VaultState = deleteItems(listOf(itemId))
 
     suspend fun restoreItem(itemId: String): VaultState =
         commit(VaultOp.ItemRestore(newId(), clock.now(), itemId))

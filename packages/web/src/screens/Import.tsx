@@ -401,26 +401,22 @@ export function Import({
           )}
 
           {/*
-            The one thing that genuinely cannot come across, said plainly and
-            before the button rather than in a summary afterwards.
-
-            Somebody who is told which entries have files will keep their
-            original; somebody who is not told will delete it and find out
-            later. That difference is the entire reason this is on screen.
+            A file too big to carry, named so the person can keep their
+            original for it. Everything else comes across, so this is a
+            sentence about one file rather than a warning about the import.
           */}
-          {stage.preview.attachments.length > 0 && (
+          {stage.preview.oversized.length > 0 && (
             <p className="status" data-tone="attn" style={{ marginTop: "0.9rem" }}>
               <AlertIcon />
               <span>
                 <b>
-                  Keyweb can't store the {countFiles(stage.preview.attachments)} attached to{" "}
-                  {stage.preview.attachments.length}{" "}
-                  {stage.preview.attachments.length === 1 ? "entry" : "entries"} yet.
+                  {stage.preview.oversized.length === 1 ? "One file is" : "Some files are"} too
+                  big for Keyweb to hold.
                 </b>
                 <em>
-                  Everything else comes across. Keep your original file until Keyweb can hold
-                  these: {stage.preview.attachments
-                    .flatMap((entry) => entry.names.map((name) => `${entry.title} — ${name}`))
+                  Everything else comes across, files included. Keep your original file for{" "}
+                  {stage.preview.oversized
+                    .map((file) => `${file.name} (${megabytes(file.bytes)}, on ${file.title})`)
                     .join(", ")}
                   .
                 </em>
@@ -471,8 +467,7 @@ export function Import({
   );
 }
 
-/** "3 files" / "the file", for a sentence that has to read naturally either way. */
-function countFiles(attachments: { names: string[] }[]): string {
-  const total = attachments.reduce((sum, entry) => sum + entry.names.length, 0);
-  return total === 1 ? "file" : `${total} files`;
+/** A size somebody can judge at a glance, rather than a byte count. */
+function megabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }

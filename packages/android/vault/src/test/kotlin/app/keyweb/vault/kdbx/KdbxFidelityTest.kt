@@ -39,7 +39,16 @@ class KdbxFidelityTest {
         val itemId: String,
         val fields: Map<String, String>,
         val versions: Int,
-        val attachments: List<String>,
+        val attachments: List<File> = emptyList(),
+    )
+
+    @Serializable
+    private data class File(
+        val blobId: String,
+        val name: String,
+        val type: String,
+        val data: String,
+        val bytes: Int,
     )
 
     private fun parity(): Parity {
@@ -140,13 +149,42 @@ class KdbxFidelityTest {
         assertEquals("not-a-real-folder", fields["custom:folder"])
     }
 
-    /** Files have nowhere to go yet; what must not happen is losing them quietly. */
+    /** The file itself, not a note about it having existed. */
     @Test
-    fun `names the files it cannot store instead of ignoring them`() {
-        val file = read(parity().password)
-        assertEquals(1, file.attachments.size)
-        assertEquals("Recovery codes", file.attachments.first().title)
-        assertEquals(listOf("recovery-codes.txt"), file.attachments.first().names)
+    fun `brings the attached file across, bytes and all`() {
+        val expected = parity()
+        val file = read(expected.password)
+        assertTrue(file.oversized.isEmpty(), file.oversized.toString())
+
+        val codes = file.entries.first { it.title == "Recovery codes" }
+        assertEquals(1, codes.attachments.size)
+        val attached = codes.attachments.first()
+        assertEquals("recovery-codes.txt", attached.name)
+        assertEquals(
+            "11111111\n22222222\n",
+            String(java.util.Base64.getDecoder().decode(attached.data), Charsets.UTF_8),
+        )
+    }
+
+    /**
+     * The id is the content hash, and the two platforms must compute the same
+     * one — otherwise importing the same file on a phone and in a browser puts
+     * two copies of it in one vault.
+     */
+    @Test
+    fun `agrees with the web reader on the id of a file's bytes`() {
+        val expected = parity()
+        val file = read(expected.password)
+        val wanted = expected.entries.flatMap { it.attachments }
+        assertTrue(wanted.isNotEmpty(), "the fixture has no attachments to compare")
+
+        val got = file.entries.flatMap { it.attachments }.associateBy { it.name }
+        for (want in wanted) {
+            val actual = got[want.name] ?: error("missing file ${want.name}")
+            assertEquals(want.blobId, actual.blobId, "blob id for ${want.name}")
+            assertEquals(want.data, actual.data, "bytes of ${want.name}")
+            assertEquals(want.bytes, actual.bytes, "size of ${want.name}")
+        }
     }
 }
 
