@@ -39,7 +39,10 @@ import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
+import app.keyweb.ui.AcceptShareScreen
+import app.keyweb.ui.JoinShareScreen
 import app.keyweb.ui.KeyringsScreen
+import app.keyweb.ui.ShareKeyringScreen
 import app.keyweb.data.SecretClipboard
 import app.keyweb.data.GrantBrowser
 import app.keyweb.ui.KeywebTheme
@@ -58,6 +61,7 @@ private sealed interface Route {
     data object Settings : Route
     data object Backup : Route
     data object Import : Route
+    data class Share(val keyringId: String) : Route
 }
 
 class MainActivity : FragmentActivity() {
@@ -68,6 +72,21 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent { KeywebApp(viewModel, this) }
+        viewModel.openShareLink(intent?.data?.toString())
+    }
+
+    /**
+     * A link arriving while the app is already open.
+     *
+     * `singleTask` would be wrong here — it would tear down and rebuild the
+     * whole screen for a link — so the activity stays as it is and the intent
+     * is handed straight to the view model. Returning from the browser after a
+     * file grant comes back this way too.
+     */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        viewModel.openShareLink(intent.data?.toString())
     }
 }
 
@@ -100,6 +119,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         is Route.Settings -> "settings"
                         is Route.Backup -> "backup"
                         is Route.Import -> "import"
+                        is Route.Share -> "share:${it.keyringId}"
                     }
                 },
                 restore = {
@@ -108,6 +128,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         it == "settings" -> Route.Settings
                         it == "backup" -> Route.Backup
                         it == "import" -> Route.Import
+                        it.startsWith("share:") -> Route.Share(it.removePrefix("share:"))
                         it.startsWith("detail:") -> Route.Detail(it.removePrefix("detail:"))
                         it.startsWith("edit:") ->
                             Route.Edit(it.removePrefix("edit:").ifEmpty { null })
@@ -193,6 +214,38 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                 }
                 BackHandler(enabled = route != Route.List) { goBack() }
 
+                // A link somebody sent takes over the screen. They opened it to
+                // finish something, not to browse their passwords, and leaving
+                // it behind a route would mean finding it again afterwards.
+                val invite = ui.share.invite
+                if (invite != null) {
+                    JoinShareScreen(
+                        invite = invite,
+                        share = ui.share,
+                        onContinue = { viewModel.beginShareGrant(activity) },
+                        onFinish = viewModel::finishShareJoin,
+                        onCopy = { copy(it, "The reply") },
+                        onDone = {
+                            viewModel.closeSharing()
+                            route = Route.List
+                        },
+                    )
+                    return@Box
+                }
+                if (ui.share.stage == ShareStage.ACCEPTING ||
+                    ui.share.stage == ShareStage.ACCEPTED
+                ) {
+                    AcceptShareScreen(
+                        share = ui.share,
+                        onRetry = viewModel::retryAccept,
+                        onDone = {
+                            viewModel.closeSharing()
+                            route = Route.List
+                        },
+                    )
+                    return@Box
+                }
+
                 when (val current = route) {
                     is Route.List -> VaultListScreen(
                         state = ui.vault,
@@ -265,6 +318,42 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onBack = ::goBack,
                         onAdd = viewModel::addKeyring,
                         onDelete = viewModel::deleteKeyring,
+                        canShare = viewModel.canShare,
+                        onShare = {
+                            viewModel.openSharing(it)
+                            route = Route.Share(it)
+                        },
+                        onPasteLink = {
+                            if (!viewModel.openShareLink(it)) {
+                                viewModel.showToast(
+                                    "That doesn't look like a Keyweb sharing link.",
+                                )
+                            }
+                        },
+                    )
+
+                    is Route.Share -> ShareKeyringScreen(
+                        keyringName = ui.vault.keyrings[current.keyringId]?.name?.value
+                            ?: "This keyring",
+                        share = ui.share,
+                        onBack = {
+                            viewModel.closeSharing()
+                            route = Route.Keyrings
+                        },
+                        onInvite = { email, role ->
+                            viewModel.shareKeyring(current.keyringId, email, role)
+                        },
+                        onCancelInvite = viewModel::cancelInvite,
+                        onRevoke = viewModel::revokeShare,
+                        onStopSharing = {
+                            viewModel.stopSharing(current.keyringId)
+                            route = Route.Keyrings
+                        },
+                        onLeave = {
+                            viewModel.leaveKeyring(current.keyringId)
+                            route = Route.Keyrings
+                        },
+                        onCopy = { copy(it, "The link") },
                     )
 
                     is Route.Settings -> SettingsScreen(

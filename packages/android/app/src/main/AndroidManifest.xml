@@ -35,6 +35,31 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              Sharing links, so tapping one somebody sent opens Keyweb rather
+              than the web app.
+
+              `autoVerify` asks Android to check for an assetlinks.json naming
+              this app at the root of keyneom.github.io. That file lives in the
+              repository that serves the domain root, not in this one, so until
+              it is published Android treats these as unverified links: they do
+              not open the app on Android 12 and later unless the person turns
+              it on under "Open by default".
+
+              That is why the keyrings screen also takes a pasted link. It is
+              not a fallback for an error — it is the path that works on every
+              phone today, and it stays whatever the verification does.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="keyneom.github.io"
+                    android:pathPrefix="/keyweb/" />
+            </intent-filter>
         </activity>
 
         <!--

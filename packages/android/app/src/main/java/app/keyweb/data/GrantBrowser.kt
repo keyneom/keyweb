@@ -46,6 +46,21 @@ object GrantBrowser {
     const val GRANT_URL = "https://keyneom.github.io/keyweb/?grant=import"
 
     /**
+     * The same page, asked for a *shared keyring's* file instead.
+     *
+     * Only the grant happens over there. The phone holds the vault and does the
+     * joining itself, which is why this hands over a file list rather than the
+     * join link: opening the join link in a browser would join the keyring into
+     * whatever vault that browser has, which is the wrong vault and possibly no
+     * vault at all.
+     */
+    fun shareGrantUrl(encodedFiles: String): String =
+        "https://keyneom.github.io/keyweb/?grant=share&sk-files=" +
+            // Not `Uri.encode`: that is an unimplemented stub in a JVM unit
+            // test, and building this URL is worth a test rather than a phone.
+            java.net.URLEncoder.encode(encodedFiles, "UTF-8")
+
+    /**
      * A neutral URL, used to find a browser.
      *
      * Deliberately not the grant URL: resolving that would return Keyweb if it

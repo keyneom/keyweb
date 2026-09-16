@@ -124,7 +124,7 @@ object Base64Url {
  * every input is a full-entropy random secret rather than a chosen passphrase.
  * Never feed this something a person invented.
  */
-internal fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
+fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
     val mac = Mac.getInstance("HmacSHA256")
 
     mac.init(SecretKeySpec(salt, "HmacSHA256"))

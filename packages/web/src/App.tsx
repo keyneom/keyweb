@@ -12,6 +12,7 @@ import {
   stripShareLinkParams,
   type KeywebJoinLink,
 } from "./vault/sharing/links";
+import { decodeSharingDatasetFilesV1 } from "@keyneom/sync-kit/sharing";
 import { datasetOf } from "@keyweb/vault-core";
 import type { SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import { Import } from "./screens/Import";
@@ -59,8 +60,31 @@ export function App() {
   const [granting, setGranting] = useState(
     () =>
       typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("grant") === "import",
+      ["import", "share"].includes(
+        new URLSearchParams(window.location.search).get("grant") ?? "",
+      ),
   );
+
+  /**
+   * The shared keyring files the phone is asking to be handed over.
+   *
+   * The phone does the joining — it holds the vault — and needs this browser
+   * only for the Picker, which is the one grant Google will accept from
+   * nobody else. Named by file id, so the page cannot be talked into granting
+   * something the phone never asked for.
+   */
+  const [grantFiles] = useState(() => {
+    if (typeof window === "undefined") return undefined;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("grant") !== "share") return undefined;
+    const encoded = params.get("sk-files");
+    if (!encoded) return undefined;
+    try {
+      return decodeSharingDatasetFilesV1(encoded);
+    } catch {
+      return undefined;
+    }
+  });
 
   /**
    * A share link this page was opened with.
@@ -126,7 +150,10 @@ export function App() {
   if (granting) {
     return (
       <main className="app">
-        <Grant onContinue={() => setGranting(false)} />
+        <Grant
+          onContinue={() => setGranting(false)}
+          {...(grantFiles ? { sharedFiles: grantFiles } : {})}
+        />
       </main>
     );
   }

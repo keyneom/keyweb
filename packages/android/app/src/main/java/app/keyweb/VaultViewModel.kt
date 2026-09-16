@@ -15,7 +15,27 @@ import app.keyweb.data.UnlockResult
 import app.keyweb.data.VaultDatabase
 import app.keyweb.data.VaultKeystore
 import app.keyweb.data.VaultUnlock
+import app.keyweb.data.GrantBrowser
 import app.keyweb.data.needsAuthentication
+import app.keyweb.sharing.AcceptedShare
+import app.keyweb.sharing.KeywebSharing
+import app.keyweb.sharing.KeywebSharingIdentity
+import app.keyweb.sharing.KeywebSharingIdentityStore
+import app.keyweb.sharing.Member
+import app.keyweb.sharing.PendingInvite
+import app.keyweb.sharing.PrefsSharingIdentityStore
+import app.keyweb.sharing.RoomSharedBackupRegistry
+import app.keyweb.sharing.SharedKeyringRemote
+import app.keyweb.sharing.ShareLinks
+import app.keyweb.sharing.createKeywebSharingController
+import com.keyneom.synckit.sharing.SharingDatasetFileV1
+import com.keyneom.synckit.sharing.SharingInvitationV1
+import com.keyneom.synckit.sharing.SharingPublicKeyResponseV1
+import com.keyneom.synckit.sharing.SharingRole
+import com.keyneom.synckit.sharing.encodeSharingDatasetFilesV1
+import com.keyneom.synckit.sharing.SharedBackupController
+import com.keyneom.synckit.core.Authorization
+import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.Clock
 import app.keyweb.vault.InvalidRecoveryCode
 import app.keyweb.vault.Fields
@@ -29,6 +49,7 @@ import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultEnvelopeCipher
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultOp
+import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
@@ -142,7 +163,59 @@ data class VaultUiState(
     val import: ImportUiState = ImportUiState(),
     /** What the generator opens with: whatever was used last. */
     val lastRules: PasswordRules = PasswordRules(),
+    val share: ShareUiState = ShareUiState(),
     val toast: String? = null,
+)
+
+/** Where a share flow has got to, from either end of it. */
+enum class ShareStage {
+    /** Nothing in progress; the sharing screens show what already is. */
+    IDLE,
+
+    /** Somebody opened a link that shares a keyring with this phone. */
+    INVITED,
+
+    /** Waiting for the browser to come back with the file grant. */
+    AWAITING_GRANT,
+
+    /** The reply is made and needs sending back to the person who invited. */
+    REPLY_READY,
+
+    /** A reply came back and is being turned into access. */
+    ACCEPTING,
+
+    /** Somebody was let in. */
+    ACCEPTED,
+}
+
+data class ShareUiState(
+    val stage: ShareStage = ShareStage.IDLE,
+    /** The keyring the share screens are about, when one is open. */
+    val keyringId: String? = null,
+    val datasetId: String? = null,
+    /** Everyone who can read it, once Drive has been asked. */
+    val members: List<Member> = emptyList(),
+    /** Null until Drive has answered: unknown is a real state, not a spinner. */
+    val youOwnIt: Boolean? = null,
+    val pending: List<PendingInvite> = emptyList(),
+    /** A link waiting to be sent to somebody. */
+    val link: String? = null,
+    /** The invitation this phone was sent, while it is being decided on. */
+    val invite: PendingShareInvite? = null,
+    val accepted: AcceptedShare? = null,
+    /** Held so a failed accept can be retried without the link being sent again. */
+    val reply: SharingPublicKeyResponseV1? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
+
+/** An invitation opened on this phone, held while the flow runs. */
+data class PendingShareInvite(
+    val invitation: SharingInvitationV1,
+    val files: List<SharingDatasetFileV1>,
+    val label: String?,
+    val ownerEmail: String?,
+    val role: SharingRole,
 )
 
 class VaultViewModel(app: Application) : AndroidViewModel(app) {
@@ -155,6 +228,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private var sync: VaultSync? = null
     private var storage: RoomVaultStorage? = null
+    private var sharing: KeywebSharing? = null
+    private var sharingController: SharedBackupController<VaultState>? = null
+    private var sharingIdentity: KeywebSharingIdentity? = null
 
     private val authorizer = GoogleAuthorizer(app)
     private val remote = SwitchableRemote()
@@ -281,8 +357,52 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             val store = RoomVaultStorage(database.dao(), VaultKeystore.cipher())
             storage = store
             val clock = Clock(deviceNode(), resume = store.readClock())
-            val engine = VaultSync(store, remote, clock)
+
+            // Sharing is wired in before the engine starts, because the engine
+            // asks for a dataset's remote the first time it syncs one — and a
+            // keyring bound on another device can already be waiting in the
+            // vault it is about to pull down.
+            val identity = KeywebSharingIdentity(
+                store = KeywebSharingIdentityStore(
+                    local = PrefsSharingIdentityStore(prefs),
+                    remote = KeywebSharingIdentity.driveStore {
+                        Authorization(authorizer.accessToken(), null)
+                    },
+                ),
+                secret = {
+                    storedSecret() ?: error(
+                        "This phone needs your recovery code before it can share a keyring. " +
+                            "Set up backup first.",
+                    )
+                },
+            )
+            sharingIdentity = identity
+            val controller = createKeywebSharingController(
+                identity = identity,
+                registry = RoomSharedBackupRegistry(database.dao()),
+                accessToken = { authorizer.accessToken() },
+            )
+            sharingController = controller
+
+            val datasetRemotes = mutableMapOf<String, SharedKeyringRemote>()
+            val engine = VaultSync(
+                storage = store,
+                remote = remote,
+                clock = clock,
+                remoteFor = { documentId ->
+                    if (documentId == VAULT_DOCUMENT) {
+                        remote
+                    } else {
+                        // Held rather than rebuilt, so "is this file there" is
+                        // not re-derived on every sync of every shared keyring.
+                        datasetRemotes.getOrPut(documentId) {
+                            SharedKeyringRemote(controller, documentId)
+                        }
+                    }
+                },
+            )
             sync = engine
+            sharing = KeywebSharing(engine, controller, identity, database.dao())
 
             // Backup, if it was already set up, resumes without asking again --
             // off the unlock path, because it talks to the network and nobody
@@ -313,6 +433,10 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      *  nothing readable stays in memory. */
     fun lock() {
         sync = null
+        sharingIdentity?.clear()
+        sharingIdentity = null
+        sharing = null
+        sharingController = null
         _state.value = VaultUiState(phase = VaultPhase.LOCKED, firstRun = false)
     }
 
@@ -610,10 +734,289 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         if (!remote.configured) return
         viewModelScope.launch {
             engine.sync()
+            adoptSharedKeyrings()
             publish(engine.state())
         }
     }
 
+    /**
+     * Pick up a shared keyring that has become readable.
+     *
+     * After a sync rather than on a timer, because "readable" changes only when
+     * Drive says so — and by then there is already a token in hand, so this
+     * never causes a sign-in nobody asked for. A keyring that is not ready yet
+     * is the normal case and not worth an error; it will be ready on some later
+     * sync.
+     */
+    private suspend fun adoptSharedKeyrings(): List<String> =
+        runCatching { sharing?.adoptJoinedKeyrings().orEmpty() }.getOrDefault(emptyList())
+
+
+    // ---- Sharing a keyring ------------------------------------------------
+    //
+    // The awkward part of this on a phone is the file grant. `drive.file` is
+    // per file, Google only issues it through the Picker, and the Picker only
+    // runs in a browser — so joining a shared keyring means a trip out to the
+    // web app and back. Everything else, including every prompt, happens on
+    // this side of that trip.
+
+    private fun setShare(update: (ShareUiState) -> ShareUiState) {
+        _state.value = _state.value.copy(share = update(_state.value.share))
+    }
+
+    /** True when this build can share at all: it needs a Google account. */
+    val canShare: Boolean get() = sharing != null
+
+    /**
+     * Open the sharing screen for one keyring.
+     *
+     * Members are read from Drive rather than remembered, because who can see a
+     * keyring is a fact about the file and not about this phone. Failing to
+     * reach Drive leaves it unknown, which the screen shows as unknown instead
+     * of as an empty list of people.
+     */
+    fun openSharing(keyringId: String) {
+        val engine = sharing ?: return
+        val datasetId = datasetOf(_state.value.vault.keyrings[keyringId])
+        setShare {
+            ShareUiState(
+                stage = ShareStage.IDLE,
+                keyringId = keyringId,
+                datasetId = datasetId,
+                busy = datasetId != null,
+            )
+        }
+        viewModelScope.launch {
+            val pending = runCatching { engine.pendingInvites(keyringId) }
+                .getOrDefault(emptyList())
+            if (datasetId == null) {
+                setShare { it.copy(pending = pending, busy = false) }
+                return@launch
+            }
+            val members = runCatching { engine.members(datasetId) }.getOrNull()
+            setShare {
+                it.copy(
+                    members = members.orEmpty(),
+                    youOwnIt = members?.firstOrNull { member -> member.you }
+                        ?.let { me -> me.role == SharingRole.OWNER },
+                    pending = pending,
+                    busy = false,
+                )
+            }
+        }
+    }
+
+    fun closeSharing() {
+        setShare { ShareUiState() }
+    }
+
+    /** Make a link inviting somebody to a keyring. */
+    fun shareKeyring(keyringId: String, email: String, role: SharingRole) {
+        val engine = sharing ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val link = engine.shareKeyring(keyringId, email, role)
+                setShare { it.copy(link = link, busy = false) }
+                openSharing(keyringId)
+                setShare { it.copy(link = link) }
+            } catch (cause: Exception) {
+                setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    fun cancelInvite(exchangeId: String) {
+        val engine = sharing ?: return
+        val keyringId = _state.value.share.keyringId ?: return
+        viewModelScope.launch {
+            runCatching { engine.cancelInvite(exchangeId) }
+            openSharing(keyringId)
+        }
+    }
+
+    fun setShareRole(keyId: String, role: SharingRole) {
+        val engine = sharing ?: return
+        val datasetId = _state.value.share.datasetId ?: return
+        val keyringId = _state.value.share.keyringId ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                engine.setRole(datasetId, keyId, role)
+                openSharing(keyringId)
+            } catch (cause: Exception) {
+                setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    fun revokeShare(keyId: String) {
+        val engine = sharing ?: return
+        val datasetId = _state.value.share.datasetId ?: return
+        val keyringId = _state.value.share.keyringId ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                engine.revoke(datasetId, keyId)
+                openSharing(keyringId)
+            } catch (cause: Exception) {
+                setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    /** Stop sharing a keyring of your own and bring its passwords home. */
+    fun stopSharing(keyringId: String) {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            val name = _state.value.vault.keyrings[keyringId]?.name?.value ?: "That keyring"
+            val next = engine.unbindKeyring(keyringId)
+            setShare { ShareUiState() }
+            publish(next, toast = "$name is private again.")
+        }
+    }
+
+    /** Stop carrying a keyring somebody else shared. Theirs is untouched. */
+    fun leaveKeyring(keyringId: String) {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            val name = _state.value.vault.keyrings[keyringId]?.name?.value ?: "That keyring"
+            val next = engine.leaveKeyring(keyringId)
+            setShare { ShareUiState() }
+            publish(next, toast = "$name was removed from this vault.")
+        }
+    }
+
+    // ---- Links opened on this phone ----
+
+    /**
+     * A link somebody sent, arriving as an intent.
+     *
+     * Returns true when it was a share link and has been taken over, so the
+     * caller knows not to treat it as an ordinary page.
+     */
+    fun openShareLink(url: String?): Boolean {
+        if (url == null) return false
+        ShareLinks.parseJoin(url)?.let { join ->
+            setShare {
+                ShareUiState(
+                    stage = ShareStage.INVITED,
+                    invite = PendingShareInvite(
+                        invitation = join.invitation,
+                        files = join.files,
+                        label = join.label,
+                        ownerEmail = join.ownerEmail,
+                        role = join.files.firstOrNull()?.role
+                            ?: join.invitation.requestedGrants.firstOrNull()?.role
+                            ?: SharingRole.VIEWER,
+                    ),
+                )
+            }
+            return true
+        }
+        ShareLinks.parseResponse(url)?.let { response ->
+            acceptShareResponse(response)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Step one of joining: send the person to a browser to grant the file.
+     *
+     * The identity is unlocked *before* the browser opens, so the trip out and
+     * back needs nothing further from them. If this is left until afterwards,
+     * the prompt arrives when attention has moved on — or after Android has
+     * discarded the process while the browser was in front.
+     */
+    fun beginShareGrant(activity: FragmentActivity) {
+        val invite = _state.value.share.invite ?: return
+        val engine = sharing ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                engine.myFingerprint()
+                val url = GrantBrowser.shareGrantUrl(
+                    encodeSharingDatasetFilesV1(invite.files),
+                )
+                // Copied first: if nothing on the device takes an https link,
+                // the fallback is pasting it rather than a dead end.
+                GrantBrowser.copyLink(activity, url)
+                val opened = GrantBrowser.open(activity, url)
+                setShare {
+                    it.copy(
+                        stage = ShareStage.AWAITING_GRANT,
+                        busy = false,
+                        error = if (opened) {
+                            null
+                        } else {
+                            "Keyweb couldn't find a browser. The link is on your clipboard — " +
+                                "paste it into one, then come back."
+                        },
+                    )
+                }
+            } catch (cause: Exception) {
+                setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    /**
+     * Step two: finish the join now the file has been granted.
+     *
+     * Separate from step one and driven by a tap, because there is no way to be
+     * told the browser is finished. A 404 from Drive here means the file was
+     * not actually picked, which is an ordinary mistake and is reported as one.
+     */
+    fun finishShareJoin() {
+        val invite = _state.value.share.invite ?: return
+        val engine = sharing ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val link = engine.joinFromLink(
+                    invitation = invite.invitation,
+                    files = invite.files,
+                    label = invite.label,
+                    // Already done, in the browser. Nothing to ask for here.
+                    grantAccess = {},
+                )
+                setShare { it.copy(stage = ShareStage.REPLY_READY, link = link, busy = false) }
+            } catch (cause: Exception) {
+                setShare {
+                    it.copy(
+                        stage = ShareStage.AWAITING_GRANT,
+                        busy = false,
+                        error = describeShare(cause),
+                    )
+                }
+            }
+        }
+    }
+
+    /** The owner's last step: turn a reply link into access. */
+    fun acceptShareResponse(response: SharingPublicKeyResponseV1) {
+        val engine = sharing ?: return
+        setShare { ShareUiState(stage = ShareStage.ACCEPTING, reply = response) }
+        viewModelScope.launch {
+            try {
+                val accepted = engine.acceptResponse(response)
+                setShare { it.copy(stage = ShareStage.ACCEPTED, accepted = accepted) }
+            } catch (cause: Exception) {
+                setShare { it.copy(stage = ShareStage.ACCEPTING, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    /** Try the accept again with the reply already in hand. */
+    fun retryAccept() {
+        _state.value.share.reply?.let(::acceptShareResponse)
+    }
+
+    private fun describeShare(cause: Throwable): String = when {
+        needsAuthentication(cause) -> "Keyweb needed you to unlock again."
+        else -> cause.message ?: "Keyweb couldn't finish that."
+    }
 
     // ---- Importing from KeePass ------------------------------------------
 

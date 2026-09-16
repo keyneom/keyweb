@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "fixture": "vite-node scripts/emit-envelope-fixture.ts",
-    "fixture:kdbx": "vite-node scripts/emit-kdbx-fixtures.ts"
+    "fixture:kdbx": "vite-node scripts/emit-kdbx-fixtures.ts",
+    "fixture:sharing": "vite-node scripts/emit-sharing-identity-fixture.ts"
   },
   "dependencies": {
     "@keyneom/sync-kit": "^0.4.1",

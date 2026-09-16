@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { SharingDatasetFileV1 } from "@keyneom/sync-kit/sharing";
 import { AlertIcon, CheckIcon, KeyIcon, ShieldIcon } from "../ui/icons";
 import {
   listImportableFiles,
@@ -6,6 +7,7 @@ import {
   PICKER_CONFIGURED,
   type ImportSource,
 } from "../vault/importSource";
+import { grantSharedFiles, MissingGrant } from "../vault/sharing/picker";
 
 /**
  * Handing a Drive file to Keyweb on the phone.
@@ -28,7 +30,23 @@ import {
  * So the grant runs on its own. Sign in to Google, pick the file, go back to
  * the phone. The vault is never opened, never created, and never mentioned.
  */
-export function Grant({ onContinue }: { onContinue: () => void }) {
+export function Grant({
+  onContinue,
+  sharedFiles,
+}: {
+  onContinue: () => void;
+  /**
+   * Set when the phone is handing over a *shared keyring's* file rather than a
+   * KeePass file to import.
+   *
+   * Same errand, different files, and still nothing to do with a vault: the
+   * phone holds the vault and does the joining, and all the browser is for is
+   * the one grant Google will only accept from a person in a browser. The
+   * files are named by id, so this cannot be talked into granting anything the
+   * phone did not ask for.
+   */
+  sharedFiles?: SharingDatasetFileV1[];
+}) {
   const [granted, setGranted] = useState<ImportSource[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,17 +78,32 @@ export function Grant({ onContinue }: { onContinue: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      if (sharedFiles && sharedFiles.length > 0) {
+        // Checked rather than assumed: the Picker reports what was selected,
+        // not what was granted, and picking the wrong file from a list of
+        // similar names is an ordinary mistake. Without this the phone would
+        // sit waiting for a keyring that never became readable.
+        await grantSharedFiles(sharedFiles);
+        setDone(true);
+        return;
+      }
       const picked = await pickDriveFiles();
       // Cancelling is a decision, not a failure.
       if (picked.length === 0) return;
       await refresh();
       setDone(true);
     } catch (cause) {
+      if (cause instanceof MissingGrant) {
+        setError(cause.message);
+        return;
+      }
       setError(cause instanceof Error ? cause.message : "Keyweb couldn't open your Drive.");
     } finally {
       setBusy(false);
     }
   }
+
+  const sharing = Boolean(sharedFiles && sharedFiles.length > 0);
 
   if (!PICKER_CONFIGURED) {
     return (
@@ -95,10 +128,13 @@ export function Grant({ onContinue }: { onContinue: () => void }) {
         <KeyIcon />
       </span>
 
-      <h1 className="unlock-title">Point Keyweb at your KeePass file</h1>
+      <h1 className="unlock-title">
+        {sharing ? "Let your phone see the shared keyring" : "Point Keyweb at your KeePass file"}
+      </h1>
       <p className="unlock-sub">
-        Your phone sent you here because Google's file chooser only runs in a browser. Pick your
-        file below, then go back to Keyweb on your phone.
+        {sharing
+          ? "Your phone sent you here because Google's file chooser only runs in a browser. Choose the shared keyring below, then go back to Keyweb on your phone."
+          : "Your phone sent you here because Google's file chooser only runs in a browser. Pick your file below, then go back to Keyweb on your phone."}
       </p>
 
       {error && (
@@ -123,7 +159,7 @@ export function Grant({ onContinue }: { onContinue: () => void }) {
         </p>
       )}
 
-      {granted.length > 0 && (
+      {!sharing && granted.length > 0 && (
         <>
           <h2 className="import-heading">Files your phone can already open</h2>
           <div className="list">
@@ -147,9 +183,11 @@ export function Grant({ onContinue }: { onContinue: () => void }) {
       <button type="button" className="btn pri big" disabled={busy} onClick={() => void pick()}>
         {busy
           ? "Opening Google Drive…"
-          : granted.length > 0
-            ? "Pick another file"
-            : "Choose a file from Google Drive"}
+          : sharing
+            ? "Choose the shared keyring"
+            : granted.length > 0
+              ? "Pick another file"
+              : "Choose a file from Google Drive"}
       </button>
 
       <p className="status" data-tone="calm">

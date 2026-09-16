@@ -59,6 +59,7 @@ import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.KeyringRecord
 import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultState
+import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
 
 private val RING_COLORS = listOf(
@@ -572,7 +573,7 @@ fun ItemEditScreen(
 }
 
 @Composable
-private fun EditField(
+internal fun EditField(
     label: String,
     value: String,
     onChange: (String) -> Unit,
@@ -596,7 +597,12 @@ fun KeyringsScreen(
     onBack: () -> Unit,
     onAdd: (String) -> Unit,
     onDelete: (String) -> Unit,
+    /** False when this build has no Google account and so cannot share at all. */
+    canShare: Boolean = false,
+    onShare: (String) -> Unit = {},
+    onPasteLink: (String) -> Unit = {},
 ) {
+    var pastedLink by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     /** The keyring being deleted, held until the count has been acknowledged. */
     var confirming by remember { mutableStateOf<String?>(null) }
@@ -621,15 +627,27 @@ fun KeyringsScreen(
                 Column {
                     rings.forEach { r ->
                         val count = items.count { it.keyring.value == r.id }
+                        // A keyring in its own file is one that is shared, or is
+                        // being got ready to be. Whether *you* shared it or
+                        // somebody shared it with you is not something this list
+                        // can know without asking Drive, so it says the part it
+                        // is sure of and the sharing screen says the rest.
+                        val shared = datasetOf(r) != null
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f)) {
                                 VaultRow(
                                     initials = "●",
                                     title = r.name.value,
-                                    subtitle = "$count password${if (count == 1) "" else "s"} · only you",
+                                    subtitle = "$count password${if (count == 1) "" else "s"} · " +
+                                        if (shared) "shared" else "only you",
                                     onClick = {},
                                     accent = ringColor(state, r.id),
                                 )
+                            }
+                            if (canShare) {
+                                TextButton(onClick = { onShare(r.id) }) {
+                                    Text(if (shared) "Sharing" else "Share")
+                                }
                             }
                             // Never the last one: every password lives in a
                             // keyring, so a vault with none has nowhere to put
@@ -708,6 +726,33 @@ fun KeyringsScreen(
                 },
                 enabled = name.isNotBlank(),
             )
+
+            if (canShare) {
+                Spacer(Modifier.height(28.dp))
+                EditField(
+                    "Somebody sent you a link",
+                    pastedLink,
+                    { pastedLink = it },
+                    "Paste it here",
+                )
+                // Tapping the link ought to open Keyweb, and does once Android
+                // has verified this app owns the address. Until then — and on
+                // any phone where the person has not turned that on — pasting
+                // it here is the path that always works.
+                Text(
+                    "If tapping the link opened a browser instead of Keyweb, paste it in here.",
+                    color = statusColors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                SecondaryButton(
+                    "Open that link",
+                    onClick = {
+                        onPasteLink(pastedLink.trim())
+                        pastedLink = ""
+                    },
+                )
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

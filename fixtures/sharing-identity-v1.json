@@ -1,0 +1,24 @@
+{
+  "note": "Written by packages/web/scripts/emit-sharing-identity-fixture.ts. Do not edit.",
+  "secretBase64": "OpEMfeJFuBbwKVyjcdRoC543wlA=",
+  "keyId": "GHPacpdObB-cZtu3dEVd1zj5r6Dzino4_Ye3FWgnFWw",
+  "fingerprint": "1873-da72-974e-6c1f-9c66-dbb7",
+  "record": {
+    "schemaVersion": 1,
+    "kind": "sync-kit-protected-sharing-identity",
+    "appId": "keyweb",
+    "rpId": "keyweb",
+    "credentialId": "recovery",
+    "prfInput": "U-aM90B8AWW3qDhozdv86GJWUy1fFGPpyqtB7K4MNOk",
+    "kdfSalt": "sMAmrK4uDf_tfbsLQZ1uPH_fIx_6qSy8cmPdkukIYH4",
+    "nonce": "rQhcJVbSsWw1Whe0",
+    "publicKey": {
+      "keyId": "GHPacpdObB-cZtu3dEVd1zj5r6Dzino4_Ye3FWgnFWw",
+      "encryptionAlgorithm": "ECDH-P256",
+      "encryptionPublicKey": "BIXf8HUJzw7AR6xAik-rLP8NdurEYHCtbY7FIvMDtSbsRBl7VMivBQCESdrQttdtb0ckkuUDyPfo_cVZnFyMQDE",
+      "signatureAlgorithm": "ECDSA-P256-SHA256-P1363",
+      "signingPublicKey": "BIvuSGh1hDGNVj6brMxFSHskADEjaonabWEkjxWdC0Oktm1GLROnyR_4QVABdCv8aYafok_fHBGOUBww2ZlRVfc"
+    },
+    "encryptedPrivateKeys": "YnGDcWSuzz3IcG8KHVHpkebSjzAFGR04oC6bPiGVi4nJDFWsGWWeVL-GoYNQM6ExUAH5tUOy5piwjSNA9d35DOzkhB_NVR9l4jZBfXdUhlsdmCGEuPYz6KFEXhJHAk-cqPF_IX9OLSrzxYN2iAT2-_Kzf5ZY7f-1ek3j0tgzFkL_QcevsPWRNi5Tqs0eoCQd4gTw7PkX0p9UZfv9WhugZoNji_9RNc2QoE6dfwhy8KVUw1P-0gcPdG2PEZDTmNY7eXjcaTYFBqif4S83qdGBlfp9LDmobf83vqFxzK3LeZ8fKjpmKjiDn4SGyMmXPSeQbdlULHMKjUYywGbcr--kD-ho6u2wWZ_FdlkP5XsCSWYMhT1WVWvb8Of8Xr-EExg8vgOr3VYR6Y4"
+  }
+}

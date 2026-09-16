@@ -67,9 +67,23 @@ class KeywebCredentialService : CredentialProviderService() {
         }
 
         val intent = Intent(this, CredentialUnlockActivity::class.java).apply {
+            /*
+             * The package name, not the web origin.
+             *
+             * `CallingAppInfo.origin` is only ever set for a *privileged*
+             * caller — a browser Google has allowlisted to request credentials
+             * on a website's behalf — and androidx.credentials 1.6 made it
+             * unreadable without that allowlist to stop providers treating a
+             * plain app's claim about a website as trustworthy. Keyweb is not
+             * privileged and never will be, so the field was always null here;
+             * reading it was a request for a permission we do not hold.
+             *
+             * The package name is what actually identifies the caller, and it
+             * is what the matching rules work from.
+             */
             putExtra(
                 CredentialUnlockActivity.EXTRA_ORIGIN,
-                request.callingAppInfo?.origin ?: request.callingAppInfo?.packageName,
+                request.callingAppInfo?.packageName,
             )
             putExtra(
                 CredentialUnlockActivity.EXTRA_PACKAGE,
