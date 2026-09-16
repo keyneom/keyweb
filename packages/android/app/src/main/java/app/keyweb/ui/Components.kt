@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +56,14 @@ fun StatusLine(
     /** Text for an action inside the card. Null leaves it as a plain sentence. */
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    /**
+     * False greys the action out rather than removing it.
+     *
+     * A control that disappears while it is working is worse than one that is
+     * merely disabled: the card reflows, and the thing the person just pressed
+     * is no longer where they pressed it.
+     */
+    actionEnabled: Boolean = true,
 ) {
     val status = LocalKeywebStatus.current
     val (fg, bg, icon) = when (tone) {
@@ -85,12 +94,30 @@ fun StatusLine(
                 Text(detail, style = MaterialTheme.typography.bodyMedium)
                 // Telling someone what is wrong without telling them where to
                 // go is the same as not telling them.
+                //
+                // Weighted by the card's own urgency: when something needs
+                // doing the action is a filled button, and when everything is
+                // already fine it is an offer, not an instruction. A primary
+                // button inside a "backed up" card asks for attention that the
+                // state does not deserve, and spends it where it is not needed.
                 if (actionLabel != null && onAction != null) {
-                    PrimaryButton(
-                        actionLabel,
-                        onAction,
-                        Modifier.padding(top = 10.dp),
-                    )
+                    if (tone == Tone.SAFE) {
+                        TextButton(
+                            onClick = onAction,
+                            modifier = Modifier.padding(top = 2.dp),
+                            enabled = actionEnabled,
+                            colors = ButtonDefaults.textButtonColors(contentColor = fg),
+                        ) {
+                            Text(actionLabel, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        PrimaryButton(
+                            actionLabel,
+                            onAction,
+                            Modifier.padding(top = 10.dp),
+                            enabled = actionEnabled,
+                        )
+                    }
                 }
             }
         }
@@ -104,9 +131,24 @@ fun BackupStatusLine(
     backupConfigured: Boolean,
     modifier: Modifier = Modifier,
     onSetUpBackup: (() -> Unit)? = null,
+    /**
+     * Back up on demand.
+     *
+     * Syncing is automatic after every edit, but "automatic" is not the same
+     * as "visibly finished" — and when the last attempt failed, or another
+     * device has changes this one has not seen, waiting is the one thing a
+     * person cannot do anything with. The action belongs on this line rather
+     * than in Settings because this is where the doubt is: it is the sentence
+     * that just said something was not backed up yet.
+     */
+    onSync: (() -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
+    // A run already in flight must not be able to start a second, but the
+    // button stays put and greys out rather than vanishing under the finger.
+    val label = { text: String -> if (status.syncing) "Checking…" else text }
+    val sync = onSync
     when {
         !backupConfigured -> StatusLine(
             Tone.ATTENTION,
@@ -123,6 +165,9 @@ fun BackupStatusLine(
             "Saved on this phone. ${changes(status.pending)} still to back up.",
             error ?: "We'll back them up as soon as we can reach your backup.",
             modifier,
+            actionLabel = label("Back up now"),
+            onAction = sync,
+            actionEnabled = !status.syncing,
         )
 
         error != null -> StatusLine(
@@ -130,6 +175,9 @@ fun BackupStatusLine(
             "Everything is saved here, but backup had a problem.",
             error,
             modifier,
+            actionLabel = label("Try again"),
+            onAction = sync,
+            actionEnabled = !status.syncing,
         )
 
         published == null -> StatusLine(
@@ -137,6 +185,9 @@ fun BackupStatusLine(
             "Saved on this phone.",
             "Nothing has been backed up yet.",
             modifier,
+            actionLabel = label("Back up now"),
+            onAction = sync,
+            actionEnabled = !status.syncing,
         )
 
         else -> StatusLine(
@@ -144,6 +195,11 @@ fun BackupStatusLine(
             "Saved here and backed up.",
             "Last checked ${relativeTime(published)}.",
             modifier,
+            // Nothing is waiting to go up, but a check also brings down
+            // whatever another device has published since.
+            actionLabel = label("Check now"),
+            onAction = sync,
+            actionEnabled = !status.syncing,
         )
     }
 }

@@ -149,6 +149,7 @@ export function App() {
               `${itemIds.length} password${itemIds.length === 1 ? "" : "s"} deleted.`,
             );
           }}
+          onSync={() => void vault.syncNow()}
           onMoveMany={async (itemIds, keyringId) => {
             await vault.moveItems(itemIds, keyringId);
             const name = vault.state.keyrings[keyringId]?.name.value ?? "that keyring";

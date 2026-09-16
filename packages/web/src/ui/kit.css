@@ -762,3 +762,23 @@
   margin-left: auto;
   flex: none;
 }
+
+/* The backup line's own action. Quiet: it sits inside a sentence, and in the
+   good case it is an offer rather than something anyone needs to do. */
+.status-action {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 2rem;
+}
+.status-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

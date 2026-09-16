@@ -30,6 +30,7 @@ export function VaultList({
   onSettings,
   onDeleteMany,
   onMoveMany,
+  onSync,
 }: {
   state: VaultState;
   items: ItemRecord[];
@@ -41,6 +42,7 @@ export function VaultList({
   onSettings: () => void;
   onDeleteMany: (itemIds: string[]) => Promise<void>;
   onMoveMany: (itemIds: string[], keyringId: string) => Promise<void>;
+  onSync: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [ring, setRing] = useState<string | null>(null);
@@ -182,7 +184,12 @@ export function VaultList({
         })}
       </div>
 
-      <StatusLine status={status} backupConfigured={backupConfigured} />
+      <StatusLine
+        status={status}
+        backupConfigured={backupConfigured}
+        onSync={onSync}
+        syncing={status.syncing}
+      />
 
       {shown.length === 0 ? (
         <p className="empty">

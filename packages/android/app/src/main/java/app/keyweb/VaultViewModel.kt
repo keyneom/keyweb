@@ -597,12 +597,20 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(backup = _state.value.backup.copy(error = null))
     }
 
+    /**
+     * Back up now, and take whatever another device has published.
+     *
+     * Publishes the resulting state, not just the status. A sync pulls as well
+     * as pushes, so a password added on another device arrives here — and
+     * updating only the status would leave it sitting in storage, invisible
+     * until something else happened to redraw the list.
+     */
     fun syncNow() {
         val engine = sync ?: return
         if (!remote.configured) return
         viewModelScope.launch {
             engine.sync()
-            _state.value = _state.value.copy(status = engine.status())
+            publish(engine.state())
         }
     }
 

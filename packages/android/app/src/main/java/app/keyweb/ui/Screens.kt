@@ -102,6 +102,7 @@ fun VaultListScreen(
     onKeyrings: () -> Unit,
     onSettings: () -> Unit,
     onSetUpBackup: () -> Unit,
+    onSync: () -> Unit,
     onDeleteMany: (List<String>) -> Unit,
     onMoveMany: (List<String>, String) -> Unit,
     /** This build's version, so the update notice knows what to compare. */
@@ -237,6 +238,7 @@ fun VaultListScreen(
                 backupConfigured,
                 Modifier.padding(bottom = 10.dp),
                 onSetUpBackup = onSetUpBackup,
+                onSync = onSync,
             )
 
             Box(Modifier.weight(1f)) {
