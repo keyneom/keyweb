@@ -454,6 +454,15 @@ fun ItemEditScreen(
     onSave: (String?, String, Map<ItemField, String>) -> Unit,
     onSaveRules: (String, PasswordRules) -> Unit,
     onRulesUsed: (PasswordRules) -> Unit,
+    /**
+     * Keyrings somebody shared as a reader.
+     *
+     * Saving into one would be accepted here and refused at the Drive file, so
+     * it would look exactly like saving and never arrive — and the change would
+     * sit in the outbox with the status line reporting it forever. Better to
+     * say so before the typing than after it.
+     */
+    readOnlyKeyrings: Set<String> = emptySet(),
 ) {
     var title by remember { mutableStateOf(item?.field(Fields.TITLE).orEmpty()) }
     var username by remember { mutableStateOf(item?.field(Fields.USERNAME).orEmpty()) }
@@ -539,14 +548,31 @@ fun ItemEditScreen(
                         selected = keyringId == r.id,
                         onClick = { keyringId = r.id },
                         colors = keywebChipColors(),
-                        label = { Text(r.name.value) },
+                        label = {
+                            Text(
+                                if (readOnlyKeyrings.contains(r.id)) {
+                                    "${r.name.value} · look only"
+                                } else {
+                                    r.name.value
+                                },
+                            )
+                        },
                     )
                 }
             }
+            // Shown rather than hidden, so an item that is already in one still
+            // shows where it lives — but choosing it says why it cannot be saved.
+            val readOnly = readOnlyKeyrings.contains(keyringId)
             Text(
-                "Everyone on a keyring can see everything on it. You share a keyring, never one password.",
+                if (readOnly) {
+                    "This keyring was shared with you to look at. Ask the person who shared " +
+                        "it if you need to change something, or choose a keyring of your own."
+                } else {
+                    "Everyone on a keyring can see everything on it. You share a keyring, " +
+                        "never one password."
+                },
                 style = MaterialTheme.typography.bodyMedium,
-                color = statusColors.muted,
+                color = if (readOnly) statusColors.attention else statusColors.muted,
                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
             )
 
@@ -565,7 +591,7 @@ fun ItemEditScreen(
                         ),
                     )
                 },
-                enabled = canSave,
+                enabled = canSave && !readOnly,
             )
             Spacer(Modifier.height(24.dp))
         }

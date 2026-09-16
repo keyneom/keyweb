@@ -65,9 +65,26 @@ export interface ShareStore {
 const PENDING_KEY = "sharing:pending-invites";
 const JOINED_KEY = "sharing:joined-datasets";
 const MEMBER_EMAILS_KEY = "sharing:member-emails";
+const ROLES_KEY = "sharing:roles";
 
 /** A dataset this device asked to join, before it can read it. */
 type JoinedDataset = { datasetId: string; label: string; role: ShareRole };
+
+/**
+ * A keyring this device may read but not write.
+ *
+ * Kept because the alternative is worse than a stale answer. Without it,
+ * someone shared a keyring as a viewer can type a new password into it, see
+ * "Saved", and never learn that it went nowhere — the write is refused at the
+ * Drive file, the operation sits in the outbox forever, and the status line
+ * says there is an unsaved change with nothing they can do about it.
+ *
+ * Refreshed whenever the real answer is fetched, and wrong only in the safe
+ * direction in between: a promotion takes effect on the next look at who has
+ * access, and until then the person is told to ask rather than told they
+ * succeeded.
+ */
+export type ReadOnlyKeyrings = ReadonlySet<string>;
 
 export class KeywebSharing {
   readonly #sync: VaultSync;
@@ -166,6 +183,9 @@ export class KeywebSharing {
     const datasetId = `keyweb-${crypto.randomUUID()}`;
     await this.#sync.bindKeyring(keyringId, datasetId);
     await this.#ensurePublished(datasetId);
+    // We made it, so we own it. Recorded here so the keyring is never treated
+    // as read-only in the window before anybody asks Drive who has access.
+    await this.#rememberRole(datasetId, "owner");
     return datasetId;
   }
 
@@ -306,6 +326,10 @@ export class KeywebSharing {
       await this.#sync.adoptDocument(entry.datasetId, value);
       await this.#sync.putKeyring({ keyringId: keyring.id, name: keyring.name.value });
       await this.#sync.bindKeyring(keyring.id, entry.datasetId);
+      // From the invitation, which is signed. The authoritative answer is in
+      // the envelope and arrives the first time anybody looks at who has
+      // access; until then this is what was actually granted.
+      await this.#rememberRole(entry.datasetId, entry.role);
       adopted.push(keyring.name.value);
     }
     await this.#store.writeMeta(JOINED_KEY, remaining);
@@ -319,13 +343,38 @@ export class KeywebSharing {
     const identity = await this.#identity.getOrCreate();
     const emails = await this.#memberEmails();
     const { participants } = await this.#controller.getDatasetParticipants(datasetId);
-    return participants.map((participant: SharedBackupParticipantV1) => ({
+    const members = participants.map((participant: SharedBackupParticipantV1) => ({
       keyId: participant.keyId,
       fingerprint: sharingKeyFingerprint(participant.keyId),
       role: participant.role,
       email: emails[participant.keyId] ?? null,
       you: participant.keyId === identity.publicKey.keyId,
     }));
+    // The authoritative answer just arrived, so record what it says about us.
+    const mine = members.find((member) => member.you)?.role;
+    if (mine) await this.#rememberRole(datasetId, mine);
+    return members;
+  }
+
+  /**
+   * The keyrings this device may read but not write.
+   *
+   * Answered from what was last learned rather than by asking Drive, because
+   * it is consulted every time a screen renders an edit button.
+   */
+  async readOnlyKeyrings(state: VaultState): Promise<ReadOnlyKeyrings> {
+    const roles = await this.#roles();
+    const readOnly = new Set<string>();
+    for (const keyring of Object.values(state.keyrings)) {
+      if (keyring.deleted.value) continue;
+      const datasetId = datasetOf(keyring);
+      if (!datasetId) continue;
+      const role = roles[datasetId];
+      if (role && role !== "owner" && role !== "admin" && role !== "writer") {
+        readOnly.add(keyring.id);
+      }
+    }
+    return readOnly;
   }
 
   /** Change what somebody may do. Owners cannot be demoted by design. */
@@ -396,6 +445,18 @@ export class KeywebSharing {
   async #memberEmails(): Promise<Record<string, string>> {
     const stored = await this.#store.readMeta(MEMBER_EMAILS_KEY);
     return (stored as Record<string, string> | undefined) ?? {};
+  }
+
+  async #roles(): Promise<Record<string, SharingRole>> {
+    const stored = await this.#store.readMeta(ROLES_KEY);
+    return (stored as Record<string, SharingRole> | undefined) ?? {};
+  }
+
+  async #rememberRole(datasetId: string, role: SharingRole): Promise<void> {
+    const roles = await this.#roles();
+    if (roles[datasetId] === role) return;
+    roles[datasetId] = role;
+    await this.#store.writeMeta(ROLES_KEY, roles);
   }
 
   async #rememberMemberEmail(keyId: string, email: string): Promise<void> {

@@ -549,3 +549,107 @@ describe("a vault that shares nothing", () => {
     expect(emptyVault()).toEqual({ items: {}, keyrings: {} });
   });
 });
+
+describe("what a reader may do", () => {
+  const files: SharingDatasetFileV1[] = [
+    { datasetId: "ds-1", fileId: "file-1", role: "viewer" },
+  ];
+
+  function sharedDocument(): VaultState {
+    return {
+      items: {},
+      keyrings: {
+        house: {
+          id: "house",
+          name: { value: "Household", ts: "001700000000000-00001-owner" },
+          deleted: { value: false, ts: "001700000000000-00000-owner" },
+          dataset: { value: "", ts: "000000000000000-00000-" },
+        },
+      },
+    };
+  }
+
+  /**
+   * Without this, someone shared a keyring as a reader types a new password
+   * into it, sees "Saved", and never learns it went nowhere — the write is
+   * refused at the file and the operation sits in the outbox forever.
+   */
+  it("marks a keyring shared as read-only", async () => {
+    const { sharing, sync, controller } = rig();
+    controller.datasets.set("ds-1", sharedDocument());
+
+    await sharing.joinFromLink({
+      invitation: await anInvitation({
+        exchangeId: "exchange-1",
+        grants: [{ datasetId: "ds-1", role: "viewer" }],
+      }),
+      files,
+      label: "Household",
+      grantAccess: async () => {},
+    });
+    await sharing.adoptJoinedKeyrings();
+
+    const readOnly = await sharing.readOnlyKeyrings(await sync.state());
+    expect([...readOnly]).toEqual(["house"]);
+  });
+
+  it("does not mark a keyring shared as a writer", async () => {
+    const { sharing, sync, controller } = rig();
+    controller.datasets.set("ds-1", sharedDocument());
+
+    await sharing.joinFromLink({
+      invitation: await anInvitation({
+        exchangeId: "exchange-1",
+        grants: [{ datasetId: "ds-1", role: "writer" }],
+      }),
+      files: [{ datasetId: "ds-1", fileId: "file-1", role: "writer" }],
+      label: "Household",
+      grantAccess: async () => {},
+    });
+    await sharing.adoptJoinedKeyrings();
+
+    expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual([]);
+  });
+
+  it("never marks a keyring of your own, even before Drive is asked", async () => {
+    const { sharing, sync } = await withHousehold();
+    await sharing.shareKeyring({ keyringId: "house", email: "a@example.com", role: "viewer" });
+    expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual([]);
+  });
+
+  it("says nothing about keyrings that were never shared", async () => {
+    const { sharing, sync } = await withHousehold();
+    expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual([]);
+  });
+
+  /**
+   * The link's grant is what is known until somebody asks Drive. Asking is
+   * what makes a promotion take effect, and it has to, or a writer would stay
+   * locked out of a keyring they were given write access to.
+   */
+  it("follows a promotion once Drive has been asked", async () => {
+    const { sharing, sync, controller, identity } = rig();
+    controller.datasets.set("ds-1", sharedDocument());
+    await sharing.joinFromLink({
+      invitation: await anInvitation({
+        exchangeId: "exchange-1",
+        grants: [{ datasetId: "ds-1", role: "viewer" }],
+      }),
+      files,
+      label: "Household",
+      grantAccess: async () => {},
+    });
+    await sharing.adoptJoinedKeyrings();
+    expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual(["house"]);
+
+    const me = (await identity.getOrCreate()).publicKey.keyId;
+    controller.participants.set("ds-1", [
+      { keyId: me, role: "writer" } as SharedBackupParticipantV1,
+    ]);
+    const members = await sharing.members("ds-1");
+    expect(members[0]?.you).toBe(true);
+
+    expect([...(await sharing.readOnlyKeyrings(await sync.state()))]).toEqual([]);
+  });
+});
+

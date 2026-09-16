@@ -310,6 +310,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         },
                         onSaveRules = viewModel::saveRules,
                         onRulesUsed = viewModel::rememberLastRules,
+                        readOnlyKeyrings = ui.readOnlyKeyrings,
                     )
 
                     is Route.Keyrings -> KeyringsScreen(

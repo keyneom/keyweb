@@ -22,10 +22,20 @@ export function ItemEdit({
   onSave,
   onSaveRules,
   onRulesUsed,
+  readOnlyKeyrings,
 }: {
   item: ItemRecord | null;
   state: VaultState;
   defaultKeyringId: string;
+  /**
+   * Keyrings somebody shared as a reader.
+   *
+   * Saving into one would be accepted here and refused at the Drive file, so
+   * it would look exactly like saving and never arrive — and the change would
+   * sit in the outbox with the status line reporting it forever. Better to say
+   * so before the typing than after it.
+   */
+  readOnlyKeyrings: ReadonlySet<string>;
   savedRules: SavedRules[];
   lastRules: PasswordRules;
   onBack: () => void;
@@ -63,7 +73,10 @@ export function ItemEdit({
   }
 
   const rings = Object.values(state.keyrings).filter((r) => !r.deleted.value);
-  const canSave = title.trim().length > 0 && password.length > 0 && !saving;
+  // Kept in the list rather than hidden, so an item that is already in one
+  // still shows where it lives — but choosing it says why it cannot be saved.
+  const readOnly = readOnlyKeyrings.has(keyringId);
+  const canSave = title.trim().length > 0 && password.length > 0 && !saving && !readOnly;
 
   async function save() {
     if (!canSave) return;
@@ -167,12 +180,15 @@ export function ItemEdit({
             {rings.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name.value}
+                {readOnlyKeyrings.has(r.id) ? " — you can only look" : ""}
               </option>
             ))}
           </select>
         </div>
-        <span className="hint">
-          Everyone on a keyring can see everything on it. Share a keyring, never one password.
+        <span className={readOnly ? "hint warn" : "hint"}>
+          {readOnly
+            ? "This keyring was shared with you to look at. Ask the person who shared it if you need to change something, or choose a keyring of your own."
+            : "Everyone on a keyring can see everything on it. Share a keyring, never one password."}
         </span>
       </label>
 

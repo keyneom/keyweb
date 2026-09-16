@@ -76,6 +76,15 @@ export type VaultApi = {
   status: SyncStatus;
   backupConfigured: boolean;
   items: ItemRecord[];
+  /**
+   * Keyrings somebody shared with this person as a reader.
+   *
+   * Empty unless something has actually been shared, so nothing about the
+   * ordinary app changes. The screens use it to stop an edit that would be
+   * accepted here and refused at the file — which would look exactly like
+   * saving, and never arrive.
+   */
+  readOnlyKeyrings: ReadonlySet<string>;
   unlock(options?: { quiet?: boolean }): Promise<void>;
   /** Open a vault that already exists in Drive, onto a device that has none. */
   restore(): Promise<void>;
@@ -189,6 +198,9 @@ export function useVault(): VaultApi {
     syncing: false,
   });
 
+  const [readOnlyKeyrings, setReadOnlyKeyrings] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
   /** This backup already has a recovery code, and it is not on this device. */
   const [recoveryNeedsCode, setRecoveryNeedsCode] = useState(false);
@@ -220,9 +232,18 @@ export function useVault(): VaultApi {
   /** Re-read everything after a sharing change moved passwords between files. */
   const refreshFromEngine = useCallback(async () => {
     const sync = syncRef.current;
+    const engine = sharingRef.current;
     if (!sync) return;
-    setState(await sync.state());
+    const next = await sync.state();
+    setState(next);
     setStatus({ ...sync.status() });
+    if (engine) {
+      try {
+        setReadOnlyKeyrings(await engine.readOnlyKeyrings(next));
+      } catch {
+        // Leave the last answer rather than guessing a more permissive one.
+      }
+    }
   }, []);
 
   const refresh = useCallback((next: VaultState) => {
@@ -240,14 +261,21 @@ export function useVault(): VaultApi {
    */
   const adoptShared = useCallback(async () => {
     const engine = sharingRef.current;
-    if (!engine) return false;
+    const sync = syncRef.current;
+    if (!engine || !sync) return false;
+    let adopted = false;
     try {
-      return (await engine.adoptJoinedKeyrings()).length > 0;
+      adopted = (await engine.adoptJoinedKeyrings()).length > 0;
     } catch {
       // A share that is not ready yet is the normal case, not an error worth
       // showing. It will be ready on some later sync.
-      return false;
     }
+    try {
+      setReadOnlyKeyrings(await engine.readOnlyKeyrings(await sync.state()));
+    } catch {
+      // Not knowing must not make an editable keyring look read-only.
+    }
+    return adopted;
   }, []);
 
   /** Publish in the background; the UI already showed "Saved" from the commit. */
@@ -719,6 +747,7 @@ export function useVault(): VaultApi {
     deleteKeyring,
     addKeyring,
     importKeePass,
+    readOnlyKeyrings,
     sharing,
   };
 }

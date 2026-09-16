@@ -39,6 +39,7 @@ private val json = Json { ignoreUnknownKeys = true }
 private const val PENDING_KEY = "sharing:pending-invites"
 private const val JOINED_KEY = "sharing:joined-datasets"
 private const val MEMBER_EMAILS_KEY = "sharing:member-emails"
+private const val ROLES_KEY = "sharing:roles"
 
 /**
  * Named once rather than spelled out at each call site: the type arguments
@@ -48,6 +49,7 @@ private const val MEMBER_EMAILS_KEY = "sharing:member-emails"
 private val PendingInvites = MapSerializer(String.serializer(), PendingInvite.serializer())
 private val MemberEmails = MapSerializer(String.serializer(), String.serializer())
 private val JoinedDatasets = ListSerializer(JoinedDataset.serializer())
+private val Roles = MapSerializer(String.serializer(), SharingRole.serializer())
 
 /** A keyring shared with someone, as a person needs to see it. */
 data class Member(
@@ -76,6 +78,7 @@ data class PendingInvite(
 private data class JoinedDataset(
     val datasetId: String,
     val label: String,
+    val role: SharingRole = SharingRole.VIEWER,
 )
 
 class KeywebSharing(
@@ -152,6 +155,9 @@ class KeywebSharing(
         val datasetId = "keyweb-${UUID.randomUUID()}"
         sync.bindKeyring(keyringId, datasetId)
         ensurePublished(datasetId)
+        // We made it, so we own it. Recorded here so the keyring is never
+        // treated as read-only in the window before anybody asks Drive.
+        rememberRole(datasetId, SharingRole.OWNER)
         return datasetId
     }
 
@@ -190,7 +196,7 @@ class KeywebSharing(
         val joined = joined().toMutableList()
         for (file in files) {
             if (joined.any { it.datasetId == file.datasetId }) continue
-            joined += JoinedDataset(file.datasetId, label ?: "Shared keyring")
+            joined += JoinedDataset(file.datasetId, label ?: "Shared keyring", file.role)
         }
         writeMeta(JOINED_KEY, json.encodeToString(JoinedDatasets, joined))
 
@@ -272,6 +278,10 @@ class KeywebSharing(
             sync.adoptDocument(entry.datasetId, value)
             sync.putKeyring(keyringId = keyring.id, name = keyring.name.value)
             sync.bindKeyring(keyring.id, entry.datasetId)
+            // From the invitation, which is signed. The authoritative answer is
+            // in the envelope and arrives the first time anybody looks at who
+            // has access; until then this is what was actually granted.
+            rememberRole(entry.datasetId, entry.role)
             adopted += keyring.name.value
         }
         writeMeta(JOINED_KEY, json.encodeToString(JoinedDatasets, remaining))
@@ -284,7 +294,7 @@ class KeywebSharing(
     suspend fun members(datasetId: String): List<Member> {
         val mine = identity.getOrCreate().publicKey.keyId
         val emails = memberEmails()
-        return controller.getDatasetParticipants(datasetId).participants.map { participant ->
+        val members = controller.getDatasetParticipants(datasetId).participants.map { participant ->
             Member(
                 keyId = participant.keyId,
                 fingerprint = KeywebSharingIdentity.fingerprint(participant.keyId),
@@ -293,6 +303,34 @@ class KeywebSharing(
                 you = participant.keyId == mine,
             )
         }
+        // The authoritative answer just arrived, so record what it says about us.
+        members.firstOrNull { it.you }?.let { rememberRole(datasetId, it.role) }
+        return members
+    }
+
+    /**
+     * The keyrings this device may read but not write.
+     *
+     * Kept because the alternative is worse than a stale answer. Without it,
+     * somebody shared a keyring as a viewer can type a new password into it,
+     * see "Saved", and never learn that it went nowhere — the write is refused
+     * at the Drive file, the operation sits in the outbox forever, and the
+     * status line reports an unsaved change they can do nothing about.
+     *
+     * Answered from what was last learned rather than by asking Drive, because
+     * it is consulted every time a screen renders an edit button. Wrong only in
+     * the safe direction in between.
+     */
+    suspend fun readOnlyKeyrings(state: VaultState): Set<String> {
+        val roles = roles()
+        return state.keyrings.values
+            .filter { !it.deleted.value }
+            .mapNotNull { keyring ->
+                val datasetId = datasetOf(keyring) ?: return@mapNotNull null
+                val role = roles[datasetId] ?: return@mapNotNull null
+                keyring.id.takeIf { role == SharingRole.VIEWER }
+            }
+            .toSet()
     }
 
     /** Change what somebody may do. Owners cannot be demoted by design. */
@@ -351,6 +389,17 @@ class KeywebSharing(
         readMeta(MEMBER_EMAILS_KEY)?.let {
             runCatching { json.decodeFromString(MemberEmails, it) }.getOrNull()
         } ?: emptyMap()
+
+    private suspend fun roles(): Map<String, SharingRole> =
+        readMeta(ROLES_KEY)?.let {
+            runCatching { json.decodeFromString(Roles, it) }.getOrNull()
+        } ?: emptyMap()
+
+    private suspend fun rememberRole(datasetId: String, role: SharingRole) {
+        val roles = roles()
+        if (roles[datasetId] == role) return
+        writeMeta(ROLES_KEY, json.encodeToString(Roles, roles + (datasetId to role)))
+    }
 
     private suspend fun rememberMemberEmail(keyId: String, email: String) {
         val emails = memberEmails().toMutableMap()

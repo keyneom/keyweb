@@ -166,6 +166,14 @@ data class VaultUiState(
     val share: ShareUiState = ShareUiState(),
     /** This person's own sharing key, once they have asked to see it. */
     val sharingKey: String? = null,
+    /**
+     * Keyrings somebody shared with this person as a reader.
+     *
+     * Empty unless something has actually been shared. The edit screen uses it
+     * to stop a save that would be accepted here and refused at the Drive
+     * file — which would look exactly like saving, and never arrive.
+     */
+    val readOnlyKeyrings: Set<String> = emptySet(),
     val toast: String? = null,
 )
 
@@ -750,8 +758,21 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * is the normal case and not worth an error; it will be ready on some later
      * sync.
      */
-    private suspend fun adoptSharedKeyrings(): List<String> =
-        runCatching { sharing?.adoptJoinedKeyrings().orEmpty() }.getOrDefault(emptyList())
+    private suspend fun adoptSharedKeyrings(): List<String> {
+        val adopted = runCatching { sharing?.adoptJoinedKeyrings().orEmpty() }
+            .getOrDefault(emptyList())
+        refreshReadOnly()
+        return adopted
+    }
+
+    /** Not knowing must never make a read-only keyring look editable. */
+    private suspend fun refreshReadOnly() {
+        val engine = sharing ?: return
+        val vault = sync?.state() ?: return
+        runCatching { engine.readOnlyKeyrings(vault) }.getOrNull()?.let {
+            _state.value = _state.value.copy(readOnlyKeyrings = it)
+        }
+    }
 
 
     // ---- Sharing a keyring ------------------------------------------------
@@ -808,6 +829,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val members = runCatching { engine.members(datasetId) }.getOrNull()
+            refreshReadOnly()
             setShare {
                 it.copy(
                     members = members.orEmpty(),

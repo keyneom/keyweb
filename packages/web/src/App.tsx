@@ -280,6 +280,7 @@ export function App() {
           lastRules={generator.lastRules}
           onSaveRules={generator.saveRules}
           onRulesUsed={generator.rememberLastRules}
+          readOnlyKeyrings={vault.readOnlyKeyrings}
           onBack={() => setRoute({ name: "list" })}
           onSave={async (input) => {
             await vault.saveItem(input);
