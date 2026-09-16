@@ -1,5 +1,5 @@
 import type { Hlc, VaultOp, VaultState, VaultStorage } from "@keyweb/vault-core";
-import { applyOp, emptyVault, mergeVaults } from "@keyweb/vault-core";
+import { applyOp, emptyVault, mergeVaults, VAULT_DOCUMENT } from "@keyweb/vault-core";
 
 /**
  * IndexedDB implementation of the vault storage contract.
@@ -33,6 +33,16 @@ const DB_VERSION = 1;
 const META = "meta";
 const OUTBOX = "outbox";
 const STATE_KEY = "state";
+
+/**
+ * Where a document's state is kept.
+ *
+ * The vault keeps the bare key it has always had, so an existing database is
+ * read by this code unchanged; a dataset gets a key of its own.
+ */
+function stateKey(documentId: string): string {
+  return documentId ? `${STATE_KEY}:${documentId}` : STATE_KEY;
+}
 const CLOCK_KEY = "clock";
 const LOCK_NAME = "keyweb-vault-write";
 
@@ -65,7 +75,12 @@ export const plaintextCipher: VaultCipher = {
 };
 
 type StateRow = { revision: number; payload: unknown };
-type OutboxRow = { seq?: number; opId: string; payload: unknown };
+/**
+ * `document` is absent on rows written before keyrings could live in their own
+ * documents, and absent means the vault — so old outboxes keep working and
+ * keep meaning what they meant.
+ */
+type OutboxRow = { seq?: number; opId: string; payload: unknown; document?: string };
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -144,9 +159,11 @@ export class IndexedDbVaultStorage implements VaultStorage {
   }
 
   /** Read the stored row without decrypting, so callers can compare revisions. */
-  async #readRow(): Promise<StateRow> {
+  async #readRow(documentId: string = VAULT_DOCUMENT): Promise<StateRow> {
     const tx = this.#db.transaction(META, "readonly");
-    const row = await request<StateRow | undefined>(tx.objectStore(META).get(STATE_KEY));
+    const row = await request<StateRow | undefined>(
+      tx.objectStore(META).get(stateKey(documentId)),
+    );
     return row ?? { revision: 0, payload: null };
   }
 
@@ -155,8 +172,25 @@ export class IndexedDbVaultStorage implements VaultStorage {
     return this.#cipher.openState(row.payload);
   }
 
-  async readState(): Promise<VaultState> {
-    return this.#decode(await this.#readRow());
+  async readState(documentId: string = VAULT_DOCUMENT): Promise<VaultState> {
+    return this.#decode(await this.#readRow(documentId));
+  }
+
+  /**
+   * Documents other than the vault, from the keys actually present.
+   *
+   * Read from storage rather than from the vault's bindings, because the two
+   * legitimately disagree: a keyring bound on another device is in the vault
+   * before its document has ever been fetched.
+   */
+  async knownDocuments(): Promise<string[]> {
+    const tx = this.#db.transaction(META, "readonly");
+    const keys = await request<IDBValidKey[]>(tx.objectStore(META).getAllKeys());
+    return keys
+      .filter((key): key is string => typeof key === "string")
+      .filter((key) => key.startsWith(`${STATE_KEY}:`))
+      .map((key) => key.slice(STATE_KEY.length + 1))
+      .sort();
   }
 
   /**
@@ -171,16 +205,18 @@ export class IndexedDbVaultStorage implements VaultStorage {
     expectedRevision: number,
     statePayload: unknown,
     outbox: readonly OutboxRow[],
+    documentId: string = VAULT_DOCUMENT,
   ): Promise<boolean> {
     const stores = outbox.length > 0 ? [META, OUTBOX] : [META];
     const tx = this.#db.transaction(stores, "readwrite");
     const meta = tx.objectStore(META);
-    const current = await request<StateRow | undefined>(meta.get(STATE_KEY));
+    const key = stateKey(documentId);
+    const current = await request<StateRow | undefined>(meta.get(key));
     if ((current?.revision ?? 0) !== expectedRevision) {
       tx.abort();
       return false;
     }
-    meta.put({ revision: expectedRevision + 1, payload: statePayload }, STATE_KEY);
+    meta.put({ revision: expectedRevision + 1, payload: statePayload }, key);
     // One transaction however many rows: a bulk change must not be able to
     // land half-written, and paying the state re-encryption once is the whole
     // reason the batch exists.
@@ -196,51 +232,66 @@ export class IndexedDbVaultStorage implements VaultStorage {
     return this.commitAll([op], nextState);
   }
 
-  async commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void> {
+  async commitAll(
+    ops: readonly VaultOp[],
+    nextState: VaultState,
+    documentId: string = VAULT_DOCUMENT,
+  ): Promise<void> {
     if (ops.length === 0) return;
     await this.#withLock(async () => {
-      const row = await this.#readRow();
+      const row = await this.#readRow(documentId);
       const sealedState = await this.#cipher.sealState(nextState);
       const sealedOps = await Promise.all(
-        ops.map(async (op) => ({ opId: op.opId, payload: await this.#cipher.sealOp(op) })),
+        ops.map(async (op) => ({
+          opId: op.opId,
+          payload: await this.#cipher.sealOp(op),
+          document: documentId,
+        })),
       );
-      const ok = await this.#casCommit(row.revision, sealedState, sealedOps);
+      const ok = await this.#casCommit(row.revision, sealedState, sealedOps, documentId);
       if (!ok) {
         // Another tab wrote between our read and our write. Re-derive the
         // state by joining the operations onto whatever is there now, so
         // neither side's work is lost, and try again.
-        const current = await this.readState();
+        const current = await this.readState(documentId);
         let rejoined = current;
         for (const op of ops) rejoined = applyOp(rejoined, op);
-        const row2 = await this.#readRow();
+        const row2 = await this.#readRow(documentId);
         const resealed = await this.#cipher.sealState(rejoined);
-        const retried = await this.#casCommit(row2.revision, resealed, sealedOps);
+        const retried = await this.#casCommit(row2.revision, resealed, sealedOps, documentId);
         if (!retried) throw new Error("The vault was being written by another tab. Try again.");
       }
     });
   }
 
-  async applyRemote(incoming: VaultState): Promise<VaultState> {
+  async applyRemote(
+    incoming: VaultState,
+    documentId: string = VAULT_DOCUMENT,
+  ): Promise<VaultState> {
     return (await this.#withLock(async () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        const row = await this.#readRow();
+        const row = await this.#readRow(documentId);
         const current = await this.#decode(row);
         const joined = mergeVaults(current, incoming);
         const sealed = await this.#cipher.sealState(joined);
-        if (await this.#casCommit(row.revision, sealed, [])) return joined;
+        if (await this.#casCommit(row.revision, sealed, [], documentId)) return joined;
       }
       throw new Error("The vault kept changing while we merged. Try again.");
     })) as VaultState;
   }
 
-  async pending(): Promise<VaultOp[]> {
+  async pending(documentId: string = VAULT_DOCUMENT): Promise<VaultOp[]> {
     const tx = this.#db.transaction(OUTBOX, "readonly");
     const rows = await request<Required<OutboxRow>[]>(tx.objectStore(OUTBOX).getAll());
-    const ordered = rows.sort((a, b) => a.seq - b.seq);
+    const ordered = rows
+      // A row with no document predates datasets and belongs to the vault,
+      // which is what it meant when it was written.
+      .filter((row) => (row.document ?? VAULT_DOCUMENT) === documentId)
+      .sort((a, b) => a.seq - b.seq);
     return Promise.all(ordered.map((row) => this.#cipher.openOp(row.payload)));
   }
 
-  async ack(opIds: readonly string[]): Promise<void> {
+  async ack(opIds: readonly string[], _documentId: string = VAULT_DOCUMENT): Promise<void> {
     if (opIds.length === 0) return;
     await this.#withLock(async () => {
       const drop = new Set(opIds);

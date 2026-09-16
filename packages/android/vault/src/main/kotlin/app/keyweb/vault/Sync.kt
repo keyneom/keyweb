@@ -45,6 +45,17 @@ class VaultSync(
     private val storage: VaultStorage,
     private val remote: RemoteVaultStore,
     private val clock: Clock,
+    /**
+     * The remote for a keyring that lives in its own document.
+     *
+     * Returning null means that document has nowhere to publish yet — the
+     * normal state for a keyring bound locally whose Drive file has not been
+     * made. Its edits stay queued in its own outbox and go up when a remote
+     * appears, exactly as an offline vault's do.
+     */
+    private val remoteFor: (String) -> RemoteVaultStore? = { documentId ->
+        if (documentId == VAULT_DOCUMENT) remote else null
+    },
     private val maxConflictRetries: Int = 5,
     private val newId: () -> String = { java.util.UUID.randomUUID().toString() },
     private val nowMs: () -> Long = { System.currentTimeMillis() },
@@ -66,20 +77,35 @@ class VaultSync(
         return pending.isEmpty() && statusValue.lastPublishedAtMs != null
     }
 
-    suspend fun state(): VaultState = storage.readState()
+    /**
+     * The vault as a person sees it: its own items plus every dataset's.
+     *
+     * Composed on every read rather than cached, because a cache here is one
+     * more thing that can disagree with storage, and the merge is cheap beside
+     * the decryption that already happened to get the documents.
+     */
+    suspend fun state(): VaultState {
+        val vault = storage.readState()
+        val datasets = readDatasets(vault)
+        return if (datasets.isEmpty()) vault else composeVault(vault, datasets)
+    }
+
+    /** Every bound document this device actually holds. */
+    private suspend fun readDatasets(vault: VaultState): Map<String, VaultState> {
+        val wanted = boundDatasets(vault).map { it.datasetId }.toSet()
+        if (wanted.isEmpty()) return emptyMap()
+
+        val held = storage.knownDocuments().toSet()
+        // A keyring bound on another device arrives before its document does.
+        // Skipping it shows the keyring empty rather than failing the read.
+        return wanted.filter { it in held }.associateWith { storage.readState(it) }
+    }
 
     /**
      * Save one edit. Returns only once the edit is durable, so a caller may show
      * "Saved" the moment it returns — and must not show it before.
      */
-    suspend fun commit(op: VaultOp): VaultState {
-        val current = storage.readState()
-        val next = applyOp(current, op)
-        storage.commit(op, next)
-        storage.writeClock(clock.snapshot())
-        statusValue = statusValue.copy(pending = storage.pending().size)
-        return next
-    }
+    suspend fun commit(op: VaultOp): VaultState = commitAll(listOf(op))
 
     /**
      * Save several edits as one durable write.
@@ -95,16 +121,40 @@ class VaultSync(
      * the vault is never left holding half a bulk change.
      */
     suspend fun commitAll(ops: List<VaultOp>): VaultState {
-        if (ops.isEmpty()) return storage.readState()
-        if (ops.size == 1) return commit(ops.first())
+        if (ops.isEmpty()) return state()
 
-        val current = storage.readState()
-        var next = current
-        for (op in ops) next = applyOp(next, op)
-        storage.commitAll(ops, next)
+        // Every document is read once, here, and the result is composed from
+        // what this produces rather than read back. Each read decrypts a whole
+        // document, so re-reading to answer "what does it look like now" would
+        // double the cost of every edit.
+        val vault = storage.readState()
+        val datasets = readDatasets(vault).toMutableMap()
+
+        // Routed against the composed view: deciding where an edit goes needs
+        // to know which keyring an item is on, and for an item in a shared
+        // keyring that fact lives in the dataset rather than the vault.
+        val composed = if (datasets.isEmpty()) vault else composeVault(vault, datasets)
+        val byDocument = ops.groupBy { documentFor(it, composed) }
+
+        // Sorted so the vault is written first. Its operations create and bind
+        // keyrings, and a dataset written before the vault knew its keyring
+        // existed would be a document nothing points at.
+        var nextVault = vault
+        for (documentId in byDocument.keys.sorted()) {
+            val group = byDocument.getValue(documentId)
+            val isVault = documentId == VAULT_DOCUMENT
+            var after = if (isVault) vault else datasets[documentId] ?: emptyVault()
+            for (op in group) after = applyOp(after, op)
+
+            if (group.size == 1 && isVault) storage.commit(group.first(), after)
+            else storage.commitAll(group, after, documentId)
+
+            if (isVault) nextVault = after else datasets[documentId] = after
+        }
+
         storage.writeClock(clock.snapshot())
-        statusValue = statusValue.copy(pending = storage.pending().size)
-        return next
+        refreshPending()
+        return if (datasets.isEmpty()) nextVault else composeVault(nextVault, datasets)
     }
 
     /**
@@ -176,12 +226,37 @@ class VaultSync(
     /** Serialised so two syncs never publish from the same base. */
     suspend fun sync(): SyncOutcome = syncMutex.withLock { syncNow() }
 
+    /**
+     * Sync the vault, then every keyring that lives in its own document.
+     *
+     * The vault goes first and its result is what the caller sees, because the
+     * vault is what says which datasets exist — syncing them first would use
+     * this device's idea of the bindings rather than the agreed one.
+     *
+     * A dataset that fails does not fail the whole sync. One shared keyring
+     * whose file has been revoked must not stop the rest of someone's
+     * passwords from backing up.
+     */
     private suspend fun syncNow(): SyncOutcome {
+        val outcome = syncDocument(VAULT_DOCUMENT, remote)
+
+        for (binding in boundDatasets(storage.readState())) {
+            val store = remoteFor(binding.datasetId) ?: continue
+            runCatching { syncDocument(binding.datasetId, store) }
+        }
+        return when (outcome) {
+            is SyncOutcome.Published -> outcome.copy(pending = refreshPending())
+            is SyncOutcome.Unchanged -> outcome.copy(pending = refreshPending())
+            else -> outcome
+        }
+    }
+
+    private suspend fun syncDocument(documentId: String, store: RemoteVaultStore): SyncOutcome {
         statusValue = statusValue.copy(syncing = true)
         try {
             repeat(maxConflictRetries + 1) {
                 val revision = try {
-                    remote.read()
+                    store.read()
                 } catch (error: RemoteUnavailableException) {
                     return offline(error)
                 }
@@ -193,12 +268,12 @@ class VaultSync(
                     storage.writeClock(clock.snapshot())
                 }
 
-                val local = storage.readState()
+                val local = storage.readState(documentId)
                 val base = revision?.state ?: emptyVault()
 
                 // Capture pending *before* the write. Anything committed after
                 // this point stays queued rather than being falsely acked.
-                val pending = storage.pending()
+                val pending = storage.pending(documentId)
                 val pendingIds = pending.map { it.opId }
 
                 // Rule 2: fold every unacknowledged edit into what we are about
@@ -206,8 +281,8 @@ class VaultSync(
                 val merged = applyOps(mergeVaults(base, local), pending)
 
                 if (revision != null && fingerprint(merged) == fingerprint(revision.state)) {
-                    storage.applyRemote(merged)
-                    storage.ack(pendingIds)
+                    storage.applyRemote(merged, documentId)
+                    storage.ack(pendingIds, documentId)
                     statusValue = statusValue.copy(
                         lastError = null,
                         lastPublishedAtMs = statusValue.lastPublishedAtMs ?: nowMs(),
@@ -216,14 +291,14 @@ class VaultSync(
                 }
 
                 val version = try {
-                    remote.write(merged, revision?.version)
+                    store.write(merged, revision?.version)
                 } catch (conflict: VersionConflictException) {
                     return@repeat // re-read, re-merge
                 } catch (error: RemoteUnavailableException) {
                     return offline(error)
                 }
 
-                storage.applyRemote(merged)
+                storage.applyRemote(merged, documentId)
 
                 // Rule 3: acknowledge only work we have *seen* in a published
                 // revision, never work we merely uploaded. Google Drive offers
@@ -232,7 +307,7 @@ class VaultSync(
                 // write alone would let the loser of that race drop edits it had
                 // already marked safe -- silent data loss, the exact failure
                 // this engine exists to prevent. One extra read closes it.
-                if (published(pending)) storage.ack(pendingIds)
+                if (published(pending, store)) storage.ack(pendingIds, documentId)
                 statusValue = statusValue.copy(lastPublishedAtMs = nowMs(), lastError = null)
                 return SyncOutcome.Published(version, refreshPending())
             }
@@ -254,10 +329,10 @@ class VaultSync(
      * survived. A failed read counts as unproven, keeping the work queued
      * rather than risking its loss.
      */
-    private suspend fun published(pending: List<VaultOp>): Boolean {
+    private suspend fun published(pending: List<VaultOp>, store: RemoteVaultStore): Boolean {
         if (pending.isEmpty()) return true
         return try {
-            val confirmed = remote.read() ?: return false
+            val confirmed = store.read() ?: return false
             fingerprint(applyOps(confirmed.state, pending)) == fingerprint(confirmed.state)
         } catch (error: Exception) {
             false
@@ -270,10 +345,41 @@ class VaultSync(
         return SyncOutcome.Offline(refreshPending(), message)
     }
 
+    /**
+     * Work still queued, across every document.
+     *
+     * Counted over all of them because the status line speaks for the whole
+     * vault: "3 changes still to back up" must not omit the ones waiting in a
+     * shared keyring, or someone is told they are safe when they are not.
+     */
     private suspend fun refreshPending(): Int {
-        val count = storage.pending().size
+        var count = storage.pending().size
+        for (documentId in storage.knownDocuments()) count += storage.pending(documentId).size
         statusValue = statusValue.copy(pending = count)
         return count
+    }
+
+    /**
+     * Which document an operation belongs in.
+     *
+     * Keyring operations always the vault: it is the vault that knows a
+     * keyring exists, what it is called and where its items went, and a rename
+     * landing only in a shared document would be invisible to the person who
+     * shared it.
+     *
+     * Item operations follow their keyring. An edit to a password in a shared
+     * keyring belongs in that keyring's document; putting it in the vault
+     * would leave this device looking correct while the other person never saw
+     * the change.
+     */
+    private fun documentFor(op: VaultOp, composed: VaultState): String = when (op) {
+        is VaultOp.KeyringPut, is VaultOp.KeyringDelete, is VaultOp.KeyringBind -> VAULT_DOCUMENT
+        is VaultOp.ItemPut -> datasetForItem(composed, op.keyringId) ?: VAULT_DOCUMENT
+        is VaultOp.ItemMove -> datasetForItem(composed, op.keyringId) ?: VAULT_DOCUMENT
+        is VaultOp.ItemDelete ->
+            datasetForItem(composed, composed.items[op.itemId]?.keyring?.value) ?: VAULT_DOCUMENT
+        is VaultOp.ItemRestore ->
+            datasetForItem(composed, composed.items[op.itemId]?.keyring?.value) ?: VAULT_DOCUMENT
     }
 }
 

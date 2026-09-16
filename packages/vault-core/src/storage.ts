@@ -22,8 +22,18 @@ import { applyOp } from "./ops.js";
  *    local state, and overwriting instead of joining is exactly how a saved
  *    password silently disappears.
  */
+/**
+ * Which document an operation concerns.
+ *
+ * The empty string is the vault itself, which is why it is the default
+ * everywhere: every existing call site means the vault, and adding a parameter
+ * must not change what any of them do. A non-empty id is a keyring that lives
+ * in its own document — see `docs/keyring-sharing.md` for why it has to.
+ */
+export const VAULT_DOCUMENT = "";
+
 export interface VaultStorage {
-  readState(): Promise<VaultState>;
+  readState(documentId?: string): Promise<VaultState>;
   /** Atomic: persist `nextState` and append `op` to the outbox together. */
   commit(op: VaultOp, nextState: VaultState): Promise<void>;
   /** Atomic: join `incoming` into the current state and return the result. */
@@ -34,12 +44,24 @@ export interface VaultStorage {
    * at a time re-encrypts the entire vault per op, which is what made deleting
    * a keyring of 200 passwords take the better part of a minute.
    */
-  commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void>;
-  applyRemote(incoming: VaultState): Promise<VaultState>;
+  commitAll(
+    ops: readonly VaultOp[],
+    nextState: VaultState,
+    documentId?: string,
+  ): Promise<void>;
+  applyRemote(incoming: VaultState, documentId?: string): Promise<VaultState>;
   /** Operations not yet proven present in a published revision, oldest first. */
-  pending(): Promise<VaultOp[]>;
+  pending(documentId?: string): Promise<VaultOp[]>;
   /** Drop operations now known to be in a published revision. */
-  ack(opIds: readonly string[]): Promise<void>;
+  ack(opIds: readonly string[], documentId?: string): Promise<void>;
+  /**
+   * Every document this device holds, the vault excluded.
+   *
+   * Asked rather than remembered, because the vault's own list of bound
+   * keyrings and the documents actually on disk can disagree — a keyring
+   * bound on another device arrives before its document does.
+   */
+  knownDocuments(): Promise<string[]>;
   /** Persisted causal time, so a restart cannot rewind the clock. */
   readClock(): Promise<Hlc | undefined>;
   writeClock(value: Hlc): Promise<void>;
@@ -75,37 +97,70 @@ type OutboxEntry = { op: VaultOp; seq: number };
  * here are the contract every platform implementation must reproduce.
  */
 export class MemoryVaultStorage implements VaultStorage {
-  #state: VaultState = emptyVault();
-  #outbox: OutboxEntry[] = [];
+  /** One entry per document; the vault is the one keyed by VAULT_DOCUMENT. */
+  #states = new Map<string, VaultState>();
+  #outboxes = new Map<string, OutboxEntry[]>();
   #seq = 0;
   #clock: Hlc | undefined;
 
-  async readState(): Promise<VaultState> {
-    return this.#state;
+  async readState(documentId: string = VAULT_DOCUMENT): Promise<VaultState> {
+    return this.#states.get(documentId) ?? emptyVault();
   }
 
   async commit(op: VaultOp, nextState: VaultState): Promise<void> {
-    this.#state = nextState;
-    this.#outbox.push({ op, seq: this.#seq++ });
+    this.#states.set(VAULT_DOCUMENT, nextState);
+    this.#outbox(VAULT_DOCUMENT).push({ op, seq: this.#seq++ });
   }
 
-  async commitAll(ops: readonly VaultOp[], nextState: VaultState): Promise<void> {
-    this.#state = nextState;
-    for (const op of ops) this.#outbox.push({ op, seq: this.#seq++ });
+  async commitAll(
+    ops: readonly VaultOp[],
+    nextState: VaultState,
+    documentId: string = VAULT_DOCUMENT,
+  ): Promise<void> {
+    this.#states.set(documentId, nextState);
+    const outbox = this.#outbox(documentId);
+    for (const op of ops) outbox.push({ op, seq: this.#seq++ });
   }
 
-  async applyRemote(incoming: VaultState): Promise<VaultState> {
-    this.#state = mergeVaults(this.#state, incoming);
-    return this.#state;
+  async applyRemote(
+    incoming: VaultState,
+    documentId: string = VAULT_DOCUMENT,
+  ): Promise<VaultState> {
+    const joined = mergeVaults(await this.readState(documentId), incoming);
+    this.#states.set(documentId, joined);
+    return joined;
   }
 
-  async pending(): Promise<VaultOp[]> {
-    return this.#outbox.map((entry) => entry.op);
+  async pending(documentId: string = VAULT_DOCUMENT): Promise<VaultOp[]> {
+    return this.#outbox(documentId).map((entry) => entry.op);
   }
 
-  async ack(opIds: readonly string[]): Promise<void> {
+  async ack(opIds: readonly string[], documentId: string = VAULT_DOCUMENT): Promise<void> {
     const drop = new Set(opIds);
-    this.#outbox = this.#outbox.filter((entry) => !drop.has(entry.op.opId));
+    this.#outboxes.set(
+      documentId,
+      this.#outbox(documentId).filter((entry) => !drop.has(entry.op.opId)),
+    );
+  }
+
+  /**
+   * Documents other than the vault.
+   *
+   * A document counts as known once it has state or queued work, so a keyring
+   * bound locally is visible before its first sync has ever run.
+   */
+  async knownDocuments(): Promise<string[]> {
+    const ids = new Set([...this.#states.keys(), ...this.#outboxes.keys()]);
+    ids.delete(VAULT_DOCUMENT);
+    return [...ids].sort();
+  }
+
+  #outbox(documentId: string): OutboxEntry[] {
+    const existing = this.#outboxes.get(documentId);
+    if (existing) return existing;
+    const created: OutboxEntry[] = [];
+    this.#outboxes.set(documentId, created);
+    return created;
   }
 
   async readClock(): Promise<Hlc | undefined> {
@@ -119,8 +174,12 @@ export class MemoryVaultStorage implements VaultStorage {
   /** Test helper: simulate a process restart with durable state intact. */
   fork(): MemoryVaultStorage {
     const next = new MemoryVaultStorage();
-    next.#state = this.#state;
-    next.#outbox = [...this.#outbox];
+    // Every document, not just the vault: a restart that forgot the shared
+    // keyrings would look exactly like them never having been bound.
+    next.#states = new Map(this.#states);
+    next.#outboxes = new Map(
+      [...this.#outboxes].map(([id, entries]) => [id, [...entries]]),
+    );
     next.#seq = this.#seq;
     next.#clock = this.#clock;
     return next;

@@ -208,12 +208,12 @@ class CrashSafetyTest {
      *  successful upload and the local bookkeeping that follows it. */
     private class BrittleAck(private val inner: MemoryVaultStorage) : VaultStorage by inner {
         var failNext = true
-        override suspend fun ack(opIds: List<String>) {
+        override suspend fun ack(opIds: List<String>, documentId: String) {
             if (failNext) {
                 failNext = false
                 throw IllegalStateException("process killed")
             }
-            inner.ack(opIds)
+            inner.ack(opIds, documentId)
         }
     }
 

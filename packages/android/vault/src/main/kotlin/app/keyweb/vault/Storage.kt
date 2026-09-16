@@ -1,6 +1,16 @@
 package app.keyweb.vault
 
 /**
+ * Which document an operation concerns.
+ *
+ * The empty string is the vault itself, which is why it is the default
+ * everywhere: every existing call site means the vault, and adding a parameter
+ * must not change what any of them do. A non-empty id is a keyring that lives
+ * in its own document — see `docs/keyring-sharing.md` for why it has to.
+ */
+const val VAULT_DOCUMENT = ""
+
+/**
  * Durable local storage.
  *
  * Two of these methods carry an atomicity requirement that the whole
@@ -17,7 +27,7 @@ package app.keyweb.vault
  *    instead of joining is exactly how a saved password silently disappears.
  */
 interface VaultStorage {
-    suspend fun readState(): VaultState
+    suspend fun readState(documentId: String = VAULT_DOCUMENT): VaultState
 
     /** Atomic: persist [nextState] and append [op] to the outbox together. */
     suspend fun commit(op: VaultOp, nextState: VaultState)
@@ -29,16 +39,29 @@ interface VaultStorage {
      * at a time re-encrypts the entire vault per op, which is what made
      * deleting a keyring of 200 passwords take the better part of a minute.
      */
-    suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState)
+    suspend fun commitAll(
+        ops: List<VaultOp>,
+        nextState: VaultState,
+        documentId: String = VAULT_DOCUMENT,
+    )
 
     /** Atomic: join [incoming] into the current state and return the result. */
-    suspend fun applyRemote(incoming: VaultState): VaultState
+    suspend fun applyRemote(incoming: VaultState, documentId: String = VAULT_DOCUMENT): VaultState
 
     /** Operations not yet proven present in a published revision, oldest first. */
-    suspend fun pending(): List<VaultOp>
+    suspend fun pending(documentId: String = VAULT_DOCUMENT): List<VaultOp>
 
     /** Drop operations now known to be in a published revision. */
-    suspend fun ack(opIds: List<String>)
+    suspend fun ack(opIds: List<String>, documentId: String = VAULT_DOCUMENT)
+
+    /**
+     * Every document this device holds, the vault excluded.
+     *
+     * Asked rather than remembered, because the vault's list of bound keyrings
+     * and the documents actually on disk legitimately disagree — a keyring
+     * bound on another device arrives before its document does.
+     */
+    suspend fun knownDocuments(): List<String>
 
     /** Persisted causal time, so a restart cannot rewind the clock. */
     suspend fun readClock(): Hlc?
@@ -104,32 +127,45 @@ interface RemoteVaultStore {
  * every platform implementation must reproduce.
  */
 class MemoryVaultStorage : VaultStorage {
-    private var state: VaultState = emptyVault()
-    private val outbox = mutableListOf<VaultOp>()
+    /** One entry per document; the vault is the one keyed by VAULT_DOCUMENT. */
+    private val states = mutableMapOf<String, VaultState>()
+    private val outboxes = mutableMapOf<String, MutableList<VaultOp>>()
     private var clock: Hlc? = null
 
-    override suspend fun readState(): VaultState = state
+    private fun outboxFor(documentId: String) = outboxes.getOrPut(documentId) { mutableListOf() }
+
+    override suspend fun readState(documentId: String): VaultState =
+        states[documentId] ?: emptyVault()
 
     override suspend fun commit(op: VaultOp, nextState: VaultState) {
-        state = nextState
-        outbox += op
+        states[VAULT_DOCUMENT] = nextState
+        outboxFor(VAULT_DOCUMENT) += op
     }
 
-    override suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState) {
-        state = nextState
-        outbox += ops
+    override suspend fun commitAll(
+        ops: List<VaultOp>,
+        nextState: VaultState,
+        documentId: String,
+    ) {
+        states[documentId] = nextState
+        outboxFor(documentId) += ops
     }
 
-    override suspend fun applyRemote(incoming: VaultState): VaultState {
-        state = mergeVaults(state, incoming)
-        return state
+    override suspend fun applyRemote(incoming: VaultState, documentId: String): VaultState {
+        val joined = mergeVaults(states[documentId] ?: emptyVault(), incoming)
+        states[documentId] = joined
+        return joined
     }
 
-    override suspend fun pending(): List<VaultOp> = outbox.toList()
+    override suspend fun knownDocuments(): List<String> =
+        (states.keys + outboxes.keys).filter { it != VAULT_DOCUMENT }.sorted()
 
-    override suspend fun ack(opIds: List<String>) {
+    override suspend fun pending(documentId: String): List<VaultOp> =
+        outboxFor(documentId).toList()
+
+    override suspend fun ack(opIds: List<String>, documentId: String) {
         val drop = opIds.toSet()
-        outbox.removeAll { it.opId in drop }
+        outboxFor(documentId).removeAll { it.opId in drop }
     }
 
     override suspend fun readClock(): Hlc? = clock
@@ -141,8 +177,10 @@ class MemoryVaultStorage : VaultStorage {
     /** Test helper: simulate a process restart with durable state intact. */
     fun fork(): MemoryVaultStorage {
         val next = MemoryVaultStorage()
-        next.state = state
-        next.outbox += outbox
+        // Every document, not just the vault: a restart that forgot the shared
+        // keyrings would look exactly like them never having been bound.
+        next.states += states
+        for ((documentId, ops) in outboxes) next.outboxFor(documentId) += ops
         next.clock = clock
         return next
     }

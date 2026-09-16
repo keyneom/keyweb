@@ -6,6 +6,8 @@ import { emptyVault, fingerprint, visibleItems } from "./model.js";
 import type { VaultOp } from "./ops.js";
 import { applyOp, applyOps } from "./ops.js";
 import type { RemoteVaultStore, VaultStorage } from "./storage.js";
+import { VAULT_DOCUMENT } from "./storage.js";
+import { boundDatasets, composeVault, datasetForItem } from "./datasets.js";
 import { RemoteUnavailableError, VersionConflictError } from "./storage.js";
 
 export type SyncOutcome =
@@ -43,6 +45,15 @@ export function maxHlc(state: VaultState): Hlc {
 export type VaultSyncOptions = {
   storage: VaultStorage;
   remote: RemoteVaultStore;
+  /**
+   * The remote for a keyring that lives in its own document.
+   *
+   * Absent, or returning null, means that document has nowhere to publish
+   * yet — which is the normal state for a keyring bound locally but whose
+   * Drive file has not been made. Its edits stay queued in its own outbox
+   * and go up when a remote appears, exactly as an offline vault's do.
+   */
+  remoteFor?: (documentId: string) => RemoteVaultStore | null;
   clock: Clock;
   /** How many times to re-merge and retry when another device wins the race. */
   maxConflictRetries?: number;
@@ -74,6 +85,7 @@ export type VaultSyncOptions = {
 export class VaultSync {
   readonly #storage: VaultStorage;
   readonly #remote: RemoteVaultStore;
+  readonly #remoteFor: (documentId: string) => RemoteVaultStore | null;
   readonly #clock: Clock;
   readonly #maxConflictRetries: number;
   readonly #newId: () => string;
@@ -88,6 +100,9 @@ export class VaultSync {
   constructor(options: VaultSyncOptions) {
     this.#storage = options.storage;
     this.#remote = options.remote;
+    this.#remoteFor =
+      options.remoteFor ??
+      ((documentId) => (documentId === VAULT_DOCUMENT ? options.remote : null));
     this.#clock = options.clock;
     this.#maxConflictRetries = options.maxConflictRetries ?? 5;
     this.#newId = options.newId ?? (() => crypto.randomUUID());
@@ -113,8 +128,34 @@ export class VaultSync {
     return pending.length === 0 && this.#lastPublishedAt !== null;
   }
 
+  /**
+   * The vault as a person sees it: its own items plus every dataset's.
+   *
+   * Composed on every read rather than cached, because a cache here would be
+   * one more thing that can disagree with storage, and the merge is cheap
+   * beside the decryption that already happened to get the documents.
+   */
   async state(): Promise<VaultState> {
-    return this.#storage.readState();
+    const vault = await this.#storage.readState();
+    const datasets = await this.#readDatasets(vault);
+    return datasets.size === 0 ? vault : composeVault(vault, datasets);
+  }
+
+  /** Every bound document this device actually holds. */
+  async #readDatasets(vault: VaultState): Promise<Map<string, VaultState>> {
+    const wanted = new Set(boundDatasets(vault).map((binding) => binding.datasetId));
+    if (wanted.size === 0) return new Map();
+
+    const held = new Set(await this.#storage.knownDocuments());
+    const datasets = new Map<string, VaultState>();
+    for (const datasetId of wanted) {
+      // A keyring bound on another device arrives before its document does.
+      // Skipping it shows the keyring empty rather than failing the read.
+      if (held.has(datasetId)) {
+        datasets.set(datasetId, await this.#storage.readState(datasetId));
+      }
+    }
+    return datasets;
   }
 
   /**
@@ -122,13 +163,7 @@ export class VaultSync {
    * show "Saved" the moment this returns - and must not show it before.
    */
   async commit(op: VaultOp): Promise<VaultState> {
-    const current = await this.#storage.readState();
-    const next = applyOp(current, op);
-    await this.#storage.commit(op, next);
-    await this.#storage.writeClock(this.#clock.snapshot());
-    const pending = await this.#storage.pending();
-    this.#pendingCount = pending.length;
-    return next;
+    return this.commitAll([op]);
   }
 
   /**
@@ -145,17 +180,50 @@ export class VaultSync {
    * the vault is never left holding half a bulk change.
    */
   async commitAll(ops: readonly VaultOp[]): Promise<VaultState> {
-    if (ops.length === 0) return this.#storage.readState();
-    if (ops.length === 1) return this.commit(ops[0]!);
+    if (ops.length === 0) return this.state();
 
-    const current = await this.#storage.readState();
-    let next = current;
-    for (const op of ops) next = applyOp(next, op);
-    await this.#storage.commitAll(ops, next);
+    // Every document is read once, here, and the result is composed from what
+    // this produces rather than read back afterwards. Each read is a decrypt
+    // of a whole document, so re-reading to answer "what does it look like
+    // now" would double the cost of every edit.
+    const vault = await this.#storage.readState();
+    const datasets = await this.#readDatasets(vault);
+
+    // Routed against the composed view, because deciding where an edit goes
+    // needs to know which keyring an item is currently on, and for an item in
+    // a shared keyring that fact lives in the dataset rather than the vault.
+    const composed = datasets.size === 0 ? vault : composeVault(vault, datasets);
+    const byDocument = new Map<string, VaultOp[]>();
+    for (const op of ops) {
+      const documentId = this.#documentFor(op, composed);
+      const group = byDocument.get(documentId);
+      if (group) group.push(op);
+      else byDocument.set(documentId, [op]);
+    }
+
+    // Sorted so the vault is written first. Its operations are the ones that
+    // create and bind keyrings, and a dataset written before the vault knew
+    // its keyring existed would be a document nothing points at.
+    let nextVault = vault;
+    for (const documentId of [...byDocument.keys()].sort()) {
+      const group = byDocument.get(documentId)!;
+      const isVault = documentId === VAULT_DOCUMENT;
+      let after = isVault ? vault : (datasets.get(documentId) ?? emptyVault());
+      for (const op of group) after = applyOp(after, op);
+
+      if (group.length === 1 && isVault) {
+        await this.#storage.commit(group[0]!, after);
+      } else {
+        await this.#storage.commitAll(group, after, documentId);
+      }
+
+      if (isVault) nextVault = after;
+      else datasets.set(documentId, after);
+    }
+
     await this.#storage.writeClock(this.#clock.snapshot());
-    const pending = await this.#storage.pending();
-    this.#pendingCount = pending.length;
-    return next;
+    await this.#refreshPending();
+    return datasets.size === 0 ? nextVault : composeVault(nextVault, datasets);
   }
 
   /**
@@ -299,13 +367,44 @@ export class VaultSync {
     return run;
   }
 
+  /**
+   * Sync the vault, then every keyring that lives in its own document.
+   *
+   * The vault goes first and its result is what the caller sees, because the
+   * vault is what says which datasets exist — syncing them first would use
+   * this device's idea of the bindings rather than the agreed one.
+   *
+   * A dataset that fails does not fail the whole sync. One shared keyring
+   * whose file has been revoked or moved must not stop the rest of someone's
+   * passwords from backing up; the failure is reported through the status
+   * line, which already knows how to say that something is not backed up.
+   */
   async #syncNow(): Promise<SyncOutcome> {
+    const outcome = await this.#syncDocument(VAULT_DOCUMENT, this.#remote);
+
+    const vault = await this.#storage.readState();
+    for (const { datasetId } of boundDatasets(vault)) {
+      const remote = this.#remoteFor(datasetId);
+      if (!remote) continue;
+      try {
+        await this.#syncDocument(datasetId, remote);
+      } catch {
+        // Already recorded in #lastError by the document's own run.
+      }
+    }
+    return { ...outcome, pending: await this.#refreshPending() };
+  }
+
+  async #syncDocument(
+    documentId: string,
+    store: RemoteVaultStore,
+  ): Promise<SyncOutcome> {
     this.#syncing = true;
     try {
       for (let attempt = 0; attempt <= this.#maxConflictRetries; attempt += 1) {
         let remote: Awaited<ReturnType<RemoteVaultStore["read"]>>;
         try {
-          remote = await this.#remote.read();
+          remote = await store.read();
         } catch (error) {
           return this.#offline(error);
         }
@@ -317,13 +416,13 @@ export class VaultSync {
           await this.#storage.writeClock(this.#clock.snapshot());
         }
 
-        const local = await this.#storage.readState();
+        const local = await this.#storage.readState(documentId);
         const base = remote ? remote.state : emptyVault();
 
         // Capture pending *before* the write. Anything committed after this
         // point stays queued for the next sync rather than being falsely
         // acknowledged.
-        const pending = await this.#storage.pending();
+        const pending = await this.#storage.pending(documentId);
         const pendingIds = pending.map((op) => op.opId);
 
         // Rule 2: fold every unacknowledged edit into what we are about to
@@ -331,8 +430,8 @@ export class VaultSync {
         const merged = applyOps(mergeVaults(base, local), pending);
 
         if (remote && fingerprint(merged) === fingerprint(remote.state)) {
-          await this.#storage.applyRemote(merged);
-          await this.#storage.ack(pendingIds);
+          await this.#storage.applyRemote(merged, documentId);
+          await this.#storage.ack(pendingIds, documentId);
           this.#lastError = null;
           if (this.#lastPublishedAt === null) this.#lastPublishedAt = this.#now();
           return { status: "unchanged", pending: await this.#refreshPending() };
@@ -340,13 +439,13 @@ export class VaultSync {
 
         let version: string;
         try {
-          version = await this.#remote.write(merged, remote ? remote.version : null);
+          version = await store.write(merged, remote ? remote.version : null);
         } catch (error) {
           if (error instanceof VersionConflictError) continue; // re-read, re-merge
           return this.#offline(error);
         }
 
-        await this.#storage.applyRemote(merged);
+        await this.#storage.applyRemote(merged, documentId);
 
         // Rule 3: acknowledge only work we have *seen* in a published
         // revision, never work we merely uploaded. Google Drive offers no
@@ -355,8 +454,8 @@ export class VaultSync {
         // would let the loser of that race drop edits it had already marked
         // safe -- silent data loss, the exact failure this engine exists to
         // prevent. One extra read closes it.
-        if (await this.#published(pending)) {
-          await this.#storage.ack(pendingIds);
+        if (await this.#published(pending, store)) {
+          await this.#storage.ack(pendingIds, documentId);
         }
         this.#lastPublishedAt = this.#now();
         this.#lastError = null;
@@ -378,10 +477,13 @@ export class VaultSync {
    * survived. A failed read is treated as unproven, which keeps the work
    * queued rather than risking its loss.
    */
-  async #published(pending: readonly VaultOp[]): Promise<boolean> {
+  async #published(
+    pending: readonly VaultOp[],
+    store: RemoteVaultStore,
+  ): Promise<boolean> {
     if (pending.length === 0) return true;
     try {
-      const confirmed = await this.#remote.read();
+      const confirmed = await store.read();
       if (!confirmed) return false;
       return (
         fingerprint(applyOps(confirmed.state, pending)) === fingerprint(confirmed.state)
@@ -401,9 +503,49 @@ export class VaultSync {
     };
   }
 
+  /**
+   * Work still queued, across every document.
+   *
+   * Counted over all of them because the status line speaks for the whole
+   * vault: "3 changes still to back up" must not omit the ones waiting in a
+   * shared keyring, or someone is told they are safe when they are not.
+   */
   async #refreshPending(): Promise<number> {
-    const pending = await this.#storage.pending();
-    this.#pendingCount = pending.length;
+    let total = (await this.#storage.pending()).length;
+    for (const documentId of await this.#storage.knownDocuments()) {
+      total += (await this.#storage.pending(documentId)).length;
+    }
+    this.#pendingCount = total;
     return this.#pendingCount;
+  }
+
+  /**
+   * Which document an operation belongs in.
+   *
+   * Keyring operations always the vault: it is the vault that knows a keyring
+   * exists, what it is called and where its items went, and a rename that
+   * landed only in a shared document would be invisible to the person who
+   * shared it.
+   *
+   * Item operations follow their keyring. An edit to a password in a shared
+   * keyring belongs in that keyring's document; putting it in the vault
+   * instead would leave this device looking correct while the other person
+   * never saw the change.
+   */
+  #documentFor(op: VaultOp, composed: VaultState): string {
+    switch (op.kind) {
+      case "keyring.put":
+      case "keyring.delete":
+      case "keyring.bind":
+        return VAULT_DOCUMENT;
+      case "item.put":
+        return datasetForItem(composed, op.keyringId) ?? VAULT_DOCUMENT;
+      case "item.move":
+        return datasetForItem(composed, op.keyringId) ?? VAULT_DOCUMENT;
+      default:
+        return (
+          datasetForItem(composed, composed.items[op.itemId]?.keyring.value) ?? VAULT_DOCUMENT
+        );
+    }
   }
 }

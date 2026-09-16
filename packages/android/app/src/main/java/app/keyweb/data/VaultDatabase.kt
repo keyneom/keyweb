@@ -17,13 +17,23 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.PlaintextVaultCipher
 import app.keyweb.vault.VaultCipher
 import app.keyweb.vault.VaultStorage
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.emptyVault
 import app.keyweb.vault.mergeVaults
 import kotlinx.serialization.json.Json
 
+/**
+ * One row per document.
+ *
+ * `document` is the empty string for the vault, which is what the single row
+ * of every existing database already is — so the migration is a column added
+ * with that default and nothing moved.
+ */
 @Entity(tableName = "vault_state")
 data class VaultStateRow(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey val document: String = VAULT_DOCUMENT,
     val json: String,
 )
 
@@ -32,6 +42,8 @@ data class OutboxRow(
     @PrimaryKey(autoGenerate = true) val seq: Long = 0,
     val opId: String,
     val json: String,
+    /** Which document this operation belongs to; empty is the vault. */
+    val document: String = VAULT_DOCUMENT,
 )
 
 @Entity(tableName = "meta")
@@ -43,8 +55,11 @@ data class MetaRow(
 @Dao
 abstract class VaultDao {
 
-    @Query("SELECT json FROM vault_state WHERE id = 0")
-    abstract suspend fun stateJson(): String?
+    @Query("SELECT json FROM vault_state WHERE document = :document")
+    abstract suspend fun stateJson(document: String = VAULT_DOCUMENT): String?
+
+    @Query("SELECT document FROM vault_state WHERE document != '' ORDER BY document")
+    abstract suspend fun documentIds(): List<String>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun putState(row: VaultStateRow)
@@ -52,14 +67,17 @@ abstract class VaultDao {
     @Insert
     abstract suspend fun appendOutbox(row: OutboxRow)
 
-    @Query("SELECT * FROM outbox ORDER BY seq ASC")
-    abstract suspend fun outbox(): List<OutboxRow>
+    @Query("SELECT * FROM outbox WHERE document = :document ORDER BY seq ASC")
+    abstract suspend fun outbox(document: String = VAULT_DOCUMENT): List<OutboxRow>
 
     @Query("DELETE FROM outbox WHERE opId IN (:opIds)")
     abstract suspend fun deleteOutbox(opIds: List<String>)
 
     @Query("SELECT COUNT(*) FROM outbox")
     abstract suspend fun outboxSize(): Int
+
+    @Query("SELECT DISTINCT document FROM outbox WHERE document != '' ORDER BY document")
+    abstract suspend fun outboxDocumentIds(): List<String>
 
     @Query("SELECT value FROM meta WHERE key = :key")
     abstract suspend fun meta(key: String): String?
@@ -88,8 +106,12 @@ abstract class VaultDao {
      * quietly restore them from the remote.
      */
     @Transaction
-    open suspend fun commitAll(stateJson: String, rows: List<OutboxRow>) {
-        putState(VaultStateRow(json = stateJson))
+    open suspend fun commitAll(
+        stateJson: String,
+        rows: List<OutboxRow>,
+        document: String = VAULT_DOCUMENT,
+    ) {
+        putState(VaultStateRow(document = document, json = stateJson))
         for (row in rows) appendOutbox(row)
     }
 
@@ -101,13 +123,19 @@ abstract class VaultDao {
      * how a saved password silently disappears.
      */
     @Transaction
-    open suspend fun join(incoming: VaultState, json: Json, cipher: VaultCipher): VaultState {
-        val current = stateJson()
+    open suspend fun join(
+        incoming: VaultState,
+        json: Json,
+        cipher: VaultCipher,
+        document: String = VAULT_DOCUMENT,
+    ): VaultState {
+        val current = stateJson(document)
             ?.let { json.decodeFromString(VaultState.serializer(), cipher.open(it)) }
             ?: emptyVault()
         val joined = mergeVaults(current, incoming)
         putState(
             VaultStateRow(
+                document = document,
                 json = cipher.seal(json.encodeToString(VaultState.serializer(), joined)),
             ),
         )
@@ -117,15 +145,43 @@ abstract class VaultDao {
 
 @Database(
     entities = [VaultStateRow::class, OutboxRow::class, MetaRow::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
 
     companion object {
+        /**
+         * Version 2 gave both tables a `document` column.
+         *
+         * Written by hand rather than destructively, because the alternative
+         * Room offers is dropping the table — which here means deleting
+         * somebody's passwords to add a column. Existing rows become the
+         * vault, which is exactly what they already were.
+         *
+         * `vault_state` is rebuilt because its primary key changes from the
+         * constant 0 to the document id; SQLite cannot alter a primary key in
+         * place, so the table is recreated and its one row carried across.
+         */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE outbox ADD COLUMN document TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TABLE vault_state_new " +
+                        "(document TEXT NOT NULL PRIMARY KEY, json TEXT NOT NULL)",
+                )
+                db.execSQL(
+                    "INSERT INTO vault_state_new (document, json) SELECT '', json FROM vault_state",
+                )
+                db.execSQL("DROP TABLE vault_state")
+                db.execSQL("ALTER TABLE vault_state_new RENAME TO vault_state")
+            }
+        }
+
         fun open(context: Context, name: String = "keyweb-vault"): VaultDatabase =
             Room.databaseBuilder(context.applicationContext, VaultDatabase::class.java, name)
+                .addMigrations(MIGRATION_1_2)
                 .build()
     }
 }
@@ -147,9 +203,19 @@ class RoomVaultStorage(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : VaultStorage {
 
-    override suspend fun readState(): VaultState =
-        dao.stateJson()?.let { json.decodeFromString(VaultState.serializer(), cipher.open(it)) }
+    override suspend fun readState(documentId: String): VaultState =
+        dao.stateJson(documentId)
+            ?.let { json.decodeFromString(VaultState.serializer(), cipher.open(it)) }
             ?: emptyVault()
+
+    /**
+     * Documents other than the vault, from what is actually stored.
+     *
+     * The outbox is consulted as well as the state table, so a keyring bound
+     * locally counts as known before its first write has been composed.
+     */
+    override suspend fun knownDocuments(): List<String> =
+        (dao.documentIds() + dao.outboxDocumentIds()).distinct().sorted()
 
     override suspend fun commit(op: VaultOp, nextState: VaultState) {
         dao.commit(
@@ -159,29 +225,37 @@ class RoomVaultStorage(
         )
     }
 
-    override suspend fun commitAll(ops: List<VaultOp>, nextState: VaultState) {
+    override suspend fun commitAll(
+        ops: List<VaultOp>,
+        nextState: VaultState,
+        documentId: String,
+    ) {
         if (ops.isEmpty()) return
         // The state is sealed once here rather than once per op, which is the
         // whole saving: it is the entire vault, and sealing it is the
         // expensive part of a commit.
         dao.commitAll(
+            document = documentId,
             stateJson = cipher.seal(json.encodeToString(VaultState.serializer(), nextState)),
             rows = ops.map { op ->
                 OutboxRow(
                     opId = op.opId,
                     json = cipher.seal(json.encodeToString(VaultOp.serializer(), op)),
+                    document = documentId,
                 )
             },
         )
     }
 
-    override suspend fun applyRemote(incoming: VaultState): VaultState =
-        dao.join(incoming, json, cipher)
+    override suspend fun applyRemote(incoming: VaultState, documentId: String): VaultState =
+        dao.join(incoming, json, cipher, documentId)
 
-    override suspend fun pending(): List<VaultOp> =
-        dao.outbox().map { json.decodeFromString(VaultOp.serializer(), cipher.open(it.json)) }
+    override suspend fun pending(documentId: String): List<VaultOp> =
+        dao.outbox(documentId)
+            .map { json.decodeFromString(VaultOp.serializer(), cipher.open(it.json)) }
 
-    override suspend fun ack(opIds: List<String>) {
+    /** Operation ids are unique across documents, so this needs no filter. */
+    override suspend fun ack(opIds: List<String>, documentId: String) {
         if (opIds.isNotEmpty()) dao.deleteOutbox(opIds)
     }
 
