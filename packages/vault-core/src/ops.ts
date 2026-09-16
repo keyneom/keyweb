@@ -1,5 +1,5 @@
 import type { Hlc } from "./hlc.js";
-import type { HistoryEntry, ItemField, VaultState } from "./model.js";
+import type { HistoryEntry, ItemField, Reg, VaultState } from "./model.js";
 import { HISTORY_LIMIT, newItem, newKeyring, pickReg, reg } from "./model.js";
 
 /**
@@ -22,6 +22,21 @@ export type VaultOp =
       fields: Record<ItemField, string | undefined>;
     }
   | { kind: "item.delete"; opId: string; ts: Hlc; itemId: string }
+  /**
+   * Tombstone an item *and* take its values with it.
+   *
+   * `item.delete` hides a password but leaves its value in the document, which
+   * is what the undo window is built on. That is the wrong trade when the
+   * document is one somebody else can read: dragging a password out of a
+   * shared keyring has to actually take it away from the people it was shared
+   * with, not merely stop showing it to them.
+   *
+   * So this blanks every field and drops the history as well. Still a set of
+   * register writes rather than a removal, so it merges like everything else —
+   * an edit made after the purge, on another device, still wins and brings the
+   * value back, which is correct: that edit happened later.
+   */
+  | { kind: "item.purge"; opId: string; ts: Hlc; itemId: string }
   | { kind: "item.restore"; opId: string; ts: Hlc; itemId: string }
   | { kind: "item.move"; opId: string; ts: Hlc; itemId: string; keyringId: string }
   | { kind: "keyring.put"; opId: string; ts: Hlc; keyringId: string; name: string }
@@ -108,6 +123,24 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
       const next = {
         ...existing,
         deleted: pickReg(existing.deleted, reg(wanted, op.ts)) ?? reg(wanted, op.ts),
+      };
+      return { ...state, items: { ...state.items, [op.itemId]: next } };
+    }
+    case "item.purge": {
+      const existing = state.items[op.itemId] ?? newItem(op.itemId, "", op.ts);
+      const fields: Record<ItemField, Reg<string>> = {};
+      // Only the fields this document actually holds can be blanked. A field
+      // written by a newer client and not yet merged here is not in the record
+      // to blank, and will be carried through untouched — the same limitation
+      // every field-level write has.
+      for (const [field, value] of Object.entries(existing.fields)) {
+        fields[field] = pickReg(value, reg("", op.ts)) ?? reg("", op.ts);
+      }
+      const next = {
+        ...existing,
+        deleted: pickReg(existing.deleted, reg(true, op.ts)) ?? reg(true, op.ts),
+        fields,
+        history: [],
       };
       return { ...state, items: { ...state.items, [op.itemId]: next } };
     }

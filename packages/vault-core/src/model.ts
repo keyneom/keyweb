@@ -218,7 +218,20 @@ export function fingerprint(state: VaultState): string {
     .map((id) => {
       const ring = state.keyrings[id];
       if (!ring) return "";
-      return `${id}|${ring.name.ts}:${ring.name.value}|${ring.deleted.ts}:${ring.deleted.value}`;
+      const base = `${id}|${ring.name.ts}:${ring.name.value}|${ring.deleted.ts}:${ring.deleted.value}`;
+      // Appended only once the register has actually been written, so a vault
+      // with no shared keyrings fingerprints byte-for-byte as it always did and
+      // the cross-platform fixtures stay valid. Omitting it entirely was a bug:
+      // binding a keyring to a dataset changes nothing else in the vault, so
+      // the sync saw an unchanged fingerprint, skipped the upload, and the
+      // other devices never learned where the keyring's items had moved to.
+      // A state written before this field existed carries no register at all,
+      // and a fingerprint must not fault on one — the cross-platform fixtures
+      // are exactly such states.
+      const dataset = ring.dataset;
+      return !dataset || dataset.ts === HLC_ZERO
+        ? base
+        : `${base}|${dataset.ts}:${dataset.value}`;
     })
     .join(";");
   return `v1:${items}#${keyrings}`;

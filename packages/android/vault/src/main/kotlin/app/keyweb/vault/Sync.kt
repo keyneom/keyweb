@@ -136,11 +136,20 @@ class VaultSync(
         val composed = if (datasets.isEmpty()) vault else composeVault(vault, datasets)
         val byDocument = ops.groupBy { documentFor(it, composed) }
 
-        // Sorted so the vault is written first. Its operations create and bind
-        // keyrings, and a dataset written before the vault knew its keyring
-        // existed would be a document nothing points at.
+        // The vault is written **last**, and that order is the only thing
+        // standing between a crash and a lost password.
+        //
+        // An edit that moves a password between documents is a tombstone in
+        // the one it left and a copy in the one it arrived at. Writing the
+        // tombstone first and then failing would destroy the only copy.
+        // Writing the copy first and then failing leaves the password in both
+        // places, which the merge resolves the moment either is read again.
+        //
+        // The cost is that a dataset can briefly be a document the vault does
+        // not yet point at. That is recoverable by repeating the operation;
+        // the other way round is not recoverable by anything.
         var nextVault = vault
-        for (documentId in byDocument.keys.sorted()) {
+        for (documentId in byDocument.keys.sortedDescending()) {
             val group = byDocument.getValue(documentId)
             val isVault = documentId == VAULT_DOCUMENT
             var after = if (isVault) vault else datasets[documentId] ?: emptyVault()
@@ -172,9 +181,35 @@ class VaultSync(
     suspend fun deleteItems(itemIds: List<String>): VaultState =
         commitAll(itemIds.map { VaultOp.ItemDelete(newId(), clock.now(), it) })
 
-    /** Stamp and move several items in one write. */
-    suspend fun moveItems(itemIds: List<String>, keyringId: String): VaultState =
-        commitAll(itemIds.map { VaultOp.ItemMove(newId(), clock.now(), it, keyringId) })
+    /**
+     * Stamp and move several items in one write.
+     *
+     * A move within one document is just a change of keyring. A move that
+     * leaves one document for another cannot be, for the reason [relocation]
+     * explains: the item would stay behind in the document it left. That
+     * matters most in the direction people care about — dragging a password
+     * *out* of a shared keyring has to actually take it away from the people
+     * it was shared with, not merely stop showing it here.
+     */
+    suspend fun moveItems(itemIds: List<String>, keyringId: String): VaultState {
+        val vault = storage.readState()
+        val datasets = readDatasets(vault)
+        val composed = if (datasets.isEmpty()) vault else composeVault(vault, datasets)
+        val destination = datasetForItem(composed, keyringId) ?: VAULT_DOCUMENT
+
+        val ops = buildList {
+            for (itemId in itemIds) {
+                val item = composed.items[itemId] ?: continue
+                val source = datasetForItem(composed, item.keyring.value) ?: VAULT_DOCUMENT
+                if (source == destination) {
+                    add(VaultOp.ItemMove(newId(), clock.now(), itemId, keyringId))
+                } else {
+                    addAll(relocation(item, keyringId))
+                }
+            }
+        }
+        return commitAll(ops)
+    }
 
     /**
      * Delete a keyring and the passwords in it, as one write.
@@ -190,6 +225,157 @@ class VaultSync(
             doomed.map { VaultOp.ItemDelete(newId(), clock.now(), it.id) } +
                 VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
         )
+    }
+
+    /**
+     * The two operations that carry one password from one document to another.
+     *
+     * A CRDT cannot forget. Merging never removes anything, so an item simply
+     * left out of a document's next state comes straight back the moment that
+     * document is joined with a revision that still has it — which is what
+     * made the first attempt at this silently republish every password it had
+     * just moved out. The only way to say "not here any more" is to say it in
+     * the language the merge understands: a tombstone.
+     *
+     * So a relocation is a purge in the document it leaves and a full copy in
+     * the document it arrives in, and the copy is stamped **after** the purge.
+     * That ordering is what makes the pair survive being merged in either
+     * order on any device: wherever the two meet, the live copy is the later
+     * write and wins.
+     *
+     * The undo history does not travel. It is a local window onto values this
+     * document once held, and carrying it into a keyring somebody else can
+     * read would hand them superseded passwords they were never shown.
+     */
+    private fun relocation(item: ItemRecord, keyringId: String): List<VaultOp> = listOf(
+        VaultOp.ItemPurge(newId(), clock.now(), item.id),
+        VaultOp.ItemPut(
+            opId = newId(),
+            ts = clock.now(),
+            itemId = item.id,
+            keyringId = keyringId,
+            fields = item.fields.mapValues { (_, value) -> value.value },
+        ),
+    )
+
+    /** The live passwords currently on a keyring, wherever they are stored. */
+    private fun itemsOn(composed: VaultState, keyringId: String): List<ItemRecord> =
+        visibleItems(composed).filter { it.keyring.value == keyringId }
+
+    /**
+     * Move a keyring's passwords into their own document, so it can be shared.
+     *
+     * Two writes, and the dataset is written first. In between, the passwords
+     * exist in both documents — harmless, because the purge that removes them
+     * from the vault is the *second* write, and until it lands the vault still
+     * holds the originals. The other order would delete them from the vault
+     * before anything else held them.
+     *
+     * Nothing here encrypts, uploads, or talks to anyone. Binding is the local
+     * rearrangement only; a bound keyring with no remote yet simply queues,
+     * and sharing it with a person is a separate step.
+     */
+    suspend fun bindKeyring(keyringId: String, datasetId: String): VaultState {
+        require(datasetId.isNotEmpty()) { "A shared keyring needs a document to live in." }
+        val vault = storage.readState()
+        val datasets = readDatasets(vault).toMutableMap()
+        val composed = if (datasets.isEmpty()) vault else composeVault(vault, datasets)
+
+        val keyring = composed.keyrings[keyringId] ?: error("That keyring doesn't exist.")
+        val already = datasetOf(keyring)
+        if (already == datasetId) return composed
+        check(already == null) { "That keyring already lives in its own document." }
+
+        val relocations = itemsOn(composed, keyringId).map { relocation(it, keyringId) }
+
+        // The name goes into the dataset as a real operation, so an empty
+        // keyring still leaves the document with something pending and the
+        // status line can honestly say the move is not backed up yet.
+        val datasetOps = buildList {
+            add(VaultOp.KeyringPut(newId(), clock.now(), keyringId, keyring.name.value))
+            for (pair in relocations) add(pair[1])
+        }
+        val dataset = applyOps(datasets[datasetId] ?: emptyVault(), datasetOps)
+        storage.commitAll(datasetOps, dataset, datasetId)
+
+        val vaultOps = buildList {
+            for (pair in relocations) add(pair[0])
+            add(VaultOp.KeyringBind(newId(), clock.now(), keyringId, datasetId))
+        }
+        val remaining = applyOps(vault, vaultOps)
+        storage.commitAll(vaultOps, remaining, VAULT_DOCUMENT)
+
+        datasets[datasetId] = dataset
+        storage.writeClock(clock.snapshot())
+        refreshPending()
+        return composeVault(remaining, datasets)
+    }
+
+    /**
+     * Bring a keyring's passwords home and stop treating it as shared.
+     *
+     * For the owner un-sharing something of their own. Deliberately *not*
+     * symmetric with binding: the vault takes copies, and the shared document
+     * is left exactly as it is rather than purged. Purging it would empty the
+     * file out from under anyone still holding a grant, and un-sharing is
+     * meant to stop new reading, not to reach into what somebody already has.
+     *
+     * Because the document keeps its contents, re-sharing this keyring must
+     * mint a fresh dataset id. Re-binding to the old one would resurrect
+     * whatever it still holds — including passwords deleted in the meantime.
+     */
+    suspend fun unbindKeyring(keyringId: String): VaultState {
+        val vault = storage.readState()
+        val datasets = readDatasets(vault).toMutableMap()
+        val composed = if (datasets.isEmpty()) vault else composeVault(vault, datasets)
+
+        val datasetId = datasetOf(composed.keyrings[keyringId]) ?: return composed
+
+        val ops = buildList {
+            for (item in itemsOn(composed, keyringId)) add(relocation(item, keyringId)[1])
+            add(
+                VaultOp.KeyringPut(
+                    newId(),
+                    clock.now(),
+                    keyringId,
+                    composed.keyrings[keyringId]?.name?.value.orEmpty(),
+                ),
+            )
+            add(VaultOp.KeyringBind(newId(), clock.now(), keyringId, ""))
+        }
+
+        val returned = applyOps(vault, ops)
+        storage.commitAll(ops, returned, VAULT_DOCUMENT)
+
+        datasets.remove(datasetId)
+        storage.writeClock(clock.snapshot())
+        refreshPending()
+        return if (datasets.isEmpty()) returned else composeVault(returned, datasets)
+    }
+
+    /**
+     * Stop carrying a keyring somebody else shared.
+     *
+     * Deliberately not [deleteKeyringWithItems]. The passwords belong to the
+     * person who shared them, and deleting them here would delete them for
+     * everybody — the tombstones would publish straight back into the shared
+     * document. So the keyring is tombstoned in *this* vault only, which the
+     * routing rules guarantee stays local, and the binding is cleared so the
+     * document stops syncing.
+     *
+     * What it cannot do is take back what was already read. Leaving is the app
+     * forgetting a keyring, not the passwords becoming unseen.
+     */
+    suspend fun leaveKeyring(keyringId: String): VaultState {
+        val vault = storage.readState()
+        val ops = listOf(
+            VaultOp.KeyringBind(newId(), clock.now(), keyringId, ""),
+            VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
+        )
+        storage.commitAll(ops, applyOps(vault, ops), VAULT_DOCUMENT)
+        storage.writeClock(clock.snapshot())
+        refreshPending()
+        return state()
     }
 
     // ---- Edit helpers: build a stamped operation and commit it. ----
@@ -214,8 +400,9 @@ class VaultSync(
     suspend fun restoreItem(itemId: String): VaultState =
         commit(VaultOp.ItemRestore(newId(), clock.now(), itemId))
 
+    /** One password to another keyring, crossing documents if it has to. */
     suspend fun moveItem(itemId: String, keyringId: String): VaultState =
-        commit(VaultOp.ItemMove(newId(), clock.now(), itemId, keyringId))
+        moveItems(listOf(itemId), keyringId)
 
     suspend fun putKeyring(keyringId: String? = null, name: String): VaultState =
         commit(VaultOp.KeyringPut(newId(), clock.now(), keyringId ?: newId(), name))
@@ -362,21 +549,31 @@ class VaultSync(
     /**
      * Which document an operation belongs in.
      *
-     * Keyring operations always the vault: it is the vault that knows a
-     * keyring exists, what it is called and where its items went, and a rename
-     * landing only in a shared document would be invisible to the person who
-     * shared it.
-     *
      * Item operations follow their keyring. An edit to a password in a shared
      * keyring belongs in that keyring's document; putting it in the vault
      * would leave this device looking correct while the other person never saw
      * the change.
+     *
+     * A rename follows the keyring too, once it is shared. The name is part of
+     * what was shared — two people looking at the same keyring should not be
+     * looking at differently-named things — so it belongs beside the items
+     * rather than in a vault only one of them can read.
+     *
+     * Binding and deleting stay in the vault whatever happens. [VaultOp.KeyringBind]
+     * is this device's record of where the items went, and writing it into the
+     * document it describes would be circular. [VaultOp.KeyringDelete] is the
+     * subtler one: for a keyring somebody else shared, "delete" means *leave*,
+     * and a tombstone published into the shared document would delete it out
+     * from under everyone else instead.
      */
     private fun documentFor(op: VaultOp, composed: VaultState): String = when (op) {
-        is VaultOp.KeyringPut, is VaultOp.KeyringDelete, is VaultOp.KeyringBind -> VAULT_DOCUMENT
+        is VaultOp.KeyringDelete, is VaultOp.KeyringBind -> VAULT_DOCUMENT
+        is VaultOp.KeyringPut -> datasetOf(composed.keyrings[op.keyringId]) ?: VAULT_DOCUMENT
         is VaultOp.ItemPut -> datasetForItem(composed, op.keyringId) ?: VAULT_DOCUMENT
         is VaultOp.ItemMove -> datasetForItem(composed, op.keyringId) ?: VAULT_DOCUMENT
         is VaultOp.ItemDelete ->
+            datasetForItem(composed, composed.items[op.itemId]?.keyring?.value) ?: VAULT_DOCUMENT
+        is VaultOp.ItemPurge ->
             datasetForItem(composed, composed.items[op.itemId]?.keyring?.value) ?: VAULT_DOCUMENT
         is VaultOp.ItemRestore ->
             datasetForItem(composed, composed.items[op.itemId]?.keyring?.value) ?: VAULT_DOCUMENT

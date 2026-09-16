@@ -31,6 +31,28 @@ sealed interface VaultOp {
         val itemId: String,
     ) : VaultOp
 
+    /**
+     * Tombstone an item *and* take its values with it.
+     *
+     * [ItemDelete] hides a password but leaves its value in the document,
+     * which is what the undo window is built on. That is the wrong trade when
+     * the document is one somebody else can read: dragging a password out of a
+     * shared keyring has to actually take it away from the people it was
+     * shared with, not merely stop showing it to them.
+     *
+     * So this blanks every field and drops the history as well. Still a set of
+     * register writes rather than a removal, so it merges like everything
+     * else — an edit made after the purge, on another device, still wins and
+     * brings the value back, which is correct: that edit happened later.
+     */
+    @Serializable
+    @SerialName("item.purge")
+    data class ItemPurge(
+        override val opId: String,
+        override val ts: Hlc,
+        val itemId: String,
+    ) : VaultOp
+
     @Serializable
     @SerialName("item.restore")
     data class ItemRestore(
@@ -156,6 +178,23 @@ fun applyOp(state: VaultState, op: VaultOp): VaultState = when (op) {
             deleted = pickReg(existing.deleted, Reg(wanted, op.ts)) ?: Reg(wanted, op.ts),
         )
         state.copy(items = state.items + (itemId to next))
+    }
+
+    is VaultOp.ItemPurge -> {
+        val existing = state.items[op.itemId] ?: newItem(op.itemId, "", op.ts)
+        // Only the fields this document actually holds can be blanked. A field
+        // written by a newer client and not yet merged here is not in the
+        // record to blank, and is carried through untouched — the same
+        // limitation every field-level write has.
+        val fields = existing.fields.mapValues { (_, value) ->
+            pickReg(value, Reg("", op.ts)) ?: Reg("", op.ts)
+        }
+        val next = existing.copy(
+            deleted = pickReg(existing.deleted, Reg(true, op.ts)) ?: Reg(true, op.ts),
+            fields = fields,
+            history = emptyList(),
+        )
+        state.copy(items = state.items + (op.itemId to next))
     }
 
     is VaultOp.ItemMove -> {

@@ -83,6 +83,10 @@ fun maxHlc(state: VaultState): Hlc {
     for (ring in state.keyrings.values) {
         bump(ring.name.ts)
         bump(ring.deleted.ts)
+        // Where a keyring lives is causal time like any other write. Skipping
+        // it would let a device that has just learned of a binding stamp its
+        // next edit *before* that binding, and lose to it.
+        bump(ring.dataset.ts)
     }
     return max
 }

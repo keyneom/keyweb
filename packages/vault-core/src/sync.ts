@@ -1,13 +1,19 @@
 import type { Clock, Hlc } from "./hlc.js";
 import { HLC_ZERO } from "./hlc.js";
 import { mergeVaults } from "./merge.js";
-import type { ItemField, VaultState } from "./model.js";
-import { emptyVault, fingerprint, visibleItems } from "./model.js";
+import type { ItemField, ItemRecord, VaultState } from "./model.js";
+import { datasetOf, emptyVault, fingerprint, visibleItems } from "./model.js";
 import type { VaultOp } from "./ops.js";
 import { applyOp, applyOps } from "./ops.js";
 import type { RemoteVaultStore, VaultStorage } from "./storage.js";
 import { VAULT_DOCUMENT } from "./storage.js";
-import { boundDatasets, composeVault, datasetForItem } from "./datasets.js";
+import {
+  boundDatasets,
+  composeVault,
+  datasetForItem,
+  extractDataset,
+  withoutDatasetItems,
+} from "./datasets.js";
 import { RemoteUnavailableError, VersionConflictError } from "./storage.js";
 
 export type SyncOutcome =
@@ -38,6 +44,10 @@ export function maxHlc(state: VaultState): Hlc {
   for (const ring of Object.values(state.keyrings)) {
     bump(ring.name.ts);
     bump(ring.deleted.ts);
+    // Where a keyring lives is causal time like any other write. Skipping it
+    // would let a device that has just learned of a binding stamp its next
+    // edit *before* that binding, and lose to it.
+    bump(ring.dataset.ts);
   }
   return max;
 }
@@ -201,11 +211,21 @@ export class VaultSync {
       else byDocument.set(documentId, [op]);
     }
 
-    // Sorted so the vault is written first. Its operations are the ones that
-    // create and bind keyrings, and a dataset written before the vault knew
-    // its keyring existed would be a document nothing points at.
+    // The vault is written **last**, and that order is the only thing standing
+    // between a crash and a lost password.
+    //
+    // An edit that moves a password between documents is a tombstone in the
+    // one it left and a copy in the one it arrived at. Writing the tombstone
+    // first and then failing would destroy the only copy. Writing the copy
+    // first and then failing leaves the password in both places, which the
+    // merge resolves the moment either document is read again.
+    //
+    // The cost of this order is that a dataset can briefly be a document the
+    // vault does not yet point at. That is recoverable by repeating the
+    // operation; the other way round is not recoverable by anything.
     let nextVault = vault;
-    for (const documentId of [...byDocument.keys()].sort()) {
+    const order = [...byDocument.keys()].sort().reverse();
+    for (const documentId of order) {
       const group = byDocument.get(documentId)!;
       const isVault = documentId === VAULT_DOCUMENT;
       let after = isVault ? vault : (datasets.get(documentId) ?? emptyVault());
@@ -251,17 +271,40 @@ export class VaultSync {
     );
   }
 
-  /** Stamp and move several items in one write. */
-  moveItems(itemIds: readonly string[], keyringId: string): Promise<VaultState> {
-    return this.commitAll(
-      itemIds.map((itemId) => ({
-        kind: "item.move" as const,
-        opId: this.#newId(),
-        ts: this.#clock.now(),
-        itemId,
-        keyringId,
-      })),
-    );
+  /**
+   * Stamp and move several items in one write.
+   *
+   * A move within one document is just a change of keyring. A move that leaves
+   * one document for another cannot be, for the reason `#relocation` explains:
+   * the item would stay behind in the document it left. That matters most in
+   * the direction people care about — dragging a password *out* of a shared
+   * keyring has to actually take it away from the people it was shared with,
+   * not merely stop showing it here.
+   */
+  async moveItems(itemIds: readonly string[], keyringId: string): Promise<VaultState> {
+    const vault = await this.#storage.readState();
+    const datasets = await this.#readDatasets(vault);
+    const composed = datasets.size === 0 ? vault : composeVault(vault, datasets);
+    const destination = datasetForItem(composed, keyringId) ?? VAULT_DOCUMENT;
+
+    const ops: VaultOp[] = [];
+    for (const itemId of itemIds) {
+      const item = composed.items[itemId];
+      if (!item) continue;
+      const source = datasetForItem(composed, item.keyring.value) ?? VAULT_DOCUMENT;
+      if (source === destination) {
+        ops.push({
+          kind: "item.move",
+          opId: this.#newId(),
+          ts: this.#clock.now(),
+          itemId,
+          keyringId,
+        });
+      } else {
+        ops.push(...this.#relocation(item, keyringId));
+      }
+    }
+    return this.commitAll(ops);
   }
 
   /**
@@ -288,6 +331,197 @@ export class VaultSync {
         keyringId,
       },
     ]);
+  }
+
+  /**
+   * The two operations that carry one password from one document to another.
+   *
+   * A CRDT cannot forget. Merging never removes anything, so an item simply
+   * left out of a document's next state comes straight back the moment that
+   * document is joined with a revision that still has it — which is what made
+   * the first attempt at this silently republish every password it had just
+   * moved out. The only way to say "not here any more" is to say it in the
+   * language the merge understands: a tombstone.
+   *
+   * So a relocation is a tombstone in the document it leaves and a full copy
+   * in the document it arrives in, and the copy is stamped **after** the
+   * tombstone. That ordering is what makes the pair survive being merged in
+   * either order on any device: wherever the two meet, the live copy is the
+   * later write and wins.
+   *
+   * The undo history does not travel. It is a local window onto values this
+   * document once held, and carrying it into a keyring somebody else can read
+   * would hand them superseded passwords they were never shown.
+   */
+  #relocation(item: ItemRecord, keyringId: string): VaultOp[] {
+    const fields: Record<ItemField, string | undefined> = {};
+    for (const [field, value] of Object.entries(item.fields)) fields[field] = value.value;
+    return [
+      { kind: "item.purge", opId: this.#newId(), ts: this.#clock.now(), itemId: item.id },
+      {
+        kind: "item.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        itemId: item.id,
+        keyringId,
+        fields,
+      },
+    ];
+  }
+
+  /** The live passwords currently on a keyring, wherever they are stored. */
+  #itemsOn(composed: VaultState, keyringId: string): ItemRecord[] {
+    return visibleItems(composed).filter((item) => item.keyring.value === keyringId);
+  }
+
+  /**
+   * Move a keyring's passwords into their own document, so it can be shared.
+   *
+   * Two writes, and the dataset is written first. In between, the passwords
+   * exist in both documents — harmless, because the tombstone that removes
+   * them from the vault is the *second* write, and until it lands the vault
+   * still holds the originals. The other order would delete them from the
+   * vault before anything else held them.
+   *
+   * Nothing here encrypts, uploads, or talks to anyone. Binding is the local
+   * rearrangement only; a bound keyring with no remote yet simply queues, and
+   * sharing it with a person is a separate step.
+   */
+  async bindKeyring(keyringId: string, datasetId: string): Promise<VaultState> {
+    if (!datasetId) throw new Error("A shared keyring needs a document to live in.");
+    const vault = await this.#storage.readState();
+    const datasets = await this.#readDatasets(vault);
+    const composed = datasets.size === 0 ? vault : composeVault(vault, datasets);
+
+    const keyring = composed.keyrings[keyringId];
+    if (!keyring) throw new Error("That keyring doesn't exist.");
+    const already = datasetOf(keyring);
+    if (already === datasetId) return composed;
+    if (already) throw new Error("That keyring already lives in its own document.");
+
+    const moving = this.#itemsOn(composed, keyringId);
+    const relocations = moving.map((item) => this.#relocation(item, keyringId));
+
+    // The name goes into the dataset as a real operation, so an empty keyring
+    // still leaves the document with something pending and the status line can
+    // honestly say the move has not been backed up yet.
+    const datasetOps: VaultOp[] = [
+      {
+        kind: "keyring.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+        name: keyring.name.value,
+      },
+      ...relocations.map(([, put]) => put!),
+    ];
+    const dataset = applyOps(datasets.get(datasetId) ?? emptyVault(), datasetOps);
+    await this.#storage.commitAll(datasetOps, dataset, datasetId);
+
+    const vaultOps: VaultOp[] = [
+      ...relocations.map(([tombstone]) => tombstone!),
+      {
+        kind: "keyring.bind",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+        datasetId,
+      },
+    ];
+    const remaining = applyOps(vault, vaultOps);
+    await this.#storage.commitAll(vaultOps, remaining, VAULT_DOCUMENT);
+
+    datasets.set(datasetId, dataset);
+    await this.#storage.writeClock(this.#clock.snapshot());
+    await this.#refreshPending();
+    return composeVault(remaining, datasets);
+  }
+
+  /**
+   * Bring a keyring's passwords home and stop treating it as shared.
+   *
+   * For the owner un-sharing something of their own. Deliberately *not*
+   * symmetric with binding: the vault takes copies, and the shared document is
+   * left exactly as it is rather than tombstoned. Tombstoning it would empty
+   * the file out from under anyone still holding a grant, and un-sharing is
+   * meant to stop new reading, not to reach into what somebody already has.
+   *
+   * Because the document keeps its contents, re-sharing this keyring must mint
+   * a fresh dataset id. Re-binding to the old one would resurrect whatever it
+   * still holds — including passwords deleted in the meantime.
+   */
+  async unbindKeyring(keyringId: string): Promise<VaultState> {
+    const vault = await this.#storage.readState();
+    const datasets = await this.#readDatasets(vault);
+    const composed = datasets.size === 0 ? vault : composeVault(vault, datasets);
+
+    const datasetId = datasetOf(composed.keyrings[keyringId]);
+    if (!datasetId) return composed;
+
+    const returning = this.#itemsOn(composed, keyringId);
+    const ops: VaultOp[] = [
+      ...returning.map((item) => this.#relocation(item, keyringId)[1]!),
+      {
+        kind: "keyring.put",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+        name: composed.keyrings[keyringId]?.name.value ?? "",
+      },
+      {
+        kind: "keyring.bind",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+        datasetId: "",
+      },
+    ];
+
+    const returned = applyOps(vault, ops);
+    await this.#storage.commitAll(ops, returned, VAULT_DOCUMENT);
+
+    datasets.delete(datasetId);
+    await this.#storage.writeClock(this.#clock.snapshot());
+    await this.#refreshPending();
+    return datasets.size === 0 ? returned : composeVault(returned, datasets);
+  }
+
+  /**
+   * Stop carrying a keyring somebody else shared.
+   *
+   * Deliberately not `deleteKeyringWithItems`. The passwords belong to the
+   * person who shared them, and deleting them here would delete them for
+   * everybody — the tombstones would publish straight back into the shared
+   * document. So the keyring is tombstoned in *this* vault only, which the
+   * routing rules guarantee stays local, and the binding is cleared so the
+   * document stops syncing.
+   *
+   * What it cannot do is take back what was already read. Leaving is the app
+   * forgetting a keyring, not the passwords becoming unseen.
+   */
+  async leaveKeyring(keyringId: string): Promise<VaultState> {
+    const vault = await this.#storage.readState();
+
+    const ops: VaultOp[] = [
+      {
+        kind: "keyring.bind",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+        datasetId: "",
+      },
+      {
+        kind: "keyring.delete",
+        opId: this.#newId(),
+        ts: this.#clock.now(),
+        keyringId,
+      },
+    ];
+
+    await this.#storage.commitAll(ops, applyOps(vault, ops), VAULT_DOCUMENT);
+    await this.#storage.writeClock(this.#clock.snapshot());
+    await this.#refreshPending();
+    return this.state();
   }
 
   // ---- Edit helpers: build a stamped operation and commit it. ----
@@ -325,14 +559,9 @@ export class VaultSync {
     });
   }
 
+  /** One password to another keyring, crossing documents if it has to. */
   moveItem(itemId: string, keyringId: string): Promise<VaultState> {
-    return this.commit({
-      kind: "item.move",
-      opId: this.#newId(),
-      ts: this.#clock.now(),
-      itemId,
-      keyringId,
-    });
+    return this.moveItems([itemId], keyringId);
   }
 
   putKeyring(input: { keyringId?: string; name: string }): Promise<VaultState> {
@@ -522,22 +751,30 @@ export class VaultSync {
   /**
    * Which document an operation belongs in.
    *
-   * Keyring operations always the vault: it is the vault that knows a keyring
-   * exists, what it is called and where its items went, and a rename that
-   * landed only in a shared document would be invisible to the person who
-   * shared it.
-   *
    * Item operations follow their keyring. An edit to a password in a shared
    * keyring belongs in that keyring's document; putting it in the vault
    * instead would leave this device looking correct while the other person
    * never saw the change.
+   *
+   * A rename follows the keyring too, once it is shared. The name is part of
+   * what was shared — two people looking at the same keyring should not be
+   * looking at differently-named things — so it belongs beside the items
+   * rather than in a vault only one of them can read.
+   *
+   * Binding and deleting stay in the vault whatever happens. `keyring.bind`
+   * is this device's record of where the items went, and writing it into the
+   * document it is describing would be circular. `keyring.delete` is the
+   * subtler one: for a keyring somebody else shared, "delete" means *leave*,
+   * and a tombstone published into the shared document would delete it out
+   * from under everyone else instead.
    */
   #documentFor(op: VaultOp, composed: VaultState): string {
     switch (op.kind) {
-      case "keyring.put":
       case "keyring.delete":
       case "keyring.bind":
         return VAULT_DOCUMENT;
+      case "keyring.put":
+        return datasetOf(composed.keyrings[op.keyringId]) ?? VAULT_DOCUMENT;
       case "item.put":
         return datasetForItem(composed, op.keyringId) ?? VAULT_DOCUMENT;
       case "item.move":

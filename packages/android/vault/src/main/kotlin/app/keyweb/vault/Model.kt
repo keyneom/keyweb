@@ -182,7 +182,14 @@ fun fingerprint(state: VaultState): String {
     }
     val keyrings = state.keyrings.keys.sorted().joinToString(";") { id ->
         val ring = state.keyrings[id] ?: return@joinToString ""
-        "$id|${ring.name.ts}:${ring.name.value}|${ring.deleted.ts}:${ring.deleted.value}"
+        val base = "$id|${ring.name.ts}:${ring.name.value}|${ring.deleted.ts}:${ring.deleted.value}"
+        // Appended only once the register has actually been written, so a vault
+        // with no shared keyrings fingerprints byte-for-byte as it always did
+        // and the cross-platform fixtures stay valid. Omitting it entirely was
+        // a bug: binding a keyring to a dataset changes nothing else in the
+        // vault, so the sync saw an unchanged fingerprint, skipped the upload,
+        // and other devices never learned where the items had moved to.
+        if (ring.dataset.ts == HLC_ZERO) base else "$base|${ring.dataset.ts}:${ring.dataset.value}"
     }
     return "v1:$items#$keyrings"
 }
