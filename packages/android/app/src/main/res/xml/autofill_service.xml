@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Keyweb has no settings of its own for autofill, so this points at the app.
+  The element must exist for the system to show Keyweb in the picker at all.
+-->
+<autofill-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="app.keyweb.MainActivity" />

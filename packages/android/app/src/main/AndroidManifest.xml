@@ -36,5 +36,39 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Filling passwords into other apps and the browser.
+
+          The service holds no key and reads nothing: it offers a single
+          "Unlock Keyweb" row, and the activity below is where the device lock
+          is checked and the vault is actually opened. BIND_AUTOFILL_SERVICE
+          is held by the system, not requested by us — it is what stops any
+          other app binding to this service.
+        -->
+        <service
+            android:name=".autofill.KeywebAutofillService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+            <meta-data
+                android:name="android.autofill"
+                android:resource="@xml/autofill_service" />
+            <intent-filter>
+                <action android:name="android.service.autofill.AutofillService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Launched only by the platform, with the request it is answering.
+          Not exported: nothing else has any business starting it.
+        -->
+        <activity
+            android:name=".autofill.AutofillUnlockActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
     </application>
 </manifest>

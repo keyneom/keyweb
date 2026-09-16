@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,12 +40,15 @@ import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.KeyringsScreen
+import app.keyweb.data.SecretClipboard
 import app.keyweb.data.GrantBrowser
 import app.keyweb.ui.KeywebTheme
 import app.keyweb.ui.relativeTime
 import app.keyweb.ui.SettingsScreen
 import app.keyweb.ui.UnlockScreen
 import app.keyweb.ui.VaultListScreen
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 private sealed interface Route {
     data object List : Route
@@ -132,18 +136,19 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
             }
         }
 
+        val clipboardScope = rememberCoroutineScope()
+
         fun copy(value: String, label: String) {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText(label, value).apply {
-                // Keep the value out of clipboard previews and history where the
-                // platform supports it: a password on a shared screen is a leak.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    description.extras = android.os.PersistableBundle().apply {
-                        putBoolean("android.content.extra.IS_SENSITIVE", true)
-                    }
-                }
+            SecretClipboard.copy(context, value, label)
+            if (value.isEmpty()) return
+            clipboardScope.launch {
+                delay(SecretClipboard.CLEAR_AFTER_MS)
+                // Only if it is still ours: someone who copied something else
+                // in the meantime must not have it wiped by a timer they know
+                // nothing about.
+                SecretClipboard.clearIfStill(context, value)
             }
-            clipboard.setPrimaryClip(clip)
+            viewModel.showToast("$label copied. It clears in a minute.")
         }
 
         Scaffold(
