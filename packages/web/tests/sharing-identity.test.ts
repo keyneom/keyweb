@@ -8,8 +8,6 @@ import {
   SharingIdentity,
   SharingIdentityMissing,
 } from "../src/vault/sharing/identity";
-import { fakeAuthenticator } from "./helpers";
-
 /**
  * The keypair that makes you a person other people can share with.
  *
@@ -41,15 +39,11 @@ class MemoryStore implements ProtectedSharingIdentityStore {
   }
 }
 
-const credential = { credentialId: "credential-1", rpId: "localhost" };
+/** The same printed recovery code every device of one person holds. */
+const secret = new Uint8Array(20).fill(7);
 
-function identity(store: ProtectedSharingIdentityStore, seed = 1) {
-  return new SharingIdentity({
-    store,
-    credential: async () => credential,
-    navigator: fakeAuthenticator(seed),
-    secureContext: () => true,
-  });
+function identity(store: ProtectedSharingIdentityStore, from: Uint8Array = secret) {
+  return new SharingIdentity({ store, secret: async () => from });
 }
 
 describe("a sharing identity", () => {
@@ -76,6 +70,28 @@ describe("a sharing identity", () => {
     const onLaptop = await identity(laptop).getOrCreate();
 
     expect(onLaptop.publicKey.keyId).toBe(onPhone.publicKey.keyId);
+  });
+
+  /**
+   * The reason the wrapping key comes from the recovery secret rather than
+   * from the passkey: the phone has no passkey, and an identity only the
+   * browser can open would make one person into two participants.
+   */
+  it("opens with the printed code alone, which is all the phone has", async () => {
+    const drive = new MemoryStore();
+    const browser = new KeywebSharingIdentityStore({ local: new MemoryStore(), remote: drive });
+    const phone = new KeywebSharingIdentityStore({ local: new MemoryStore(), remote: drive });
+
+    const created = await identity(browser).getOrCreate();
+    // The phone shares nothing with the browser except this secret and Drive.
+    const onPhone = await identity(phone, new Uint8Array(20).fill(7)).get();
+    expect(onPhone.publicKey.keyId).toBe(created.publicKey.keyId);
+  });
+
+  it("does not open with the wrong code", async () => {
+    const store = new MemoryStore();
+    await identity(store).getOrCreate();
+    await expect(identity(store, new Uint8Array(20).fill(9)).get()).rejects.toThrow();
   });
 
   it("refuses to invent one when only asked to load", async () => {

@@ -183,9 +183,7 @@ function rig() {
   const store = new MemoryShareStore();
   const identity = new SharingIdentity({
     store: new MemoryIdentityStore(),
-    credential: async () => ({ credentialId: "credential-1", rpId: "localhost" }),
-    navigator: fakeAuthenticator(3),
-    secureContext: () => true,
+    secret: async () => new Uint8Array(20).fill(7),
   });
   const sharing = new KeywebSharing({
     sync,

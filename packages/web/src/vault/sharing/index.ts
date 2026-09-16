@@ -1,7 +1,6 @@
 import { DriveAppDataProtectedSharingIdentityStore } from "@keyneom/sync-kit/sharing/appdata-identity-store";
 import { IndexedDbProtectedSharingIdentityStore } from "@keyneom/sync-kit/sharing/web-passkey";
 import { authorizeGoogle } from "../googleAuth";
-import { vaultCredential } from "../crypto";
 import { KeywebSharingIdentityStore, SharingIdentity } from "./identity";
 
 export * from "./identity";
@@ -13,7 +12,7 @@ export * from "./identity";
  * copy in this browser — see `identity.ts` for why that order and not the
  * other one.
  */
-export function createSharingIdentity(sealedState: unknown): SharingIdentity {
+export function createSharingIdentity(secret: () => Promise<Uint8Array>): SharingIdentity {
   return new SharingIdentity({
     store: new KeywebSharingIdentityStore({
       remote: new DriveAppDataProtectedSharingIdentityStore({
@@ -21,7 +20,7 @@ export function createSharingIdentity(sealedState: unknown): SharingIdentity {
       }),
       local: new IndexedDbProtectedSharingIdentityStore({ databaseName: "keyweb-sharing" }),
     }),
-    credential: async () => vaultCredential(sealedState),
+    secret,
   });
 }
 

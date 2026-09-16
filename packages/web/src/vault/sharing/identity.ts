@@ -1,11 +1,10 @@
 import {
   base64UrlToBytes,
-  bytesToBase64Url,
   createWebCryptoBackend,
   defineV1CompatibilityProfile,
+  deriveContentKey,
   type V1KeyMetadata,
 } from "@keyneom/sync-kit/crypto";
-import { createWebPasskeyProvider } from "@keyneom/sync-kit/keys/web-passkey";
 import {
   createProtectedSharingIdentityV1,
   parseProtectedSharingIdentityV1,
@@ -26,8 +25,8 @@ import { sharingKeyFingerprint } from "@keyneom/sync-kit/sharing/web-crypto";
  * they receive can be proved to have come from you.
  *
  * ECDH and ECDSA on P-256, generated once and then never again. The private
- * keys are exported, wrapped with a key derived from your passkey, and only
- * the wrapped form is ever stored. Unlocking re-imports them as
+ * keys are exported, wrapped with a key derived from the vault's recovery
+ * secret, and only the wrapped form is ever stored. Unlocking re-imports them as
  * non-extractable, so after the first moment of their life they cannot leave
  * the browser even in principle.
  */
@@ -35,16 +34,26 @@ import { sharingKeyFingerprint } from "@keyneom/sync-kit/sharing/web-crypto";
 export const KEYWEB_SHARING_APP_ID = "keyweb";
 
 /**
- * A second derived key from the *same* passkey, not a second passkey.
+ * The wrapping key comes from the recovery secret, not from the passkey.
  *
- * sync-kit's own identity provider registers a new credential, which for
- * Keyweb would mean a second passkey doing a job the person cannot tell apart
- * from the first — two prompts, two entries in their password manager, and a
- * genuine chance of deleting the wrong one. The credential is already there;
- * only the derived key needs to differ, and a distinct AAD and HKDF label are
- * what make it differ. So the wrapping key for the sharing identity is
- * unrelated to the vault key, while the thing you present is the passkey you
- * already have.
+ * The passkey is the obvious answer on the web and it is the wrong one,
+ * because the phone does not have one. Keyweb on Android is locked by the
+ * Android Keystore and a fingerprint; it opens the Drive backup through the
+ * *recovery* envelope precisely because it cannot derive a WebAuthn PRF. An
+ * identity wrapped by the browser's passkey would therefore be unreadable on
+ * the phone — and a phone that cannot read it would make its own, which means
+ * one person appearing as two participants and being unable to open the
+ * keyrings they themselves shared.
+ *
+ * The recovery secret is the one secret both platforms genuinely hold: 160
+ * random bits, minted once, stored sealed on each device and printed once on
+ * paper. Deriving from it adds no exposure — anyone holding it can already
+ * restore the entire vault — and it makes the identity the same on every
+ * device the person owns, which is the whole requirement.
+ *
+ * The cost is honest and narrow: a browser that has the passkey but has never
+ * been given the printed code can read and back up the vault, but cannot share
+ * until the code is entered. That state already exists and is already surfaced.
  */
 export const keywebSharingProfile = defineV1CompatibilityProfile({
   appId: "keyweb-sharing",
@@ -53,6 +62,8 @@ export const keywebSharingProfile = defineV1CompatibilityProfile({
   hkdfInfo: "keyweb-sharing-identity-wrap-v1",
   compression: "none",
   passkey: {
+    // Unused on this path — nothing here presents a credential — but the
+    // profile type requires it and naming it makes that explicit.
     rpName: "Keyweb",
     userName: "sharing",
     userDisplayName: "Keyweb sharing",
@@ -65,8 +76,12 @@ export const keywebSharingProfile = defineV1CompatibilityProfile({
 
 const backend = createWebCryptoBackend();
 
-/** The passkey this vault is already locked with. */
-export type VaultCredential = { credentialId: string; rpId: string };
+/**
+ * The credential fields are meaningless on this path — no passkey is
+ * involved — but the record format requires them, and naming the path makes a
+ * stored record self-describing rather than merely valid.
+ */
+const RECOVERY_CREDENTIAL = { credentialId: "recovery", rpId: "keyweb" };
 
 export class SharingIdentityMissing extends Error {
   constructor(message = "This device has no sharing key yet.") {
@@ -136,11 +151,13 @@ export class KeywebSharingIdentityStore implements ProtectedSharingIdentityStore
 
 export type SharingIdentityOptions = {
   store: ProtectedSharingIdentityStore;
-  /** The passkey the vault is locked with, so no second one is created. */
-  credential(): Promise<VaultCredential>;
+  /**
+   * The vault's recovery secret, which is what the wrapping key is derived
+   * from. Throwing here — because this device has never been given the printed
+   * code — is the honest answer, and better than making a second identity.
+   */
+  secret(): Promise<Uint8Array>;
   appId?: string;
-  navigator?: Navigator;
-  secureContext?: () => boolean;
 };
 
 /**
@@ -196,9 +213,10 @@ export class SharingIdentity {
   /**
    * One prompt at a time, whatever asks.
    *
-   * Two passkey prompts cannot be on screen at once, and a background sync
-   * racing a share flow for one is how an operation fails with a cancellation
-   * the person did not perform. Everything funnels through the same promise.
+   * Unwrapping needs the vault's recovery secret, which needs the vault
+   * open. Letting a background sync and a share flow each ask for that
+   * separately is how one of them fails on a prompt the person never saw.
+   * Everything funnels through the same promise.
    */
   #single(operation: () => Promise<WebCryptoSharingIdentity>): Promise<WebCryptoSharingIdentity> {
     if (this.#cached) return Promise.resolve(this.#cached);
@@ -217,47 +235,39 @@ export class SharingIdentity {
 
   async #load(create: boolean): Promise<WebCryptoSharingIdentity> {
     const stored = await this.#options.store.load(this.appId);
-    const passkey = createWebPasskeyProvider(keywebSharingProfile, {
-      rpId: (await this.#options.credential()).rpId,
-      backend,
-      ...(this.#options.navigator ? { navigator: this.#options.navigator } : {}),
-      ...(this.#options.secureContext ? { secureContext: this.#options.secureContext } : {}),
-    });
+    const secret = await this.#options.secret();
 
     if (stored) {
       // Parsed rather than trusted: the record comes back from Drive, and a
       // malformed one must fail as a bad record rather than as a crypto error
       // somewhere further in.
       const record = parseProtectedSharingIdentityV1(stored);
-      const key = await passkey.unlockMetadata(metadataOf(record));
+      const key = await deriveContentKey(
+        keywebSharingProfile,
+        secret,
+        base64UrlToBytes(record.kdfSalt),
+        backend,
+      );
       return unlockProtectedSharingIdentityV1(record, key);
     }
     if (!create) throw new SharingIdentityMissing();
 
-    // Fresh salts for this identity. They are stored beside the wrapped keys,
-    // so the same passkey on a different device derives the same wrapping key.
-    const credential = await this.#options.credential();
+    // A fresh salt, stored beside the wrapped keys, so the same secret derives
+    // the same wrapping key on every device without any of them having to
+    // agree on anything else.
     const metadata: V1KeyMetadata = {
-      credentialId: credential.credentialId,
-      rpId: credential.rpId,
+      ...RECOVERY_CREDENTIAL,
       prfInput: backend.randomBytes(32),
       kdfSalt: backend.randomBytes(32),
     };
-    const key = await passkey.unlockMetadata(metadata);
+    const key = await deriveContentKey(
+      keywebSharingProfile,
+      secret,
+      metadata.kdfSalt,
+      backend,
+    );
     const created = await createProtectedSharingIdentityV1(this.appId, metadata, key);
     await this.#options.store.save(created.record);
     return created.identity;
   }
 }
-
-function metadataOf(record: ProtectedSharingIdentityV1): V1KeyMetadata {
-  return {
-    credentialId: record.credentialId,
-    rpId: record.rpId,
-    prfInput: base64UrlToBytes(record.prfInput),
-    kdfSalt: base64UrlToBytes(record.kdfSalt),
-  };
-}
-
-/** Exported for the tests, which need to build a record without a browser. */
-export { bytesToBase64Url };

@@ -326,7 +326,15 @@ export function useVault(): VaultApi {
       // would mean two prompts for one operation, and the second would arrive
       // while the first was still on screen.
       const identity = BACKUP_CONFIGURED
-        ? createSharingIdentity(await peekSealedState())
+        ? createSharingIdentity(async () => {
+            const stored = await storage.readMeta("recovery-secret");
+            if (!stored) {
+              throw new Error(
+                "This browser needs your recovery code before it can share a keyring. Enter it in Settings.",
+              );
+            }
+            return Uint8Array.from((await cipher.openOp(stored)) as unknown as number[]);
+          })
         : null;
       const controller = identity ? createKeywebSharingController(identity) : null;
       const datasetRemotes = new Map<string, SharedKeyringRemote>();
