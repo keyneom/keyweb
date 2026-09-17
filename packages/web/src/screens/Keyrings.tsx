@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { datasetOf, type ItemRecord, type VaultState } from "@keyweb/vault-core";
+import {
+  datasetOf,
+  KEYRING_SORTS,
+  sortKeyrings,
+  type ItemRecord,
+  type KeyringSort,
+  type VaultState,
+} from "@keyweb/vault-core";
+import { SortPicker } from "../ui/SortPicker";
+import { useRememberedSort } from "../vault/useRememberedSort";
 import { BackIcon, PlusIcon } from "../ui/icons";
 import { ringColor } from "./VaultList";
 
@@ -25,7 +34,14 @@ export function Keyrings({
   const [busy, setBusy] = useState(false);
   /** The keyring being deleted, held until the count has been acknowledged. */
   const [confirming, setConfirming] = useState<string | null>(null);
-  const rings = Object.values(state.keyrings).filter((r) => !r.deleted.value);
+  const [sort, setSort] = useRememberedSort<KeyringSort>("keyring-sort", "name-az");
+  const counts: Record<string, number> = {};
+  for (const item of items) counts[item.keyring.value] = (counts[item.keyring.value] ?? 0) + 1;
+  const rings = sortKeyrings(
+    Object.values(state.keyrings).filter((r) => !r.deleted.value),
+    counts,
+    sort,
+  );
 
   async function add() {
     const clean = name.trim();
@@ -54,9 +70,13 @@ export function Keyrings({
         single password.
       </p>
 
+      {rings.length > 1 && (
+        <SortPicker label="Order" value={sort} options={KEYRING_SORTS} onChange={setSort} />
+      )}
+
       <div className="list">
         {rings.map((r) => {
-          const count = items.filter((item) => item.keyring.value === r.id).length;
+          const count = counts[r.id] ?? 0;
           const last = rings.length === 1;
           // A keyring in its own file is one that is shared, or is being got
           // ready to be. Whether *you* shared it or somebody shared it with

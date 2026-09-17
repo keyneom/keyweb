@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,9 +65,13 @@ import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
+import app.keyweb.vault.ItemSort
+import app.keyweb.vault.KeyringSort
 import app.keyweb.vault.PastValue
 import app.keyweb.vault.fieldLabel
 import app.keyweb.vault.pastValues
+import app.keyweb.vault.sortItems
+import app.keyweb.vault.sortKeyrings
 import app.keyweb.vault.storedFieldName
 
 private val RING_COLORS = listOf(
@@ -117,9 +122,13 @@ fun VaultListScreen(
     currentVersion: String,
     /** Opens a link in a browser. Routed through the caller, which has the Activity. */
     onOpenLink: (String) -> Unit,
+    /** The ordering last chosen, remembered across launches. */
+    savedSort: String = ItemSort.NAME_AZ.id,
+    onSortChanged: (String) -> Unit = {},
 ) {
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
+    var sort by rememberSaveable { mutableStateOf(savedSort) }
     val statusColors = LocalKeywebStatus.current
 
     /**
@@ -156,7 +165,7 @@ fun VaultListScreen(
                 item.field(Fields.URL),
             ).joinToString(" ").lowercase().contains(needle)
         }
-        .sortedBy { it.field(Fields.TITLE).orEmpty().lowercase() }
+        .let { sortItems(it, ItemSort.of(sort)) }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp)) {
@@ -232,6 +241,19 @@ fun VaultListScreen(
                     )
                 }
             }
+
+            // Under the filters rather than beside the search box: filtering
+            // narrows what is in the list and ordering decides where in it to
+            // look, and reading them in that order matches doing them in it.
+            SortPicker(
+                current = sort,
+                options = ItemSort.entries.map { it.id to it.label },
+                onPick = {
+                    sort = it
+                    onSortChanged(it)
+                },
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
 
             // Above the backup notice: a stale build is the more urgent of the
             // two, since it can be the reason the rest is misbehaving.
@@ -1054,13 +1076,22 @@ fun KeyringsScreen(
     canShare: Boolean = false,
     onShare: (String) -> Unit = {},
     onPasteLink: (String) -> Unit = {},
+    /** The ordering last chosen, remembered across launches. */
+    savedSort: String = KeyringSort.NAME_AZ.id,
+    onSortChanged: (String) -> Unit = {},
 ) {
     var pastedLink by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(savedSort) }
     /** The keyring being deleted, held until the count has been acknowledged. */
     var confirming by remember { mutableStateOf<String?>(null) }
     val statusColors = LocalKeywebStatus.current
-    val rings = state.keyrings.values.filter { !it.deleted.value }
+    val counts = items.groupingBy { it.keyring.value }.eachCount()
+    val rings = sortKeyrings(
+        state.keyrings.values.filter { !it.deleted.value },
+        counts,
+        KeyringSort.of(sort),
+    )
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
@@ -1076,10 +1107,22 @@ fun KeyringsScreen(
                 modifier = Modifier.padding(bottom = 12.dp),
             )
 
+            if (rings.size > 1) {
+                SortPicker(
+                    current = sort,
+                    options = KeyringSort.entries.map { it.id to it.label },
+                    onPick = {
+                        sort = it
+                        onSortChanged(it)
+                    },
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+
             Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
                 Column {
                     rings.forEach { r ->
-                        val count = items.count { it.keyring.value == r.id }
+                        val count = counts[r.id] ?: 0
                         // A keyring in its own file is one that is shared, or is
                         // being got ready to be. Whether *you* shared it or
                         // somebody shared it with you is not something this list

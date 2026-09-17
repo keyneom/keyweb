@@ -5,6 +5,7 @@ export * from "./generator.js";
 export * from "./ops.js";
 export * from "./merge.js";
 export * from "./datasets.js";
+export * from "./sorting.js";
 export * from "./storage.js";
 export * from "./sync.js";
 export * from "./testing.js";

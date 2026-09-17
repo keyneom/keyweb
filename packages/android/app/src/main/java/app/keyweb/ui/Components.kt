@@ -15,16 +15,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -404,5 +408,50 @@ fun Disclosure(
             }
         }
         if (open) content()
+    }
+}
+
+/**
+ * Choosing how a list is ordered.
+ *
+ * One control, not a field and a direction arrow. "Descending" means nothing
+ * until you also know what it applies to, so each ordering names both of its
+ * ends — "Name (A–Z)" and "Name (Z–A)" — and what will happen is legible
+ * before it happens.
+ *
+ * It shows the *current* ordering rather than the word "Sort", so a list that
+ * is not in the order somebody expected explains itself without being asked.
+ */
+@Composable
+fun SortPicker(
+    current: String,
+    options: List<Pair<String, String>>,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val label = options.firstOrNull { it.first == current }?.second ?: current
+
+    Box(modifier) {
+        TextButton(onClick = { open = true }) {
+            Icon(Icons.Filled.SwapVert, contentDescription = null)
+            Text(" $label")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        onPick(value)
+                        open = false
+                    },
+                    leadingIcon = {
+                        if (value == current) {
+                            Icon(Icons.Filled.Check, contentDescription = "Current order")
+                        }
+                    },
+                )
+            }
+        }
     }
 }

@@ -38,6 +38,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
+import app.keyweb.vault.ItemSort
+import app.keyweb.vault.KeyringSort
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.AcceptShareScreen
 import app.keyweb.ui.FileViewerScreen
@@ -100,6 +102,14 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
         context.getSharedPreferences("keyweb", Context.MODE_PRIVATE)
     }
     var largeText by rememberSaveable { mutableStateOf(prefs.getBoolean("large-text", false)) }
+    // Remembered rather than reset on every launch: somebody who prefers their
+    // keyrings biggest-first means it every time, not once.
+    var itemSort by rememberSaveable {
+        mutableStateOf(prefs.getString("item-sort", null) ?: ItemSort.NAME_AZ.id)
+    }
+    var keyringSort by rememberSaveable {
+        mutableStateOf(prefs.getString("keyring-sort", null) ?: KeyringSort.NAME_AZ.id)
+    }
     var darkOverride by rememberSaveable {
         mutableStateOf(
             if (prefs.contains("dark")) prefs.getBoolean("dark", false) else null,
@@ -293,6 +303,11 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onDeleteMany = viewModel::deleteItems,
                         onMoveMany = viewModel::moveItems,
                         currentVersion = BuildConfig.VERSION_NAME,
+                        savedSort = itemSort,
+                        onSortChanged = {
+                            itemSort = it
+                            prefs.edit().putString("item-sort", it).apply()
+                        },
                         // Through GrantBrowser, which knows the things that
                         // make an https intent fail silently on Android — the
                         // same ones that had the Picker handoff reporting no
@@ -371,6 +386,11 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onBack = ::goBack,
                         onAdd = viewModel::addKeyring,
                         onDelete = viewModel::deleteKeyring,
+                        savedSort = keyringSort,
+                        onSortChanged = {
+                            keyringSort = it
+                            prefs.edit().putString("keyring-sort", it).apply()
+                        },
                         canShare = viewModel.canShare,
                         onShare = {
                             viewModel.openSharing(it)

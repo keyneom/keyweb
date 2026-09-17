@@ -1,7 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
-import { itemField, type ItemRecord, type VaultState } from "@keyweb/vault-core";
+import {
+  ITEM_SORTS,
+  itemField,
+  sortItems,
+  type ItemRecord,
+  type ItemSort,
+  type VaultState,
+} from "@keyweb/vault-core";
 import { KeyIcon, PlusIcon, SearchIcon } from "../ui/icons";
 import { StatusLine } from "../ui/StatusLine";
+import { SortPicker } from "../ui/SortPicker";
+import { useRememberedSort } from "../vault/useRememberedSort";
 import { useLongPress } from "../ui/useLongPress";
 import type { SyncStatus } from "@keyweb/vault-core";
 
@@ -46,6 +55,7 @@ export function VaultList({
 }) {
   const [query, setQuery] = useState("");
   const [ring, setRing] = useState<string | null>(null);
+  const [sort, setSort] = useRememberedSort<ItemSort>("item-sort", "name-az");
 
   /**
    * Selection mode.
@@ -86,7 +96,7 @@ export function VaultList({
     [state.keyrings],
   );
 
-  const shown = useMemo(() => {
+  const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items
       .filter((item) => (ring === null ? true : item.keyring.value === ring))
@@ -100,11 +110,13 @@ export function VaultList({
           .join(" ")
           .toLowerCase();
         return haystack.includes(needle);
-      })
-      .sort((a, b) =>
-        (itemField(a, "title") ?? "").localeCompare(itemField(b, "title") ?? ""),
-      );
+      });
   }, [items, query, ring]);
+
+  // Filtering decides what is in the list; ordering decides where in it to
+  // look. Two steps, so "select all" cannot mean something different from
+  // what is on screen.
+  const shown = useMemo(() => sortItems(matching, sort), [matching, sort]);
 
   return (
     <>
@@ -183,6 +195,13 @@ export function VaultList({
           );
         })}
       </div>
+
+      {/*
+        Under the filters rather than beside the search box: filtering narrows
+        what is in the list and ordering decides where in it to look, and
+        reading them in that order matches doing them in it.
+      */}
+      <SortPicker label="Order" value={sort} options={ITEM_SORTS} onChange={setSort} />
 
       <StatusLine
         status={status}
