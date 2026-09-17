@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.keyweb.ScanUiState
+import app.keyweb.vault.AccountPlan
+import app.keyweb.vault.PlanReason
 import app.keyweb.vault.VaultState
 
 /**
@@ -154,17 +156,20 @@ fun ScanScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                                 // Said before it happens, never discovered
-                                // after: adding a second entry for a login
-                                // somebody already has is how the one they
-                                // open out of habit ends up being the one
-                                // without the code in it.
-                                pending.existingTitle?.let {
-                                    Text(
-                                        "Goes onto your existing \"$it\" password",
-                                        color = colors.safe,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                }
+                                // after. Where a code goes is a decision with
+                                // no safe guess in it — two accounts at one
+                                // company is the case that proves it — so the
+                                // row states the destination *and* the reason
+                                // while it can still be argued with.
+                                Text(
+                                    destinationOf(pending.plan),
+                                    color = when (pending.plan.reason) {
+                                        PlanReason.ONTO_EXISTING -> colors.safe
+                                        PlanReason.NEW -> colors.muted
+                                        else -> colors.attention
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
                                 if (pending.account.counterBased) {
                                     Text(
                                         "This one counts up instead of using the clock. " +
@@ -238,6 +243,35 @@ fun ScanScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * Where this code is about to go, and why.
+ *
+ * The "why" is not decoration. A person who sees "added as a new password" for
+ * one of their two Carta codes needs to know it is because Keyweb refused to
+ * guess between them, not because it failed to notice the password they
+ * already have — the first is a decision they can accept, the second would be
+ * a bug they should report.
+ */
+private fun destinationOf(plan: AccountPlan): String = when (plan.reason) {
+    PlanReason.ONTO_EXISTING -> {
+        val who = plan.existingUsername?.takeIf { it.isNotEmpty() }
+        "Goes onto your existing \"${plan.existingTitle}\" password" +
+            if (who != null) " for $who" else ""
+    }
+
+    PlanReason.NEW -> "Added as a new password"
+
+    PlanReason.NEW_SEVERAL_FROM_ISSUER ->
+        "Added as a new password. You have more than one code from " +
+            "${plan.account.issuer}, so Keyweb won't guess which of your passwords " +
+            "each one belongs to — move it yourself afterwards if it should sit " +
+            "with one of them."
+
+    PlanReason.NEW_ALREADY_HAS_A_CODE ->
+        "Added as a new password. Your \"${plan.existingTitle}\" password already has " +
+            "a different code, and Keyweb won't replace one that works."
 }
 
 /** Not a keyring id, and cannot collide with one: ids are UUIDs. */

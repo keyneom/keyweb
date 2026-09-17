@@ -39,7 +39,9 @@ import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.Clock
 import app.keyweb.vault.InvalidRecoveryCode
 import app.keyweb.vault.Fields
+import app.keyweb.vault.AccountPlan
 import app.keyweb.vault.Authenticator
+import app.keyweb.vault.planAccounts
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.NotAnAccountCode
 import app.keyweb.vault.ScannedAccount
@@ -161,19 +163,21 @@ data class ImportUiState(
 data class PendingAccount(
     /** Identity for deduplicating a code scanned twice, and for selection. */
     val key: String,
-    val account: ScannedAccount,
     val selected: Boolean = true,
     /**
-     * A password already in the vault that this code plainly belongs to.
+     * Where this code is going, worked out over the whole batch at once.
      *
      * A second factor is a property of an account somebody already has, not a
-     * new account. Adding "GitHub" beside the GitHub password they have been
-     * using for years would be two entries for one login, and the one they
-     * open out of habit would be the one without the code in it.
+     * new account — adding "GitHub" beside the GitHub password they have used
+     * for years means the one they open out of habit is the one without the
+     * code in it. But *which* password is a decision with no safe guess in it,
+     * so `planAccounts` makes it under guarantees rather than by similarity,
+     * and carries the reason so the row can say it before anything is written.
      */
-    val existingItemId: String? = null,
-    val existingTitle: String? = null,
-)
+    val plan: AccountPlan,
+) {
+    val account: ScannedAccount get() = plan.account
+}
 
 data class ScanUiState(
     val accounts: List<PendingAccount> = emptyList(),
@@ -1579,30 +1583,35 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         val base = if (fresh) ScanUiState() else current
         val items = _state.value.vault.items.values
 
-        val existing = base.accounts.associateBy { it.key }.toMutableMap()
-        for (account in batch.accounts) {
-            val key = "${account.issuer}\u0000${account.name}\u0000${account.otp}"
-            if (existing.containsKey(key)) continue
-            // Matched on the name the person reads, not on anything derived:
-            // a wrong guess here would attach a second factor to the wrong
-            // login, which is worse than not guessing at all.
-            val match = items.firstOrNull { item ->
-                !item.deleted.value &&
-                    !item.isBlob() &&
-                    account.issuer.isNotEmpty() &&
-                    item.field(Fields.TITLE)?.equals(account.issuer, ignoreCase = true) == true
-            }
-            existing[key] = PendingAccount(
-                key = key,
-                account = account,
-                existingItemId = match?.id,
-                existingTitle = match?.field(Fields.TITLE),
-            )
+        /*
+         * Replanned over everything scanned so far, not just the new code.
+         *
+         * Where a code belongs depends on what else is in the batch: two codes
+         * from one company must not both claim one password, and that is only
+         * knowable once both have arrived. Planning each code as it landed
+         * would have decided the first one's destination before the second one
+         * existed to contradict it.
+         */
+        fun key(account: ScannedAccount) =
+            "${account.issuer}\u0000${account.name}\u0000${account.otp}"
+
+        val seenKeys = mutableSetOf<String>()
+        val scanned = buildList {
+            for (pending in base.accounts) if (seenKeys.add(pending.key)) add(pending.account)
+            for (account in batch.accounts) if (seenKeys.add(key(account))) add(account)
         }
+        // Whether a row was ticked is the person's, and survives a replan.
+        val ticked = base.accounts.filter { !it.selected }.map { it.key }.toSet()
 
         setScan {
             base.copy(
-                accounts = existing.values.toList(),
+                accounts = planAccounts(scanned, items).map { plan ->
+                    PendingAccount(
+                        key = key(plan.account),
+                        selected = !ticked.contains(key(plan.account)),
+                        plan = plan,
+                    )
+                },
                 seen = base.seen + batch.index,
                 total = maxOf(batch.total, base.total),
                 batchId = batch.batchId,
@@ -1677,17 +1686,26 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
+                // Guarantee 1, restated where the writes are actually made:
+                // two puts on one item's `otp` would resolve to the later one
+                // and lose the other, so a plan that somehow contained a
+                // duplicate must stop here rather than half-work.
+                val targets = chosen.mapNotNull { it.plan.existingItemId }
+                check(targets.size == targets.toSet().size) {
+                    "Two codes were pointed at the same password."
+                }
+
                 for (pending in chosen) {
                     val stamp = engine.stamp()
-                    if (pending.existingItemId != null) {
+                    val onto = pending.plan.existingItemId
+                    if (onto != null) {
                         // Only the code. Nothing else about the password they
                         // already have is this QR code's business.
                         ops += VaultOp.ItemPut(
                             opId = stamp.opId,
                             ts = stamp.ts,
-                            itemId = pending.existingItemId,
-                            keyringId = _state.value.vault.items[pending.existingItemId]
-                                ?.keyring?.value ?: ring,
+                            itemId = onto,
+                            keyringId = _state.value.vault.items[onto]?.keyring?.value ?: ring,
                             fields = mapOf(Fields.OTP to pending.account.otp),
                         )
                     } else {
