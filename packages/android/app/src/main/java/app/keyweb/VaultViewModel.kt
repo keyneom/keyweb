@@ -39,7 +39,11 @@ import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.Clock
 import app.keyweb.vault.InvalidRecoveryCode
 import app.keyweb.vault.Fields
+import app.keyweb.vault.Authenticator
 import app.keyweb.vault.ItemField
+import app.keyweb.vault.NotAnAccountCode
+import app.keyweb.vault.ScannedAccount
+import app.keyweb.vault.isBlob
 import app.keyweb.vault.ItemRecord
 import app.keyweb.vault.PasswordGenerator
 import app.keyweb.vault.PasswordRules
@@ -144,6 +148,46 @@ data class ImportUiState(
     val error: String? = null,
 )
 
+/**
+ * One account read off a QR code, waiting to be told where to go.
+ *
+ * Held as a list of decisions rather than written as it is scanned, because a
+ * Google Authenticator export arrives in pieces: a person with thirty accounts
+ * gets three QR codes and no indication on screen that there is more than one.
+ * Writing each code as it lands would mean a half-imported vault whenever
+ * somebody stopped early, and would give them no chance to say where any of it
+ * belongs.
+ */
+data class PendingAccount(
+    /** Identity for deduplicating a code scanned twice, and for selection. */
+    val key: String,
+    val account: ScannedAccount,
+    val selected: Boolean = true,
+    /**
+     * A password already in the vault that this code plainly belongs to.
+     *
+     * A second factor is a property of an account somebody already has, not a
+     * new account. Adding "GitHub" beside the GitHub password they have been
+     * using for years would be two entries for one login, and the one they
+     * open out of habit would be the one without the code in it.
+     */
+    val existingItemId: String? = null,
+    val existingTitle: String? = null,
+)
+
+data class ScanUiState(
+    val accounts: List<PendingAccount> = emptyList(),
+    /** Which codes of this export have been read, so the screen can say. */
+    val seen: Set<Int> = emptySet(),
+    val total: Int = 1,
+    val batchId: Int? = null,
+    val addedTo: String? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+) {
+    val outstanding: Int get() = (total - seen.size).coerceAtLeast(0)
+}
+
 enum class VaultPhase {
     /** Working out whether a vault already exists on this device. */
     CHECKING,
@@ -178,6 +222,7 @@ data class VaultUiState(
     /** Rule sets someone named and kept, alongside the built-in presets. */
     val savedRules: List<SavedRules> = emptyList(),
     val import: ImportUiState = ImportUiState(),
+    val scan: ScanUiState = ScanUiState(),
     /** What the generator opens with: whatever was used last. */
     val lastRules: PasswordRules = PasswordRules(),
     val share: ShareUiState = ShareUiState(),
@@ -1491,6 +1536,198 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             } catch (cause: Exception) {
                 setImport {
                     it.copy(busy = false, error = cause.message ?: "Keyweb couldn't finish the import.")
+                }
+            }
+        }
+    }
+
+    // ---- Reading an authenticator's QR code ----------------------------
+
+    private fun setScan(update: (ScanUiState) -> ScanUiState) {
+        _state.value = _state.value.copy(scan = update(_state.value.scan))
+    }
+
+    fun closeScan() {
+        _state.value = _state.value.copy(scan = ScanUiState())
+    }
+
+    /**
+     * What one QR code turned out to hold.
+     *
+     * Accounts accumulate rather than replace: a large export is several codes
+     * and the person is told how many are left. Scanning the same code twice
+     * is harmless — the key is the account itself, so a repeat lands on the
+     * row that is already there.
+     */
+    fun onCodeScanned(text: String) {
+        val batch = try {
+            Authenticator.read(text)
+        } catch (cause: NotAnAccountCode) {
+            setScan {
+                it.copy(
+                    error = cause.message ?: "That QR code isn't an authenticator code.",
+                )
+            }
+            return
+        }
+
+        val current = _state.value.scan
+        // A second export while one is half-scanned is a different set of
+        // accounts, and mixing them would silently drop whichever codes did
+        // not match. Starting over is the honest answer.
+        val fresh = current.batchId != null && current.batchId != batch.batchId
+        val base = if (fresh) ScanUiState() else current
+        val items = _state.value.vault.items.values
+
+        val existing = base.accounts.associateBy { it.key }.toMutableMap()
+        for (account in batch.accounts) {
+            val key = "${account.issuer}\u0000${account.name}\u0000${account.otp}"
+            if (existing.containsKey(key)) continue
+            // Matched on the name the person reads, not on anything derived:
+            // a wrong guess here would attach a second factor to the wrong
+            // login, which is worse than not guessing at all.
+            val match = items.firstOrNull { item ->
+                !item.deleted.value &&
+                    !item.isBlob() &&
+                    account.issuer.isNotEmpty() &&
+                    item.field(Fields.TITLE)?.equals(account.issuer, ignoreCase = true) == true
+            }
+            existing[key] = PendingAccount(
+                key = key,
+                account = account,
+                existingItemId = match?.id,
+                existingTitle = match?.field(Fields.TITLE),
+            )
+        }
+
+        setScan {
+            base.copy(
+                accounts = existing.values.toList(),
+                seen = base.seen + batch.index,
+                total = maxOf(batch.total, base.total),
+                batchId = batch.batchId,
+                error = null,
+                addedTo = null,
+            )
+        }
+    }
+
+    fun reportScanProblem(message: String) {
+        setScan { it.copy(error = message, busy = false) }
+    }
+
+    fun toggleScanned(key: String) {
+        setScan { state ->
+            state.copy(
+                accounts = state.accounts.map {
+                    if (it.key == key) it.copy(selected = !it.selected) else it
+                },
+            )
+        }
+    }
+
+    fun setAllScanned(selected: Boolean) {
+        setScan { it.copy(accounts = it.accounts.map { row -> row.copy(selected = selected) }) }
+    }
+
+    /**
+     * Put the ticked accounts on a keyring, and take them off the list.
+     *
+     * Taking them off is what makes "some here, some there" possible without a
+     * dropdown on every row: tick a few, choose where they go, and what is
+     * left on screen is what still needs a decision.
+     *
+     * [newKeyringName] makes one on the way, because "all of them on a keyring
+     * of their own" is the common case and having to leave for another screen
+     * to prepare for it is how somebody loses their place mid-export.
+     */
+    fun addScanned(keyringId: String?, newKeyringName: String? = null) {
+        val engine = sync ?: return
+        val state = _state.value.scan
+        val chosen = state.accounts.filter { it.selected }
+        if (chosen.isEmpty()) {
+            setScan { it.copy(error = "Tick the accounts you want to add first.") }
+            return
+        }
+        setScan { it.copy(busy = true, error = null) }
+
+        viewModelScope.launch {
+            try {
+                val ops = mutableListOf<VaultOp>()
+                val ring = when {
+                    !newKeyringName.isNullOrBlank() -> {
+                        val existing = engine.state().keyrings.values.firstOrNull {
+                            !it.deleted.value && it.name.value == newKeyringName.trim()
+                        }
+                        existing?.id ?: UUID.randomUUID().toString().also { id ->
+                            val stamp = engine.stamp()
+                            ops += VaultOp.KeyringPut(
+                                stamp.opId,
+                                stamp.ts,
+                                id,
+                                newKeyringName.trim(),
+                            )
+                        }
+                    }
+
+                    keyringId != null -> keyringId
+                    else -> {
+                        setScan { it.copy(busy = false, error = "Choose a keyring first.") }
+                        return@launch
+                    }
+                }
+
+                for (pending in chosen) {
+                    val stamp = engine.stamp()
+                    if (pending.existingItemId != null) {
+                        // Only the code. Nothing else about the password they
+                        // already have is this QR code's business.
+                        ops += VaultOp.ItemPut(
+                            opId = stamp.opId,
+                            ts = stamp.ts,
+                            itemId = pending.existingItemId,
+                            keyringId = _state.value.vault.items[pending.existingItemId]
+                                ?.keyring?.value ?: ring,
+                            fields = mapOf(Fields.OTP to pending.account.otp),
+                        )
+                    } else {
+                        ops += VaultOp.ItemPut(
+                            opId = stamp.opId,
+                            ts = stamp.ts,
+                            itemId = UUID.randomUUID().toString(),
+                            keyringId = ring,
+                            fields = buildMap {
+                                put(
+                                    Fields.TITLE,
+                                    pending.account.issuer.ifEmpty {
+                                        pending.account.name.ifEmpty { "Second-factor code" }
+                                    },
+                                )
+                                if (pending.account.name.isNotEmpty()) {
+                                    put(Fields.USERNAME, pending.account.name)
+                                }
+                                put(Fields.OTP, pending.account.otp)
+                            },
+                        )
+                    }
+                }
+
+                val next = engine.commitAll(ops)
+                publish(next)
+                val ringName = next.keyrings[ring]?.name?.value ?: "your vault"
+                setScan { current ->
+                    current.copy(
+                        accounts = current.accounts.filter { !it.selected },
+                        busy = false,
+                        addedTo = "${chosen.size} added to $ringName.",
+                    )
+                }
+            } catch (cause: Exception) {
+                setScan {
+                    it.copy(
+                        busy = false,
+                        error = cause.message ?: "Keyweb couldn't add those.",
+                    )
                 }
             }
         }

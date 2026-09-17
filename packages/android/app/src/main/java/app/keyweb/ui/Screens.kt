@@ -97,7 +97,7 @@ private fun initials(title: String): String =
  * read as the same steel as every other selected control.
  */
 @Composable
-private fun keywebChipColors() = FilterChipDefaults.filterChipColors(
+internal fun keywebChipColors() = FilterChipDefaults.filterChipColors(
     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
     selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1263,6 +1263,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onBackup: () -> Unit,
     onImport: () -> Unit,
+    onScanCodes: () -> Unit = {},
     /** Null when this build has no Google account and so cannot share at all. */
     sharingKey: String? = null,
     canShare: Boolean = false,
@@ -1328,7 +1329,19 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
-            SecondaryButton("Import from KeePass or KeeWeb", onImport)
+            SecondaryButton(
+                "Import from KeePass or KeeWeb",
+                onImport,
+                Modifier.padding(bottom = 8.dp),
+            )
+            Text(
+                "Or bring your six-digit codes over from Google Authenticator, so they live " +
+                    "beside the passwords they belong to.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Codes from another app", onScanCodes)
 
             Spacer(Modifier.height(24.dp))
             Text("Text size", style = MaterialTheme.typography.labelLarge)

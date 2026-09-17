@@ -38,6 +38,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
+import app.keyweb.ui.ScanScreen
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import app.keyweb.vault.ItemSort
 import app.keyweb.vault.KeyringSort
 import app.keyweb.ui.ItemEditScreen
@@ -65,6 +69,7 @@ private sealed interface Route {
     data object Settings : Route
     data object Backup : Route
     data object Import : Route
+    data object Scan : Route
     data class Share(val keyringId: String) : Route
     data class File(val itemId: String, val blobId: String) : Route
 }
@@ -110,6 +115,43 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
     var keyringSort by rememberSaveable {
         mutableStateOf(prefs.getString("keyring-sort", null) ?: KeyringSort.NAME_AZ.id)
     }
+
+    /*
+     * Reading a QR code without asking for the camera.
+     *
+     * Play Services scans in its own process and hands back only the text, so
+     * Keyweb never holds a camera permission. A password manager asking for
+     * camera access is a thing people are right to hesitate over, and not
+     * asking is a better answer than explaining.
+     *
+     * The module is fetched on demand, so the first scan on a phone that has
+     * never done one can fail while it downloads. That is said in the same
+     * words as any other failure rather than as an error code.
+     */
+    fun scanCode() {
+        val scanner = GmsBarcodeScanning.getClient(
+            context,
+            GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build(),
+        )
+        scanner.startScan()
+            .addOnSuccessListener { barcode ->
+                val text = barcode.rawValue
+                if (text.isNullOrEmpty()) {
+                    viewModel.reportScanProblem("That square didn't have anything readable in it.")
+                } else {
+                    viewModel.onCodeScanned(text)
+                }
+            }
+            .addOnCanceledListener { }
+            .addOnFailureListener {
+                viewModel.reportScanProblem(
+                    "Keyweb couldn't open the scanner. If this is the first time, your phone " +
+                        "may still be downloading it — try again in a moment.",
+                )
+            }
+    }
     var darkOverride by rememberSaveable {
         mutableStateOf(
             if (prefs.contains("dark")) prefs.getBoolean("dark", false) else null,
@@ -132,6 +174,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         is Route.Settings -> "settings"
                         is Route.Backup -> "backup"
                         is Route.Import -> "import"
+                        is Route.Scan -> "scan"
                         is Route.Share -> "share:${it.keyringId}"
                         is Route.File -> "file:${it.itemId}:${it.blobId}"
                     }
@@ -142,6 +185,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         it == "settings" -> Route.Settings
                         it == "backup" -> Route.Backup
                         it == "import" -> Route.Import
+                        it == "scan" -> Route.Scan
                         it.startsWith("share:") -> Route.Share(it.removePrefix("share:"))
                         it.startsWith("file:") -> {
                             val rest = it.removePrefix("file:")
@@ -447,12 +491,26 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         sharingKey = ui.sharingKey,
                         onShowSharingKey = viewModel::showSharingKey,
                         onBackup = { route = Route.Backup },
+                        onScanCodes = { route = Route.Scan },
                         onImport = {
                             // Quietly: if Drive access already exists the list
                             // fills in, and if it does not, nothing interrupts.
                             viewModel.refreshImportFiles(interactive = false)
                             route = Route.Import
                         },
+                    )
+
+                    is Route.Scan -> ScanScreen(
+                        scan = ui.scan,
+                        state = ui.vault,
+                        onBack = {
+                            viewModel.closeScan()
+                            goBack()
+                        },
+                        onScan = { scanCode() },
+                        onToggle = viewModel::toggleScanned,
+                        onSelectAll = viewModel::setAllScanned,
+                        onAdd = viewModel::addScanned,
                     )
 
                     is Route.Import -> ImportScreen(

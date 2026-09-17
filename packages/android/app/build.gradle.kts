@@ -128,6 +128,18 @@ dependencies {
 
     implementation("androidx.activity:activity-ktx:1.9.3")
 
+    /*
+     * Reading an authenticator's QR code.
+     *
+     * The Play Services code scanner rather than CameraX plus a decoder,
+     * because it needs no CAMERA permission at all: the scanning happens in
+     * Play Services' own process and Keyweb is handed the text. A password
+     * manager asking for camera access is a thing people are right to hesitate
+     * over, and this removes the question rather than answering it. It also
+     * costs almost nothing in the APK — the module is fetched on demand.
+     */
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+
     // The sharing half: the shared-backup envelope, the Drive transport for it,
     // and the link-carried key exchange. A port of this would have to stay
     // byte-compatible with the web's copy forever, and the whole point of the
