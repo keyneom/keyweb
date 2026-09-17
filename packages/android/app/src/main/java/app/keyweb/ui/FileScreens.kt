@@ -124,9 +124,7 @@ private fun FileRow(
     val blob = state.items[file.blobId]
     val type = blob?.field("type")
     val bitmap = rememberBitmap(if (isViewableImage(type)) blob?.field("secret:data") else null)
-    // The stored size is of the base64, which is a third larger than the file
-    // somebody would recognise.
-    val bytes = ((blob?.field("size")?.toLongOrNull() ?: 0L) * 3) / 4
+    val bytes = blob?.field("size")?.toLongOrNull() ?: 0L
 
     Row(
         verticalAlignment = Alignment.CenterVertically,

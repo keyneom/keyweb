@@ -44,6 +44,7 @@ class AttachmentsTest {
             name = "scan.jpg",
             type = "image/jpeg",
             data = "PRETEND-JPEG-BYTES",
+            bytes = 18,
         )
         return rig
     }
@@ -76,6 +77,7 @@ class AttachmentsTest {
             name = "scan.jpg",
             type = "image/jpeg",
             data = "PRETEND-JPEG-BYTES",
+            bytes = 18,
         )
         assertEquals(
             listOf("blob:abc123"),
@@ -105,6 +107,7 @@ class AttachmentsTest {
             name = "scan.jpg",
             type = "image/jpeg",
             data = "PRETEND-JPEG-BYTES",
+            bytes = 18,
         )
         rig.sync.removeAttachment("passport", "blob:abc123")
 

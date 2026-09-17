@@ -39,6 +39,7 @@ async function withScan() {
     name: "scan.jpg",
     type: "image/jpeg",
     data: "PRETEND-JPEG-BYTES",
+    bytes: 18,
   });
   return parts;
 }
@@ -79,6 +80,7 @@ describe("attaching a file", () => {
       name: "scan.jpg",
       type: "image/jpeg",
       data: "PRETEND-JPEG-BYTES",
+      bytes: 18,
     });
 
     const state = await sync.state();
@@ -109,6 +111,7 @@ describe("removing a file", () => {
       name: "scan.jpg",
       type: "image/jpeg",
       data: "PRETEND-JPEG-BYTES",
+      bytes: 18,
     });
 
     await sync.removeAttachment("passport", "blob:abc123");

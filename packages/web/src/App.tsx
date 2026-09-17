@@ -268,9 +268,7 @@ export function App() {
           name={itemField(vault.state.items[viewing]!, "name") ?? "File"}
           type={itemField(vault.state.items[viewing]!, "type") ?? ""}
           data={itemField(vault.state.items[viewing]!, "secret:data") ?? ""}
-          bytes={Math.round(
-            (Number(itemField(vault.state.items[viewing]!, "size") ?? "0") * 3) / 4,
-          )}
+          bytes={Number(itemField(vault.state.items[viewing]!, "size") ?? "0")}
           onClose={() => setViewing(null)}
         />
       )}

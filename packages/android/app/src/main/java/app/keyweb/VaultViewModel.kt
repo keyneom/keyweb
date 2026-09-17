@@ -448,6 +448,13 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 current = engine.putKeyring(keyringId = "personal", name = "Just mine")
             }
             publish(current, phase = VaultPhase.READY)
+
+            // A file picked before the window closed, attached now that it is
+            // open again — so the trip back through the picker is not repeated.
+            pendingAttachment?.let { (itemId, uri) ->
+                pendingAttachment = null
+                attachFile(itemId, uri)
+            }
         } catch (error: Exception) {
             sync = null
             _state.value = _state.value.copy(
@@ -806,6 +813,17 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * lands in the same document as the password it belongs to — which is what
      * makes it travel when the keyring is shared.
      */
+    /**
+     * A file picked but not yet attached, because the Keystore window closed.
+     *
+     * Choosing a file leaves the app, and the trip through the system picker
+     * routinely takes longer than the five minutes the vault key is authorised
+     * for — so this is the one action that hits the expiry more than any
+     * other. Making somebody find the file again after unlocking would be
+     * punishing them for how long the picker took.
+     */
+    private var pendingAttachment: Pair<String, android.net.Uri>? = null
+
     fun attachFile(itemId: String, uri: android.net.Uri) {
         val engine = sync ?: return
         viewModelScope.launch {
@@ -835,13 +853,40 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     type = getApplication<Application>().contentResolver.getType(uri)
                         ?: "application/octet-stream",
                     data = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP),
+                    bytes = bytes.size,
                 )
+                pendingAttachment = null
                 publish(next, toast = "$name was added to this password.")
                 syncNow()
             } catch (cause: Exception) {
-                _state.value = _state.value.copy(toast = describeShare(cause))
+                if (needsAuthentication(cause)) {
+                    // Kept, and re-run the moment the vault is open again.
+                    pendingAttachment = itemId to uri
+                    relock("Keyweb needed you to unlock again. Your file is still waiting.")
+                } else {
+                    _state.value = _state.value.copy(
+                        toast = cause.message ?: "Keyweb couldn't read that file.",
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * Send somebody back to the unlock screen, with the prompt already raised.
+     *
+     * A write that fails because the Keystore's authorisation window closed is
+     * not an error to report and move on from: there is nothing the person can
+     * do about it from the screen they are on, and a toast saying "unlock
+     * again" with no way to unlock is worse than useless.
+     */
+    private fun relock(message: String) {
+        sync = null
+        _state.value = _state.value.copy(
+            phase = VaultPhase.LOCKED,
+            promptOnEntry = true,
+            error = message,
+        )
     }
 
     fun removeAttachment(itemId: String, blobId: String) {
@@ -1456,7 +1501,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                                 "kind" to BLOB_KIND,
                                 "name" to attached.name,
                                 "type" to guessAttachmentType(attached.name),
-                                "size" to attached.data.length.toString(),
+                                "size" to attached.bytes.toString(),
                                 "secret:data" to attached.data,
                             ),
                         )

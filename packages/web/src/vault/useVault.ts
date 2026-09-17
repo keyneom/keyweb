@@ -672,6 +672,7 @@ export function useVault(): VaultApi {
           name: prepared.name,
           type: prepared.type,
           data: prepared.data,
+          bytes: prepared.bytes,
         }),
       );
       backgroundSync();

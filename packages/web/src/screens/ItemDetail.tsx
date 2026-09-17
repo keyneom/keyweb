@@ -75,6 +75,9 @@ export function ItemDetail({
    */
   const extras = Object.keys(item.fields)
     .filter((name) => !(PRESENTED as readonly string[]).includes(name))
+    // The pointer at an attached file is plumbing, not a field somebody wrote.
+    // It is rendered by `Files` below as the file it names.
+    .filter((name) => !name.startsWith("file:"))
     .filter((name) => (itemField(item, name) ?? "") !== "")
     .sort();
 
@@ -297,11 +300,7 @@ function Files({
                   <span className="rowtext" style={{ flex: 1 }}>
                     <b>{file.name}</b>
                     <span>
-                      {blob
-                        ? // The stored size is of the base64, which is a third
-                          // larger than the file somebody recognises.
-                          humanSize(Math.round((size * 3) / 4))
-                        : "Still arriving from your other device"}
+                      {blob ? humanSize(size) : "Still arriving from your other device"}
                     </span>
                   </span>
                   <button

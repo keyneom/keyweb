@@ -421,6 +421,9 @@ fun ItemDetailScreen(
              */
             item.fields.keys
                 .filter { it !in PRESENTED_FIELDS }
+                // The pointer at an attached file is plumbing, not a field
+                // somebody wrote. `FilesSection` renders it as the file it names.
+                .filter { !it.startsWith("file:") }
                 .filter { item.field(it)?.isNotBlank() == true }
                 .sorted()
                 .forEach { name ->

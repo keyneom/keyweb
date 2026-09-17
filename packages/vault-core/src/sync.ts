@@ -682,6 +682,14 @@ export class VaultSync {
     name: string;
     type: string;
     data: string;
+    /**
+     * The file's real size, not the length of its base64.
+     *
+     * Base64 is a third larger and rounds, so deriving the size from it told
+     * somebody their 395-byte file was 396 bytes. A number on screen that is
+     * almost right is worse than one that is obviously derived.
+     */
+    bytes: number;
   }): Promise<VaultState> {
     return this.commitAll([
       {
@@ -694,7 +702,7 @@ export class VaultSync {
           kind: BLOB_KIND,
           name: input.name,
           type: input.type,
-          size: String(input.data.length),
+          size: String(input.bytes),
           // Prefixed so it is masked, never rendered, and never logged.
           "secret:data": input.data,
         },

@@ -250,6 +250,13 @@ class VaultSync(
         name: String,
         type: String,
         data: String,
+        /**
+         * The file's real size, not the length of its base64.
+         *
+         * Base64 is a third larger and rounds, so deriving the size from it
+         * told somebody their 395-byte file was 396 bytes.
+         */
+        bytes: Int,
     ): VaultState = commitAll(
         listOf(
             VaultOp.ItemPut(
@@ -261,7 +268,7 @@ class VaultSync(
                     "kind" to BLOB_KIND,
                     "name" to name,
                     "type" to type,
-                    "size" to data.length.toString(),
+                    "size" to bytes.toString(),
                     // Prefixed so it is masked, never rendered, never logged.
                     "secret:data" to data,
                 ),

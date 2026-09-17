@@ -570,7 +570,7 @@ export function importOperations(
             kind: BLOB_KIND,
             name: file.name,
             type: file.type,
-            size: String(file.data.length),
+            size: String(file.bytes),
             "secret:data": file.data,
           },
         }) satisfies VaultOp,
