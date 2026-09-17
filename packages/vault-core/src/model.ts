@@ -1,5 +1,5 @@
 import type { Hlc } from "./hlc.js";
-import { HLC_ZERO } from "./hlc.js";
+import { decodeHlc, HLC_ZERO } from "./hlc.js";
 
 /**
  * The vault state is a CRDT: a map of registers, each carrying the HLC of the
@@ -136,6 +136,47 @@ export function storedFieldName(name: string, secret: boolean): ItemField {
  */
 export function fieldLabel(field: ItemField): string {
   return field.replace(/^secret:/, "").replace(/^custom:/, "");
+}
+
+/**
+ * A value this item used to hold, for showing somebody what changed.
+ *
+ * The vault has kept superseded values per field since the CRDT was written —
+ * that is what `HistoryEntry` is — and nothing on either platform ever showed
+ * them. The KeePass import then started replaying years of somebody's earlier
+ * passwords into the same place, which made an invisible feature into an
+ * invisible *import result*: carried across, synced, backed up, and impossible
+ * to look at.
+ */
+export type PastValue = {
+  field: ItemField;
+  /** The name to show, without the prefixes that say how it is stored. */
+  label: string;
+  value: string;
+  /** Masked until asked for, on the same rule as the live field. */
+  secret: boolean;
+  /** When this value was replaced, from the HLC of the write it lost to. */
+  atMs: number;
+};
+
+/**
+ * What this item used to hold, newest first.
+ *
+ * Blank values are left out. A field that was empty and then filled in leaves
+ * an empty entry behind, and "this used to be nothing" is not a thing anybody
+ * came here to read.
+ */
+export function pastValues(item: ItemRecord): PastValue[] {
+  return item.history
+    .filter((entry) => entry.value !== "")
+    .map((entry) => ({
+      field: entry.field,
+      label: fieldLabel(entry.field),
+      value: entry.value,
+      secret: isSecretField(entry.field),
+      atMs: decodeHlc(entry.ts).wall,
+    }))
+    .sort((a, b) => b.atMs - a.atMs);
 }
 
 export type HistoryEntry = {

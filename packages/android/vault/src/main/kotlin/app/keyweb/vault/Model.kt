@@ -163,6 +163,48 @@ fun supersededAliases(
     }
 }
 
+/**
+ * A value this item used to hold, for showing somebody what changed.
+ *
+ * The vault has kept superseded values per field since the CRDT was written —
+ * that is what [HistoryEntry] is — and nothing on either platform ever showed
+ * them. The KeePass import then started replaying years of somebody's earlier
+ * passwords into the same place, which made an invisible feature into an
+ * invisible *import result*: carried across, synced, backed up, and impossible
+ * to look at.
+ */
+data class PastValue(
+    val field: ItemField,
+    /** The name to show, without the prefixes that say how it is stored. */
+    val label: String,
+    val value: String,
+    /** Masked until asked for, on the same rule as the live field. */
+    val secret: Boolean,
+    /** When this value was replaced, from the HLC of the write it lost to. */
+    val atMs: Long,
+)
+
+/**
+ * What this item used to hold, newest first.
+ *
+ * Blank values are left out. A field that was empty and then filled in leaves
+ * an empty entry behind, and "this used to be nothing" is not a thing anybody
+ * came here to read.
+ */
+fun ItemRecord.pastValues(): List<PastValue> =
+    history
+        .filter { it.value.isNotEmpty() }
+        .map {
+            PastValue(
+                field = it.field,
+                label = fieldLabel(it.field),
+                value = it.value,
+                secret = Fields.isSecret(it.field),
+                atMs = decodeHlc(it.ts).wall,
+            )
+        }
+        .sortedByDescending { it.atMs }
+
 @Serializable
 data class HistoryEntry(
     val field: ItemField,

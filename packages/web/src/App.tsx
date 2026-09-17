@@ -283,6 +283,15 @@ export function App() {
             await vault.removeAttachment(current.id, blobId);
             setToast("That file was removed from your vault.");
           }}
+          onRestore={(field, value) => {
+            void vault
+              .saveItem({
+                itemId: current.id,
+                keyringId: current.keyring.value,
+                fields: { [field]: value },
+              })
+              .then(() => setToast("Put back. The value it replaced is in the list too."));
+          }}
           onBack={() => setRoute({ name: "list" })}
           onEdit={() => setRoute({ name: "edit", itemId: current.id })}
           onDelete={() => {

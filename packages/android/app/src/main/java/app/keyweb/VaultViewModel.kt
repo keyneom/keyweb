@@ -519,6 +519,26 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Put a value this item used to hold back where it was.
+     *
+     * A new write rather than a rewind. The value it replaces goes into
+     * history in its turn, so somebody who restores the wrong one can restore
+     * their way out again — the way back is never a one-way door.
+     */
+    fun restoreValue(itemId: String, field: ItemField, value: String) {
+        val engine = sync ?: return
+        val item = _state.value.vault.items[itemId] ?: return
+        viewModelScope.launch {
+            val next = engine.putItem(
+                itemId = itemId,
+                keyringId = item.keyring.value,
+                fields = mapOf(field to value),
+            )
+            publish(next, toast = "Put back. The value it replaced is in the list too.")
+        }
+    }
+
     fun deleteItem(itemId: String, onDone: () -> Unit = {}) {
         val engine = sync ?: return
         viewModelScope.launch {

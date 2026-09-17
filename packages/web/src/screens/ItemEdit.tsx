@@ -12,6 +12,7 @@ import {
   type VaultState,
 } from "@keyweb/vault-core";
 import { Generator } from "./Generator";
+import { Disclosure } from "../ui/Disclosure";
 import { BackIcon } from "../ui/icons";
 
 
@@ -63,6 +64,13 @@ export function ItemEdit({
    * name is being typed — keying on the name would make every keystroke
    * destroy and rebuild the input, and the cursor with it.
    */
+  /*
+   * The second-factor seed was readable on the detail screen and editable
+   * nowhere: it could arrive from a KeePass file and then never be added,
+   * corrected or removed by hand. It sits behind the disclosure because most
+   * logins do not have one, not because it is difficult.
+   */
+  const [otp, setOtp] = useState(item ? (itemField(item, "otp") ?? "") : "");
   const [extras, setExtras] = useState<EditableField[]>(() => editableFields(item));
   const [saving, setSaving] = useState(false);
   /**
@@ -118,6 +126,7 @@ export function ItemEdit({
           password,
           url,
           note,
+          otp: otp.trim(),
           ...customFields(item, extras),
         },
       });
@@ -226,6 +235,30 @@ export function ItemEdit({
         </span>
       </label>
 
+      <Disclosure
+        label="Anything else this login needs"
+        hint="Security questions, a backup PIN, a second-factor code"
+        // Open for an item that already has some. Hiding a field somebody can
+        // see today, on the grounds that it is advanced, is how these fields
+        // went missing in the first place.
+        initiallyOpen={extras.length > 0 || otp !== ""}
+      >
+      <label className="field">
+        <span>Second-factor code</span>
+        <div className="box">
+          <input
+            value={otp}
+            onChange={(e) => setOtp(e.target.value)}
+            placeholder="Paste the setup code the site gave you"
+            autoComplete="off"
+          />
+        </div>
+        <span className="hint">
+          The long code a site shows you next to a QR square. Keyweb turns it into the six
+          digits that change every thirty seconds.
+        </span>
+      </label>
+
       <h2 className="import-heading">Anything else</h2>
       <p className="hint" style={{ marginTop: "-0.4rem" }}>
         Security questions, a backup PIN, an account number — whatever this login needs that a
@@ -310,6 +343,7 @@ export function ItemEdit({
       >
         Add another field
       </button>
+      </Disclosure>
 
       <div className="sticky-actions">
         <button type="button" className="btn pri big" disabled={!canSave} onClick={() => void save()}>

@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
@@ -29,6 +31,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -340,5 +346,63 @@ fun VaultRow(
                 maxLines = 1,
             )
         }
+    }
+}
+
+/**
+ * A section that stays out of the way until somebody asks for it.
+ *
+ * The app has grown a lot of capability — files, one-time codes, fields you
+ * name yourself, earlier values, sharing — and all of it arrived on the same
+ * two screens. The answer is deliberately *not* an "advanced mode" switch in
+ * settings: a mode is invisible state, so somebody who flipped it last month
+ * meets a different app than the one they learned, somebody who never finds it
+ * never gets the feature, and every screen has to be designed twice.
+ *
+ * Disclosure in place costs one tap, is discoverable exactly where it is
+ * relevant, and leaves the common path as short as it was. The label says what
+ * is inside in the words the person would use, never "Advanced" — that is a
+ * word that tells somebody the thing they are looking for is not for them.
+ *
+ * Closed by default, but [initiallyOpen] opens it for an item that already has
+ * something in there: hiding a field somebody can see today, on the grounds
+ * that it is advanced, is how the fields went missing in the first place.
+ */
+@Composable
+fun Disclosure(
+    label: String,
+    modifier: Modifier = Modifier,
+    initiallyOpen: Boolean = false,
+    /** A line under the label, for saying what is inside before it is opened. */
+    hint: String? = null,
+    content: @Composable () -> Unit,
+) {
+    var open by rememberSaveable(label) { mutableStateOf(initiallyOpen) }
+    val colors = LocalKeywebStatus.current
+
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(vertical = 12.dp),
+        ) {
+            Icon(
+                if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+            )
+            Column(Modifier.padding(start = 8.dp)) {
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                if (hint != null && !open) {
+                    Text(
+                        hint,
+                        color = colors.muted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+        if (open) content()
     }
 }

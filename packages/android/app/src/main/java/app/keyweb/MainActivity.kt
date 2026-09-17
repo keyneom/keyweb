@@ -329,6 +329,9 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                                 onOpenFile = { route = Route.File(item.id, it) },
                                 onAttachFile = { attaching = item.id; pickFile.launch("*/*") },
                                 onRemoveFile = { viewModel.removeAttachment(item.id, it) },
+                                onRestore = { field, value ->
+                                    viewModel.restoreValue(item.id, field, value)
+                                },
                             )
                         }
                     }

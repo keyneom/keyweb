@@ -64,7 +64,9 @@ import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
+import app.keyweb.vault.PastValue
 import app.keyweb.vault.fieldLabel
+import app.keyweb.vault.pastValues
 import app.keyweb.vault.storedFieldName
 
 private val RING_COLORS = listOf(
@@ -346,6 +348,7 @@ fun ItemDetailScreen(
     onOpenFile: (String) -> Unit = {},
     onAttachFile: () -> Unit = {},
     onRemoveFile: (String) -> Unit = {},
+    onRestore: (String, String) -> Unit = { _, _ -> },
 ) {
     var revealed by remember { mutableStateOf(false) }
     val statusColors = LocalKeywebStatus.current
@@ -450,6 +453,18 @@ fun ItemDetailScreen(
 
             Spacer(Modifier.height(8.dp))
             SecondaryButton("Edit", onEdit, Modifier.padding(bottom = 10.dp))
+
+            val past = item.pastValues()
+            if (past.isNotEmpty()) {
+                Disclosure(
+                    label = "What this used to be",
+                    hint = "${past.size} earlier " +
+                        if (past.size == 1) "value" else "values",
+                ) {
+                    PastValues(past, onCopy, onRestore)
+                }
+            }
+
             SecondaryButton("Delete this password", onDelete, danger = true)
             Spacer(Modifier.height(24.dp))
         }
@@ -525,6 +540,101 @@ private fun OtpCode(secret: String, onCopy: (String) -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(bottom = 12.dp),
         )
+    }
+}
+
+/**
+ * What an item used to hold, and the way back to it.
+ *
+ * The vault has kept superseded values per field since the CRDT was written,
+ * and nothing ever showed them. Two things changed that: the KeePass import
+ * now replays years of somebody's earlier passwords into the same place, and
+ * the reason people look here at all is the reason they need the button —
+ * a password was changed, the change turned out to be wrong, and the old one
+ * is the thing they are trying to get back.
+ *
+ * Restoring writes the old value as a new one rather than rewinding anything.
+ * The value being replaced goes into history in its turn, so the way back is
+ * never a one-way door.
+ */
+@Composable
+private fun PastValues(
+    past: List<PastValue>,
+    onCopy: (String, String) -> Unit,
+    onRestore: (String, String) -> Unit,
+) {
+    val colors = LocalKeywebStatus.current
+    Column {
+        Text(
+            "Keyweb keeps what a field held before you changed it, so a change " +
+                "you did not mean to make is not the end of it.",
+            color = colors.muted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        past.forEach { value ->
+            var shown by remember(value.field, value.atMs) { mutableStateOf(false) }
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(value.label, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        whenChanged(value.atMs),
+                        color = colors.muted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                    if (value.secret && !shown) {
+                        Text(
+                            "\u2022".repeat(minOf(value.value.length, 24)),
+                            style = MaterialTheme.typography.bodyLarge
+                                .copy(fontFamily = FontFamily.Monospace),
+                        )
+                    } else {
+                        Text(
+                            codeGlyphs(value.value),
+                            style = MaterialTheme.typography.bodyLarge
+                                .copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
+                    Row {
+                        if (value.secret) {
+                            TextButton(onClick = { shown = !shown }) {
+                                Text(if (shown) "Hide" else "Show")
+                            }
+                        }
+                        TextButton(onClick = { onCopy(value.value, value.label) }) {
+                            Text("Copy")
+                        }
+                        TextButton(onClick = { onRestore(value.field, value.value) }) {
+                            Text("Put this back")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * When a value was replaced, in words rather than a timestamp.
+ *
+ * An imported KeePass history can reach back a decade, and "2019-03-04
+ * 10:00:00Z" is not how anybody remembers changing their bank password.
+ */
+private fun whenChanged(atMs: Long): String {
+    if (atMs <= 0) return "Changed at some point"
+    val days = (System.currentTimeMillis() - atMs) / 86_400_000L
+    return when {
+        days < 0L -> "Changed just now"
+        days == 0L -> "Changed today"
+        days == 1L -> "Changed yesterday"
+        days < 30L -> "Changed $days days ago"
+        days < 365L -> "Changed ${days / 30} month${if (days / 30 == 1L) "" else "s"} ago"
+        else -> "Changed ${days / 365} year${if (days / 365 == 1L) "" else "s"} ago"
     }
 }
 
@@ -655,6 +765,13 @@ fun ItemEditScreen(
     var password by remember { mutableStateOf(item?.field(Fields.PASSWORD).orEmpty()) }
     var url by remember { mutableStateOf(item?.field(Fields.URL).orEmpty()) }
     var note by remember { mutableStateOf(item?.field(Fields.NOTE).orEmpty()) }
+    /*
+     * The second-factor seed was readable on the detail screen and editable
+     * nowhere: it could arrive from a KeePass file and then never be added,
+     * corrected or removed by hand. It sits behind the disclosure because most
+     * logins do not have one, not because it is difficult.
+     */
+    var otp by remember { mutableStateOf(item?.field(Fields.OTP).orEmpty()) }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
     var generating by remember { mutableStateOf<GenerateInto?>(null) }
     /**
@@ -782,7 +899,29 @@ fun ItemEditScreen(
                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
+            Disclosure(
+                label = "Anything else this login needs",
+                hint = "Security questions, a backup PIN, a second-factor code",
+                // Opened for an item that already has some. Hiding a field
+                // somebody can see today, on the grounds that it is advanced,
+                // is how these fields went missing in the first place.
+                initiallyOpen = extras.isNotEmpty() || otp.isNotEmpty(),
+            ) {
+            EditField(
+                "Second-factor code",
+                otp,
+                { otp = it },
+                "Paste the setup code the site gave you",
+            )
+            Text(
+                "The long code a site shows you next to a QR square. Keyweb turns it into " +
+                    "the six digits that change every thirty seconds.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+
             Text("Anything else", style = MaterialTheme.typography.labelLarge)
             Text(
                 "Security questions, a backup PIN, an account number — whatever this login " +
@@ -844,6 +983,7 @@ fun ItemEditScreen(
                 onClick = { extras = extras + EditableField("", "", false) },
                 Modifier.padding(bottom = 16.dp),
             )
+            }
 
             PrimaryButton(
                 "Save",
@@ -857,6 +997,7 @@ fun ItemEditScreen(
                             Fields.PASSWORD to password,
                             Fields.URL to url,
                             Fields.NOTE to note,
+                            Fields.OTP to otp.trim(),
                         ) + customFields(item, extras),
                     )
                 },

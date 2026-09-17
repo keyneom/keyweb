@@ -3,12 +3,15 @@ import {
   attachmentsOf,
   fieldLabel,
   isSecretField,
+  pastValues,
+  type PastValue,
   itemField,
   type ItemField,
   type ItemRecord,
   type VaultState,
 } from "@keyweb/vault-core";
 import { CodeLegend, CodeText } from "../ui/CodeText";
+import { Disclosure } from "../ui/Disclosure";
 import { OtpCode } from "../ui/OtpCode";
 import { attachmentUrl, humanSize, isViewableImage, revokeAttachmentUrl } from "../vault/attachments";
 import { BackIcon, CopyIcon, EyeIcon } from "../ui/icons";
@@ -46,6 +49,7 @@ export function ItemDetail({
   onOpenFile,
   onAttach,
   onRemoveFile,
+  onRestore,
 }: {
   item: ItemRecord;
   state: VaultState;
@@ -56,6 +60,7 @@ export function ItemDetail({
   onOpenFile: (blobId: string) => void;
   onAttach: (file: File) => Promise<void>;
   onRemoveFile: (blobId: string) => Promise<void>;
+  onRestore: (field: string, value: string) => void;
 }) {
   const [revealed, setRevealed] = useState(false);
   const title = itemField(item, "title") ?? "Untitled";
@@ -84,6 +89,8 @@ export function ItemDetail({
     // every hidden field in a block of its own under "s", which is an ordering
     // nobody typing these names would expect.
     .sort((a, b) => fieldLabel(a).localeCompare(fieldLabel(b)));
+
+  const past = pastValues(item);
 
   // Auto-hide, so a revealed password doesn't sit on screen indefinitely.
   useEffect(() => {
@@ -208,12 +215,122 @@ export function ItemDetail({
         <button type="button" className="btn sec big" onClick={onEdit}>
           Edit
         </button>
+      </div>
+
+      {past.length > 0 && (
+        <Disclosure
+          label="What this used to be"
+          hint={`${past.length} earlier ${past.length === 1 ? "value" : "values"}`}
+        >
+          <PastValues past={past} onCopy={(v, l) => void copy(v, l)} onRestore={onRestore} />
+        </Disclosure>
+      )}
+
+      <div className="stack">
         <button type="button" className="btn danger big" onClick={onDelete}>
           Delete this password
         </button>
       </div>
     </>
   );
+}
+
+/**
+ * What an item used to hold, and the way back to it.
+ *
+ * The vault has kept superseded values per field since the CRDT was written,
+ * and nothing ever showed them. Two things changed that: the KeePass import
+ * now replays years of somebody's earlier passwords into the same place, and
+ * the reason people look here at all is the reason they need the button — a
+ * password was changed, the change turned out to be wrong, and the old one is
+ * the thing they are trying to get back.
+ *
+ * Restoring writes the old value as a new one rather than rewinding anything.
+ * The value being replaced goes into history in its turn, so the way back is
+ * never a one-way door.
+ */
+function PastValues({
+  past,
+  onCopy,
+  onRestore,
+}: {
+  past: PastValue[];
+  onCopy: (value: string, label: string) => void;
+  onRestore: (field: string, value: string) => void;
+}) {
+  const [shown, setShown] = useState<string | null>(null);
+  return (
+    <>
+      <p className="hint">
+        Keyweb keeps what a field held before you changed it, so a change you did not mean to
+        make is not the end of it.
+      </p>
+      {past.map((value) => {
+        const key = `${value.field}:${value.atMs}`;
+        const open = shown === key;
+        return (
+          <label className="field" key={key}>
+            <span>
+              {value.label} — {whenChanged(value.atMs)}
+            </span>
+            <div className="box">
+              {value.secret && !open ? (
+                <span className="mono secret-value" aria-label={`${value.label}, hidden`}>
+                  {"\u2022".repeat(Math.min(value.value.length, 24))}
+                </span>
+              ) : (
+                <CodeText value={value.value} className="mono secret-value" />
+              )}
+              {value.secret && (
+                <button
+                  type="button"
+                  className="iconbtn"
+                  onClick={() => setShown(open ? null : key)}
+                >
+                  {open ? "Hide" : "Show"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="iconbtn"
+                onClick={() => onCopy(value.value, value.label)}
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                className="iconbtn"
+                onClick={() => onRestore(value.field, value.value)}
+              >
+                Put this back
+              </button>
+            </div>
+          </label>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * When a value was replaced, in words rather than a timestamp.
+ *
+ * An imported KeePass history can reach back a decade, and "2019-03-04
+ * 10:00:00Z" is not how anybody remembers changing their bank password.
+ */
+function whenChanged(atMs: number): string {
+  if (atMs <= 0) return "changed at some point";
+  const days = Math.floor((Date.now() - atMs) / 86_400_000);
+  if (days < 0) return "changed just now";
+  if (days === 0) return "changed today";
+  if (days === 1) return "changed yesterday";
+  if (days < 30) return `changed ${days} days ago`;
+  if (days < 365) {
+    const months = Math.floor(days / 30);
+    return `changed ${months} month${months === 1 ? "" : "s"} ago`;
+  }
+  const years = Math.floor(days / 365);
+  return `changed ${years} year${years === 1 ? "" : "s"} ago`;
 }
 
 /**
