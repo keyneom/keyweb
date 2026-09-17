@@ -91,6 +91,53 @@ export function isSecretField(field: ItemField): boolean {
   );
 }
 
+/**
+ * Key shapes Keyweb gives its own meaning to, which a field name must not wear.
+ *
+ * `secret:` masks a value, `custom:` keeps an imported name from acting like
+ * one of Keyweb's own, and `file:` points a password at an attached file.
+ */
+const RESERVED_PREFIXES = ["secret:", "custom:", "file:"];
+
+/**
+ * The key a field is stored under, given the name its owner gave it.
+ *
+ * One rule, in one place, because three callers need to agree on it exactly:
+ * the KeePass import on each platform, and the editor where somebody types a
+ * field name themselves. A field the phone stores as `secret:Answer` and the
+ * browser stores as `Answer` is one field that has silently become two.
+ *
+ * A name colliding with one of Keyweb's own keys, or wearing one of its own
+ * prefixes, is pushed under `custom:` rather than allowed to act like the real
+ * thing — a field called "folder" must not move the entry, and one called
+ * `file:x` must not appear in the files list as an attachment that will never
+ * arrive.
+ */
+export function storedFieldName(name: string, secret: boolean): ItemField {
+  const collides =
+    (ITEM_FIELDS as readonly string[]).includes(name.toLowerCase()) ||
+    RESERVED_PREFIXES.some((prefix) => name.startsWith(prefix));
+  const safe = collides ? `custom:${name}` : name;
+  return secret ? `secret:${safe}` : safe;
+}
+
+/**
+ * What to call a field on screen.
+ *
+ * `secret:` and `custom:` are how a field is *stored* — one says the value is
+ * masked, the other keeps an imported name from colliding with one of Keyweb's
+ * own keys. Neither is the name its owner gave it, and both were being stripped
+ * by hand in four places that could drift apart.
+ *
+ * Also what makes two keys comparable: a field the old import stored as
+ * `secret:Account number` and the same field stored today as `Account number`
+ * have one label between them, which is how the import recognises its own
+ * earlier mistake.
+ */
+export function fieldLabel(field: ItemField): string {
+  return field.replace(/^secret:/, "").replace(/^custom:/, "");
+}
+
 export type HistoryEntry = {
   field: ItemField;
   value: string;

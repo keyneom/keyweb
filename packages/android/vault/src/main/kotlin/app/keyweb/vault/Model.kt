@@ -87,6 +87,82 @@ object Fields {
             field.startsWith("secret:")
 }
 
+/**
+ * Key shapes Keyweb gives its own meaning to, which a field name must not wear.
+ *
+ * `secret:` masks a value, `custom:` keeps an imported name from acting like
+ * one of Keyweb's own, and `file:` points a password at an attached file.
+ */
+private val RESERVED_PREFIXES = listOf("secret:", "custom:", "file:")
+
+/**
+ * The key a field is stored under, given the name its owner gave it.
+ *
+ * One rule, in one place, because three callers need to agree on it exactly:
+ * the KeePass import on each platform, and the editor where somebody types a
+ * field name themselves. A field the phone stores as `secret:Answer` and the
+ * browser stores as `Answer` is one field that has silently become two.
+ *
+ * A name colliding with one of Keyweb's own keys, or wearing one of its own
+ * prefixes, is pushed under `custom:` rather than allowed to act like the real
+ * thing — a field called "folder" must not move the entry, and one called
+ * `file:x` must not appear under Files as an attachment that will never arrive.
+ */
+fun storedFieldName(name: String, secret: Boolean): ItemField {
+    val collides = Fields.KNOWN.contains(name.lowercase()) ||
+        RESERVED_PREFIXES.any { name.startsWith(it) }
+    val safe = if (collides) "custom:$name" else name
+    return if (secret) "secret:$safe" else safe
+}
+
+/**
+ * What to call a field on screen.
+ *
+ * `secret:` and `custom:` are how a field is *stored* — one says the value is
+ * masked, the other keeps an imported name from colliding with one of Keyweb's
+ * own keys. Neither is the name its owner gave it, and both were being stripped
+ * by hand in four places that could drift apart.
+ *
+ * Also what makes two keys comparable: a field the old import stored as
+ * `secret:Account number` and the same field stored today as `Account number`
+ * have one label between them, which is how the import recognises its own
+ * earlier mistake.
+ */
+fun fieldLabel(field: ItemField): String =
+    field.removePrefix("secret:").removePrefix("custom:")
+
+/**
+ * Fields an earlier import left under a name this one no longer uses.
+ *
+ * Re-importing the same file is meant to update what changed rather than make
+ * a second copy, and it does — as long as both imports agree on what a field
+ * is called. An earlier build did not: it stored *every* custom field as
+ * `secret:<name>`, protected or not, so an account number arrived masked and
+ * under a key today's import would never write. Left alone, re-importing shows
+ * every one of those fields twice — once masked under the old key, once
+ * correctly — and the person cannot tell which is which.
+ *
+ * So a field on the item whose label matches one this import is writing, under
+ * a different key, is the same field wearing an old name, and is blanked. Only
+ * the key dies: the value it held is kept in the item's history like any other
+ * superseded write, so this is undoable rather than a deletion.
+ *
+ * The mirror of the web's `supersededAliases` in `keepass.ts`.
+ */
+fun supersededAliases(
+    item: ItemRecord?,
+    fresh: Map<ItemField, String>,
+): Map<ItemField, String> {
+    if (item == null) return emptyMap()
+    val arriving = fresh.keys.mapTo(mutableSetOf()) { fieldLabel(it) }
+    return buildMap {
+        for ((key, register) in item.fields) {
+            if (fresh.containsKey(key) || register.value.isEmpty()) continue
+            if (arriving.contains(fieldLabel(key))) put(key, "")
+        }
+    }
+}
+
 @Serializable
 data class HistoryEntry(
     val field: ItemField,

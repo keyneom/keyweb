@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   attachmentsOf,
+  fieldLabel,
   isSecretField,
   itemField,
   type ItemField,
@@ -79,7 +80,10 @@ export function ItemDetail({
     // It is rendered by `Files` below as the file it names.
     .filter((name) => !name.startsWith("file:"))
     .filter((name) => (itemField(item, name) ?? "") !== "")
-    .sort();
+    // By the name on screen, not the key behind it: sorting on the key put
+    // every hidden field in a block of its own under "s", which is an ordering
+    // nobody typing these names would expect.
+    .sort((a, b) => fieldLabel(a).localeCompare(fieldLabel(b)));
 
   // Auto-hide, so a revealed password doesn't sit on screen indefinitely.
   useEffect(() => {
@@ -231,7 +235,7 @@ function ExtraField({
 }) {
   const [shown, setShown] = useState(false);
   const secret = isSecretField(name);
-  const label = name.replace(/^secret:/, "").replace(/^custom:/, "");
+  const label = fieldLabel(name);
 
   return (
     <label className="field">
@@ -241,6 +245,11 @@ function ExtraField({
           <span className="mono secret-value" aria-label={`${label}, hidden`}>
             {"\u2022".repeat(Math.min(value.length, 24))}
           </span>
+        ) : secret ? (
+          // The same colouring the password gets when it is revealed. A backup
+          // PIN is read off the screen and typed somewhere else, which is
+          // exactly where a zero gets copied down as a letter O.
+          <CodeText value={value} className="mono secret-value" />
         ) : (
           <input value={value} readOnly aria-label={label} />
         )}
@@ -255,6 +264,7 @@ function ExtraField({
           Copy
         </button>
       </div>
+      {secret && shown && <CodeLegend />}
     </label>
   );
 }

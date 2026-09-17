@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as kdbxweb from "kdbxweb";
-import { applyOps, emptyVault, itemField, visibleItems } from "@keyweb/vault-core";
+import {
+  applyOps,
+  attachmentsOf,
+  emptyVault,
+  fieldLabel,
+  isSecretField,
+  itemField,
+  visibleItems,
+} from "@keyweb/vault-core";
 import {
   importOperations,
   readKeePass,
@@ -203,5 +211,104 @@ describe("importing into the vault", () => {
       (item) => itemField(item, "title") === "Chase Bank",
     )!;
     expect(itemField(chase, "password")).toBe("rotated-in-keepass");
+  });
+});
+
+/**
+ * Two ways an import can quietly corrupt what it is importing.
+ *
+ * Both were found by looking at a real vault on a phone rather than by a test,
+ * which is why they are pinned here: the symptom in each case is a field that
+ * is still *present* and still syncs, so nothing fails and nothing is missing
+ * — it is only wrong, on the one path where the original file gets deleted
+ * afterwards.
+ */
+describe("field names the import writes", () => {
+  it("keeps a KeePass field from wearing one of Keyweb's own prefixes", async () => {
+    registerArgon2();
+    const credentials = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString(MASTER));
+    const db = kdbxweb.Kdbx.create(credentials, "Odd");
+    const group = db.createGroup(db.getDefaultGroup(), "Life");
+    const entry = db.createEntry(group);
+    entry.fields.set("Title", "Odd names");
+    entry.fields.set("Password", kdbxweb.ProtectedValue.fromString("pw"));
+    entry.fields.set("file:sneaky", "not-a-real-attachment");
+    entry.fields.set("secret:Already", "not-actually-protected");
+
+    const preview = await readKeePass(await db.save(), MASTER);
+    const state = applyOps(emptyVault(), [
+      {
+        kind: "keyring.put",
+        opId: "k",
+        ts: "001700000000000-00000-a",
+        keyringId: "ring-life",
+        name: "Life",
+      },
+      ...importOperations(preview, { Life: "ring-life" }, "", stamper()),
+    ]);
+    const item = visibleItems(state)[0]!;
+
+    // A `file:` field is how a password points at an attached file. Left
+    // alone, this one became an attachment whose bytes never existed —
+    // hidden from the detail screen and the editor as plumbing, and listed
+    // under Files as permanently "still arriving".
+    expect(attachmentsOf(item)).toEqual([]);
+    expect(itemField(item, "custom:file:sneaky")).toBe("not-a-real-attachment");
+
+    // And a `secret:` field arrived masked though nobody had protected it.
+    expect(isSecretField("custom:secret:Already")).toBe(false);
+    expect(itemField(item, "custom:secret:Already")).toBe("not-actually-protected");
+
+    // Whatever the key, the name its owner gave it is what shows.
+    expect(fieldLabel("custom:file:sneaky")).toBe("file:sneaky");
+  });
+
+  it("retires the name an earlier build's import gave a field", async () => {
+    registerArgon2();
+    const credentials = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString(MASTER));
+    const db = kdbxweb.Kdbx.create(credentials, "Bank");
+    const group = db.createGroup(db.getDefaultGroup(), "Life");
+    const entry = db.createEntry(group);
+    entry.fields.set("Title", "Chase Bank");
+    entry.fields.set("Password", kdbxweb.ProtectedValue.fromString("pw"));
+    entry.fields.set("Account number", "00112233");
+
+    const preview = await readKeePass(await db.save(), MASTER);
+    const itemId = preview.entries[0]!.itemId;
+
+    // The vault as an older build left it: every custom field stored as
+    // `secret:<name>` whether or not KeePass had protected it, so an account
+    // number arrived masked and under a key today's import never writes.
+    let state = applyOps(emptyVault(), [
+      { kind: "keyring.put", opId: "k", ts: "001700000000000-00000-a", keyringId: "ring-life", name: "Life" },
+      {
+        kind: "item.put",
+        opId: "old",
+        ts: "001700000000001-00000-a",
+        itemId,
+        keyringId: "ring-life",
+        fields: { title: "Chase Bank", password: "pw", "secret:Account number": "00112233" },
+      },
+    ]);
+
+    let n = 100;
+    state = applyOps(
+      state,
+      importOperations(preview, { Life: "ring-life" }, "", () => {
+        n += 1;
+        return { opId: `re-${n}`, ts: `0017000000000${n}-00000-import` };
+      }, state),
+    );
+
+    const item = state.items[itemId]!;
+    // One field, not two. Without this the person sees their account number
+    // twice — once masked under the old key, once correctly — with no way to
+    // tell which is which or which one a later edit will change.
+    expect(itemField(item, "Account number")).toBe("00112233");
+    expect(itemField(item, "secret:Account number")).toBe("");
+
+    // The old value is superseded, not destroyed: it sits in the item's
+    // history like any other overwritten write.
+    expect(item.history.some((h) => h.field === "secret:Account number")).toBe(true);
   });
 });

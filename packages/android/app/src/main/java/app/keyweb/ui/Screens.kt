@@ -64,6 +64,8 @@ import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
+import app.keyweb.vault.fieldLabel
+import app.keyweb.vault.storedFieldName
 
 private val RING_COLORS = listOf(
     Color(0xFF2B7A6B),
@@ -425,12 +427,16 @@ fun ItemDetailScreen(
                 // somebody wrote. `FilesSection` renders it as the file it names.
                 .filter { !it.startsWith("file:") }
                 .filter { item.field(it)?.isNotBlank() == true }
-                .sorted()
+                // By the name on screen, not the key behind it: sorting on the
+                // key put every hidden field in a block of its own under "s",
+                // which is an ordering nobody typing these names would expect.
+                .sortedBy { fieldLabel(it).lowercase() }
                 .forEach { name ->
                     ExtraField(
-                        label = name.removePrefix("secret:").removePrefix("custom:"),
+                        label = fieldLabel(name),
                         value = item.field(name).orEmpty(),
                         secret = Fields.isSecret(name),
+                        onCopy = onCopy,
                     )
                 }
 
@@ -543,17 +549,48 @@ private val PRESENTED_FIELDS = setOf(
  * imported from KeePass means the field its owner marked protected: those
  * arrive as `secret:<name>`, so an answer to "first pet's name" is masked here
  * exactly as it was masked there.
+ *
+ * Otherwise the same controls as the password above it, deliberately. A backup
+ * PIN, a security answer and a recovery code are secrets that get *used* the
+ * same way a password does — read off the screen, or copied into a box — and
+ * the first version of this screen offered neither. Somebody looking at their
+ * own account number had to select it by hand; somebody looking at a masked
+ * security answer got a "Show" link and still no way to copy it. Nothing about
+ * the field being custom makes it need less.
  */
 @Composable
-private fun ExtraField(label: String, value: String, secret: Boolean) {
-    var shown by remember(label) { mutableStateOf(false) }
-    if (!secret) {
-        ReadOnlyField(label, value)
-        return
-    }
+private fun ExtraField(
+    label: String,
+    value: String,
+    secret: Boolean,
+    onCopy: (String, String) -> Unit,
+) {
+    var revealed by remember(label) { mutableStateOf(false) }
     Column {
-        ReadOnlyField(label, if (shown) value else "\u2022".repeat(minOf(value.length, 24)))
-        TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") }
+        ReadOnlyField(
+            label = label,
+            value = value,
+            // Revealed to be read off the screen and typed elsewhere, which is
+            // where a zero gets copied down as a letter O.
+            mono = secret && revealed,
+            mask = secret && !revealed,
+            trailing = {
+                Row {
+                    if (secret) {
+                        IconButton(onClick = { revealed = !revealed }) {
+                            Icon(
+                                if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (revealed) "Hide $label" else "Show $label",
+                            )
+                        }
+                    }
+                    IconButton(onClick = { onCopy(value, label) }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "Copy $label")
+                    }
+                }
+            },
+        )
+        if (secret && revealed) CodeLegend(Modifier.padding(bottom = 10.dp))
     }
 }
 
@@ -619,7 +656,7 @@ fun ItemEditScreen(
     var url by remember { mutableStateOf(item?.field(Fields.URL).orEmpty()) }
     var note by remember { mutableStateOf(item?.field(Fields.NOTE).orEmpty()) }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
-    var generating by remember { mutableStateOf(false) }
+    var generating by remember { mutableStateOf<GenerateInto?>(null) }
     /**
      * Fields this person added themselves, or that came in from another app.
      *
@@ -629,15 +666,27 @@ fun ItemEditScreen(
      */
     var extras by remember(item?.id) { mutableStateOf(editableFields(item)) }
 
-    if (generating) {
+    generating?.let { target ->
         GeneratorSheet(
             initial = lastRules,
             saved = savedRules,
-            onDismiss = { generating = false },
+            onDismiss = { generating = null },
             onUse = { made, rules ->
-                password = made
+                when (target) {
+                    is GenerateInto.Password -> password = made
+                    is GenerateInto.Extra -> {
+                        extras = extras.mapIndexed { i, row ->
+                            // Hidden as well as filled. A value nobody has ever
+                            // read is a secret by construction, and leaving it
+                            // in plain text on the detail screen because the
+                            // row happened to say "Shown" would be a leak
+                            // created by the act of generating it.
+                            if (i == target.index) row.copy(value = made, secret = true) else row
+                        }
+                    }
+                }
                 onRulesUsed(rules)
-                generating = false
+                generating = null
             },
             onSaveRules = onSaveRules,
         )
@@ -677,7 +726,7 @@ fun ItemEditScreen(
                 ),
                 keyboardOptions = KeyboardOptions.Default,
                 trailingIcon = {
-                    TextButton(onClick = { generating = true }) { Text("Make one") }
+                    TextButton(onClick = { generating = GenerateInto.Password }) { Text("Make one") }
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -764,6 +813,17 @@ fun ItemEditScreen(
                     },
                     "",
                     secret = field.secret,
+                    // The same generator the password has. A security answer
+                    // should be a random string rather than the name of a dog
+                    // three other sites already know, and a backup PIN is a
+                    // password wearing a different name — there was no reason
+                    // beyond oversight for this to be the one place in the app
+                    // where Keyweb would not make one for you.
+                    trailing = {
+                        TextButton(onClick = { generating = GenerateInto.Extra(index) }) {
+                            Text("Make one")
+                        }
+                    },
                 )
                 Row(modifier = Modifier.padding(bottom = 8.dp)) {
                     TextButton(
@@ -807,6 +867,14 @@ fun ItemEditScreen(
     }
 }
 
+/** Where a generated password is about to go. */
+private sealed interface GenerateInto {
+    data object Password : GenerateInto
+
+    /** A custom field, by its position in the list being edited. */
+    data class Extra(val index: Int) : GenerateInto
+}
+
 @Composable
 internal fun EditField(
     label: String,
@@ -815,12 +883,14 @@ internal fun EditField(
     placeholder: String,
     /** Masks what is typed, for a field its owner marked as hidden. */
     secret: Boolean = false,
+    trailing: @Composable (() -> Unit)? = null,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         placeholder = { Text(placeholder) },
+        trailingIcon = trailing,
         visualTransformation = if (secret) {
             androidx.compose.ui.text.input.PasswordVisualTransformation()
         } else {
@@ -1217,7 +1287,7 @@ private fun editableFields(item: ItemRecord?): List<EditableField> {
                 // neither is part of what it is called, and showing them would
                 // invite somebody to delete the prefix and wonder why the field
                 // stopped being hidden.
-                name = name.removePrefix("secret:").removePrefix("custom:"),
+                name = fieldLabel(name),
                 value = value.value,
                 secret = Fields.isSecret(name),
             )
@@ -1248,8 +1318,5 @@ private fun customFields(
  * them masked, and anything colliding with a name Keyweb uses under `custom:`
  * so it cannot act like the real one.
  */
-private fun storedName(field: EditableField): ItemField {
-    val name = field.name.trim()
-    val safe = if (RESERVED_FIELDS.contains(name.lowercase())) "custom:$name" else name
-    return if (field.secret) "secret:$safe" else safe
-}
+private fun storedName(field: EditableField): ItemField =
+    storedFieldName(field.name.trim(), field.secret)

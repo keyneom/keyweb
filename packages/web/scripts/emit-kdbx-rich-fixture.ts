@@ -71,6 +71,13 @@ tricky.fields.set("Title", "Odd names");
 tricky.fields.set("Password", kdbxweb.ProtectedValue.fromString("odd"));
 tricky.fields.set("folder", "not-a-real-folder");
 tricky.fields.set("kind", "not-a-real-kind");
+// And names that wear one of Keyweb's own *prefixes*. `file:` is how a
+// password points at an attached file, so this one arrived as a pointer at
+// bytes that do not exist: invisible on the detail screen, invisible in the
+// editor, and listed under Files as an attachment permanently "still
+// arriving". `secret:` arrived pre-masked though nobody protected it.
+tricky.fields.set("file:sneaky", "not-a-real-attachment");
+tricky.fields.set("secret:Already", "not-actually-protected");
 
 const bytes = await db.save();
 writeFileSync(new URL("../../../fixtures/keepass-rich.kdbx", import.meta.url), Buffer.from(bytes));

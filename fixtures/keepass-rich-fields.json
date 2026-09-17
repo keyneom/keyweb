@@ -7,19 +7,21 @@
   ],
   "entries": [
     {
-      "itemId": "kdbx:8ITPc/Z39HdbV3XUAIz/lA==",
+      "itemId": "kdbx:+NgzR3XqRttjv4+3lE7Cqg==",
       "fields": {
+        "Account number": "00112233",
         "folder": "Banking",
-        "otp": "otpauth://totp/Webmail%3Amaria?secret=JBSWY3DPEHPK3PXP&digits=6&period=30&algorithm=SHA1&issuer=Webmail",
-        "password": "mail-password",
-        "title": "Webmail",
+        "password": "current-password",
+        "secret:Security answer": "Rufus",
+        "Security question": "First pet's name",
+        "title": "Chase Bank",
         "username": "maria@example.com"
       },
-      "versions": 0,
+      "versions": 2,
       "attachments": []
     },
     {
-      "itemId": "kdbx:CoL5cKYmaY42rrOAo1CkZg==",
+      "itemId": "kdbx:+XDdWjNIcbUkhemxhtH7kQ==",
       "fields": {
         "folder": "Banking",
         "note": "Keep this somewhere safe",
@@ -31,7 +33,21 @@
       "attachments": []
     },
     {
-      "itemId": "kdbx:n71i55Z93Dwp3qK3VOdUoQ==",
+      "itemId": "kdbx:CnP2mPe2GS+4sIMTCXCBCA==",
+      "fields": {
+        "custom:file:sneaky": "not-a-real-attachment",
+        "custom:folder": "not-a-real-folder",
+        "custom:kind": "not-a-real-kind",
+        "custom:secret:Already": "not-actually-protected",
+        "folder": "Banking",
+        "password": "odd",
+        "title": "Odd names"
+      },
+      "versions": 0,
+      "attachments": []
+    },
+    {
+      "itemId": "kdbx:dK/MtbqHPBdKceoW8V8/+A==",
       "fields": {
         "folder": "Banking",
         "password": "unused",
@@ -49,29 +65,15 @@
       ]
     },
     {
-      "itemId": "kdbx:U+8edy396WoiVTQtd8Dtpw==",
+      "itemId": "kdbx:zWMCX6M/8oWIJtxSzoNTJQ==",
       "fields": {
-        "custom:folder": "not-a-real-folder",
-        "custom:kind": "not-a-real-kind",
         "folder": "Banking",
-        "password": "odd",
-        "title": "Odd names"
-      },
-      "versions": 0,
-      "attachments": []
-    },
-    {
-      "itemId": "kdbx:Yzvnt32hhuBsjS2fJU91QA==",
-      "fields": {
-        "Account number": "00112233",
-        "folder": "Banking",
-        "password": "current-password",
-        "secret:Security answer": "Rufus",
-        "Security question": "First pet's name",
-        "title": "Chase Bank",
+        "otp": "otpauth://totp/Webmail%3Amaria?secret=JBSWY3DPEHPK3PXP&digits=6&period=30&algorithm=SHA1&issuer=Webmail",
+        "password": "mail-password",
+        "title": "Webmail",
         "username": "maria@example.com"
       },
-      "versions": 2,
+      "versions": 0,
       "attachments": []
     }
   ]

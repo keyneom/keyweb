@@ -3,6 +3,7 @@ package app.keyweb.vault.kdbx
 import app.keyweb.vault.Fields
 import app.keyweb.vault.HISTORY_LIMIT
 import app.keyweb.vault.ItemField
+import app.keyweb.vault.storedFieldName
 import app.keyweb.vault.Totp
 import java.io.ByteArrayInputStream
 import java.util.Base64
@@ -642,12 +643,18 @@ private fun Element.children(tag: String): List<Element> = elements().filter { i
  * A custom field whose name collides with one of Keyweb's own keys is prefixed
  * rather than allowed to overwrite it: a KeePass field called "folder" must not
  * be able to move the entry.
+ *
+ * The same goes for a name that merely *looks* like one of Keyweb's own key
+ * shapes. `file:` is how a password points at an attached file, so a KeePass
+ * field called `file:x` arrived as a pointer at a file that does not exist:
+ * hidden from the detail screen as plumbing, hidden from the editor for the
+ * same reason, and listed under Files as an attachment permanently "still
+ * arriving". A field called `secret:x` arrived pre-masked whether its owner had
+ * protected it or not. Neither is exotic enough to leave to chance on the one
+ * path where the original file gets deleted afterwards.
  */
-fun importedFieldName(name: String, isProtected: Boolean): ItemField {
-    val collides = Fields.KNOWN.contains(name.lowercase())
-    val safe = if (collides) "custom:$name" else name
-    return if (isProtected) "secret:$safe" else safe
-}
+fun importedFieldName(name: String, isProtected: Boolean): ItemField =
+    storedFieldName(name, isProtected)
 
 /** KeePass has no field for a one-time-code seed, so every tool invented one. */
 private val OTP_NAMES = setOf("otp", "totp", "totp seed", "totp-seed", "otpauth")

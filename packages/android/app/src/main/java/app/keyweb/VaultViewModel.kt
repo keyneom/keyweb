@@ -51,10 +51,12 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
+import app.keyweb.vault.supersededAliases
 import app.keyweb.vault.field
 import app.keyweb.vault.kdbx.KdbxOversized
 import app.keyweb.vault.kdbx.MAX_ATTACHMENT_BYTES
 import app.keyweb.vault.kdbx.blobIdFor
+import app.keyweb.vault.kdbx.importOperations
 import app.keyweb.vault.kdbx.KdbxEntry
 import app.keyweb.vault.kdbx.KdbxFile
 import app.keyweb.vault.kdbx.KdbxReader
@@ -1437,84 +1439,16 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     else -> keyringFor((choice as UngroupedDestination.New).name.trim())
                 }
 
-                for (entry in file.entries) {
-                    // An entry either names a group, which is mapped above, or
-                    // names none and goes where the user said. There is no
-                    // third case and deliberately no fallback: a missing
-                    // mapping used to be absorbed silently, which is how
-                    // entries ended up in folders nobody put them in.
-                    val keyringId = entry.keyringName?.let(rings::get) ?: ungroupedId
-                    check(keyringId.isNotEmpty()) {
-                        "No keyring was prepared for \"${entry.keyringName}\"."
-                    }
-                    val stamp = engine.stamp()
-                    /*
-                     * Each earlier version is replayed as the edit it actually
-                     * was, stamped at the moment KeePass recorded it.
-                     *
-                     * Nothing translates between the two history shapes: the
-                     * CRDT already keeps a superseded value whenever a later
-                     * write replaces it, so replaying old then new produces
-                     * exactly the history this vault would have had if the
-                     * entry had been edited here all along.
-                     *
-                     * The timestamps are built rather than taken from the
-                     * clock. Asking a clock for 2019 is impossible, and
-                     * *observing* a KeePass file whose clock reads 2099 would
-                     * pin this vault's clock forever — so they are clamped
-                     * below the stamp this import is landing at.
-                     */
-                    val base = decodeHlc(stamp.ts)
-                    entry.versions.forEachIndexed { index, version ->
-                        val fields = kdbxFieldsToItemFields(version.fields, version.protectedKeys)
-                        if (fields.isEmpty()) return@forEachIndexed
-                        ops += VaultOp.ItemPut(
-                            opId = "${stamp.opId}:v$index",
-                            ts = encodeHlc(
-                                HlcParts(
-                                    wall = minOf(version.atMs, base.wall - 1),
-                                    counter = index,
-                                    node = base.node,
-                                ),
-                            ),
-                            itemId = "kdbx:${entry.uuid}",
-                            keyringId = keyringId,
-                            fields = fields,
-                        )
-                    }
-                    /*
-                     * Each attached file becomes an item of its own on the
-                     * same keyring, and the password gains a field pointing at
-                     * it — the same shape as a file attached by hand, because
-                     * it is the same thing. The blob ops come first so a
-                     * device replaying the outbox never sees a password
-                     * referring to bytes that have not arrived yet.
-                     */
-                    val files = entry.attachments.filter { it.data.isNotEmpty() }
-                    for (attached in files) {
-                        ops += VaultOp.ItemPut(
-                            opId = "${stamp.opId}:${attached.blobId}",
-                            ts = stamp.ts,
-                            itemId = attached.blobId,
-                            keyringId = keyringId,
-                            fields = mapOf(
-                                "kind" to BLOB_KIND,
-                                "name" to attached.name,
-                                "type" to guessAttachmentType(attached.name),
-                                "size" to attached.bytes.toString(),
-                                "secret:data" to attached.data,
-                            ),
-                        )
-                    }
-                    ops += VaultOp.ItemPut(
-                        opId = stamp.opId,
-                        ts = stamp.ts,
-                        itemId = "kdbx:${entry.uuid}",
-                        keyringId = keyringId,
-                        fields = entry.toFields() +
-                            files.associate { attachmentField(it.blobId) to it.name },
-                    )
-                }
+                // The same op builder the vault tests exercise, rather than a
+                // second copy of the rules inline here. It throws on a keyring
+                // it was not given, which is the behaviour those tests pin.
+                ops += importOperations(
+                    entries = file.entries,
+                    keyringIds = rings,
+                    ungroupedKeyringId = ungroupedId,
+                    existing = current,
+                    stamp = engine::stamp,
+                )
 
                 // One write. Importing a file of two hundred passwords used to
                 // commit two hundred times, each re-encrypting the whole vault
@@ -1567,37 +1501,4 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
-/**
- * A KeePass entry, as Keyweb's fields.
- *
- * Custom fields the database carried are kept rather than dropped: a field
- * Keyweb has no name for is still somebody's account number. Anything
- * sensitive-sounding gets the `secret:` prefix so it stays masked.
- */
-private fun KdbxEntry.toFields(): Map<ItemField, String> = buildMap {
-    // The naming rule lives beside the reader, because the web reader has to
-    // agree with it exactly: the same file imported on a phone and in a
-    // browser lands in the same vault, and a field called `secret:Answer` on
-    // one side and `Answer` on the other is one field that has become two.
-    putAll(kdbxFieldsToItemFields(allFields(), protectedKeys))
-    // An entry with nothing in it is never imported, so a title always exists
-    // by the time anyone looks at one.
-    if (title.isEmpty()) put(Fields.TITLE, "Untitled")
-    if (folder.isNotEmpty()) put(Fields.FOLDER, folder)
-    if (tags.isNotEmpty()) put(Fields.TAGS, tags)
-}
 
-/**
- * Enough to decide whether a viewer can show it; the name is the only clue
- * KeePass gives. Matches the web's guess so the same file gets the same type.
- */
-private fun guessAttachmentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "png" -> "image/png"
-    "jpg", "jpeg" -> "image/jpeg"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    "svg" -> "image/svg+xml"
-    "pdf" -> "application/pdf"
-    "txt" -> "text/plain"
-    else -> "application/octet-stream"
-}

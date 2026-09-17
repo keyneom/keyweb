@@ -759,7 +759,16 @@ export function useVault(): VaultApi {
       // The same op builder the import tests exercise, rather than a second
       // copy of the mapping inline here. It throws on a keyring it was not
       // given, which is the behaviour those tests pin down.
-      const itemOps = importOperations(preview, keyringIds, ungroupedKeyringId, () => sync.stamp());
+      // The vault as it stands, so an entry that is already here can have the
+      // names an *earlier* build's import gave its custom fields retired
+      // rather than left beside the ones this one writes.
+      const itemOps = importOperations(
+        preview,
+        keyringIds,
+        ungroupedKeyringId,
+        () => sync.stamp(),
+        await sync.state(),
+      );
 
       // Keyrings first: an item op naming a keyring that does not exist yet
       // would be replayed in that order by another device.

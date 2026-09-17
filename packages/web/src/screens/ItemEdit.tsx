@@ -1,5 +1,7 @@
 import { useState } from "react";
 import {
+  fieldLabel,
+  storedFieldName,
   isSecretField,
   itemField,
   PRESETS,
@@ -63,20 +65,36 @@ export function ItemEdit({
    */
   const [extras, setExtras] = useState<EditableField[]>(() => editableFields(item));
   const [saving, setSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  /**
+   * Where a generated password is about to go: the password, or a custom field
+   * by its position in the list.
+   */
+  const [generating, setGenerating] = useState<"password" | number | null>(null);
 
-  if (generating) {
+  if (generating !== null) {
     return (
       <Generator
         initial={lastRules}
         saved={savedRules}
         onUse={(made, rules) => {
-          setPassword(made);
+          if (generating === "password") {
+            setPassword(made);
+          } else {
+            setExtras((rows) =>
+              rows.map((row, i) =>
+                // Hidden as well as filled. A value nobody has ever read is a
+                // secret by construction, and leaving it in plain text on the
+                // detail screen because the row happened to say "Shown" would
+                // be a leak created by the act of generating it.
+                i === generating ? { ...row, value: made, secret: true } : row,
+              ),
+            );
+          }
           onRulesUsed(rules);
-          setGenerating(false);
+          setGenerating(null);
         }}
         onSaveRules={onSaveRules}
-        onClose={() => setGenerating(false)}
+        onClose={() => setGenerating(null)}
       />
     );
   }
@@ -153,7 +171,7 @@ export function ItemEdit({
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="off"
           />
-          <button type="button" className="iconbtn" onClick={() => setGenerating(true)}>
+          <button type="button" className="iconbtn" onClick={() => setGenerating("password")}>
             Make one
           </button>
         </div>
@@ -241,6 +259,21 @@ export function ItemEdit({
                 )
               }
             />
+            {/*
+              The same generator the password has. A security answer should be
+              a random string rather than the name of a dog three other sites
+              already know, and a backup PIN is a password wearing a different
+              name — there was no reason beyond oversight for this to be the
+              one place in the app where Keyweb would not make one for you.
+            */}
+            <button
+              type="button"
+              className="iconbtn"
+              aria-label={`Make a value for ${field.name || "this field"}`}
+              onClick={() => setGenerating(index)}
+            >
+              Make one
+            </button>
             <button
               type="button"
               className="iconbtn"
@@ -308,7 +341,7 @@ function editableFields(item: ItemRecord | null): EditableField[] {
       // `secret:` and `custom:` are how the field is *stored*; neither is part
       // of what it is called, and showing them would invite somebody to delete
       // the prefix and wonder why the field stopped being hidden.
-      name: name.replace(/^secret:/, "").replace(/^custom:/, ""),
+      name: fieldLabel(name),
       value: value.value,
       secret: isSecretField(name),
     }))
@@ -337,12 +370,11 @@ function customFields(
 }
 
 /**
- * Where a field is stored: hidden ones under `secret:`, which is what makes
- * them masked, and anything colliding with a name Keyweb uses under `custom:`
- * so it cannot act like the real one.
+ * Where a field is stored. The same rule the KeePass import uses, in one place
+ * rather than two: a field called "Answer" typed here and a field called
+ * "Answer" imported from a file must land on the same key, or they are two
+ * fields the person believes are one.
  */
 function storedName(field: EditableField): string {
-  const name = field.name.trim();
-  const safe = RESERVED.has(name.toLowerCase()) ? `custom:${name}` : name;
-  return field.secret ? `secret:${safe}` : safe;
+  return storedFieldName(field.name.trim(), field.secret);
 }

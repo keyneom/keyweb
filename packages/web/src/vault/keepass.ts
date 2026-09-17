@@ -1,6 +1,15 @@
 import * as kdbxweb from "kdbxweb";
 import { argon2d, argon2i, argon2id } from "hash-wasm";
-import { HISTORY_LIMIT, ITEM_FIELDS, type ItemField, type VaultOp } from "@keyweb/vault-core";
+import {
+  fieldLabel,
+  HISTORY_LIMIT,
+  ITEM_FIELDS,
+  storedFieldName,
+  type ItemField,
+  type ItemRecord,
+  type VaultOp,
+  type VaultState,
+} from "@keyweb/vault-core";
 import { formatOtp, parseOtp } from "./totp";
 import { attachmentField, BLOB_KIND, decodeHlc, encodeHlc } from "@keyweb/vault-core";
 
@@ -217,11 +226,18 @@ const OTP_NOISE = new Set(["totp settings", "totp-settings"]);
  * A custom field whose name collides with one of Keyweb's own keys is
  * prefixed rather than allowed to overwrite it. A KeePass field called
  * "folder" must not be able to move the entry.
+ *
+ * The same goes for a name that merely *looks* like one of Keyweb's own key
+ * shapes. `file:` is how a password points at an attached file, so a KeePass
+ * field called `file:x` arrived as a pointer at a file that does not exist:
+ * hidden from the detail screen as plumbing, hidden from the editor for the
+ * same reason, and shown in the files list as an attachment permanently
+ * "still arriving". A field called `secret:x` arrived pre-masked whether its
+ * owner had protected it or not. Neither is exotic enough to leave to chance
+ * on the one path where the original file gets deleted afterwards.
  */
 function importedFieldName(name: string, protectedValue: boolean): ItemField {
-  const collides = (ITEM_FIELDS as readonly string[]).includes(name.toLowerCase());
-  const safe = collides ? `custom:${name}` : name;
-  return protectedValue ? `secret:${safe}` : safe;
+  return storedFieldName(name, protectedValue);
 }
 
 function text(value: unknown): string {
@@ -502,6 +518,13 @@ export function importOperations(
   keyringIds: Record<string, string>,
   ungroupedKeyringId: string,
   stamp: () => { opId: string; ts: string },
+  /**
+   * What the vault holds now, so an earlier import's mistakes can be undone.
+   *
+   * Optional only because the tests that predate it pass four arguments;
+   * every real caller has a vault and should hand it over.
+   */
+  existing?: VaultState,
 ): VaultOp[] {
   return preview.entries.flatMap((entry) => {
     const { opId, ts } = stamp();
@@ -576,6 +599,11 @@ export function importOperations(
         }) satisfies VaultOp,
     );
 
+    const fields = {
+      ...entry.fields,
+      ...Object.fromEntries(files.map((file) => [attachmentField(file.blobId), file.name])),
+    };
+
     return [
       ...history,
       ...blobs,
@@ -585,13 +613,38 @@ export function importOperations(
         ts,
         itemId: entry.itemId,
         keyringId,
-        fields: {
-          ...entry.fields,
-          ...Object.fromEntries(
-            files.map((file) => [attachmentField(file.blobId), file.name]),
-          ),
-        },
+        fields: { ...supersededAliases(existing?.items[entry.itemId], fields), ...fields },
       } satisfies VaultOp,
     ];
   });
+}
+
+/**
+ * Fields an earlier import left under a name this one no longer uses.
+ *
+ * Re-importing the same file is meant to update what changed rather than make
+ * a second copy, and it does — as long as both imports agree on what a field
+ * is called. An earlier build did not: it stored *every* custom field as
+ * `secret:<name>`, protected or not, so an account number arrived masked and
+ * under a key today's import would never write. Left alone, re-importing shows
+ * every one of those fields twice — once masked under the old key, once
+ * correctly — and the person cannot tell which is which.
+ *
+ * So a field on the item whose label matches one this import is writing, under
+ * a different key, is the same field wearing an old name, and is blanked. Only
+ * the key dies: the value it held is kept in the item's history like any other
+ * superseded write, so this is undoable rather than a deletion.
+ */
+function supersededAliases(
+  item: ItemRecord | undefined,
+  fresh: Record<string, string | undefined>,
+): Record<string, string> {
+  if (!item) return {};
+  const arriving = new Set(Object.keys(fresh).map(fieldLabel));
+  const out: Record<string, string> = {};
+  for (const [key, register] of Object.entries(item.fields)) {
+    if (key in fresh || register.value === "") continue;
+    if (arriving.has(fieldLabel(key))) out[key] = "";
+  }
+  return out;
 }
