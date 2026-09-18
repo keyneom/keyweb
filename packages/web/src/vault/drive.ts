@@ -47,7 +47,16 @@ export { KEYWEB_SCOPES } from "./googleAuth";
  */
 type BackupPayload = {
   v: 1;
-  passkey: unknown;
+  /**
+   * Optional, because a vault created on a phone has never had one.
+   *
+   * Android has no WebAuthn PRF and so cannot derive the passkey key at all —
+   * it writes the recovery envelope and carries any passkey envelope forward
+   * untouched. So a backup made entirely on a phone is `{ v, recovery }`, and
+   * code that assumes this member is present is code that has only ever been
+   * run against a backup a browser made.
+   */
+  passkey?: unknown;
   recovery?: unknown;
 };
 
@@ -76,13 +85,45 @@ export function recoveryIsStale(payload: {
   return recovery < primary;
 }
 
+/**
+ * Recognising the wrapper, and the bare envelope that predates it.
+ *
+ * This used to decide by asking whether a `passkey` member was present, and
+ * treat its absence as "this must be the old bare-envelope format". That was
+ * wrong in the one case nobody had run: a vault created on a phone. Android
+ * cannot derive the passkey key, so it writes `{ v, recovery }` with no
+ * passkey member at all — and the old test read that whole wrapper as if it
+ * *were* a bare envelope. Two things followed, both silent:
+ *
+ *  - restoring in a browser handed the wrapper to the envelope parser, which
+ *    rejected it as "not a supported v1 encrypted snapshot" — an error about
+ *    file versions for what is really "this backup has no browser key yet";
+ *  - and `#carriedRecovery` read `.recovery` off that mis-parse, got
+ *    `undefined`, and wrote the backup back *without* the recovery envelope —
+ *    deleting the only thing the phone can open.
+ *
+ * So the bare form is now recognised by what it actually is, an envelope, and
+ * a wrapper is a wrapper even when the member this browser wants is missing.
+ */
 function parsePayload(content: string): BackupPayload | null {
   const parsed = JSON.parse(content) as BackupPayload | Record<string, unknown>;
-  if (parsed && typeof parsed === "object" && "passkey" in parsed) {
-    return parsed as BackupPayload;
+  if (!parsed || typeof parsed !== "object") return null;
+  if (looksLikeEnvelope(parsed)) {
+    // A backup written before the recovery copy existed is a bare envelope.
+    return { v: 1, passkey: parsed };
   }
-  // A backup written before the recovery copy existed is a bare envelope.
-  return { v: 1, passkey: parsed };
+  return parsed as BackupPayload;
+}
+
+/**
+ * Enough of an envelope to tell it from the wrapper that holds two of them.
+ *
+ * Deliberately not a full validation: the question here is only "which of the
+ * two shapes is this", and the real parser rejects a malformed envelope with a
+ * better message than anything this function could invent.
+ */
+function looksLikeEnvelope(value: object): boolean {
+  return (value as { schemaVersion?: unknown }).schemaVersion === 1;
 }
 
 export type DriveRemoteOptions = {
@@ -208,6 +249,20 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       if (!content.trim()) return null;
       const payload = parsePayload(content);
       if (!payload) return null;
+      /*
+       * A backup with no envelope this key can open is not a broken backup.
+       *
+       * It is what a vault made entirely on a phone looks like, and the honest
+       * answer is "there is nothing here for me", not a transport failure.
+       * Throwing put the browser into the offline state permanently: it could
+       * never publish, so it could never *add* the passkey envelope that would
+       * have fixed it, and the only way out was to stop using the browser.
+       *
+       * Returning null lets the engine publish, and the write carries the
+       * recovery envelope forward untouched — so the phone keeps its way in
+       * while the browser gains one.
+       */
+      if (payload.passkey === undefined) return null;
       const state = await this.#cipher.openState(payload.passkey);
       return { state, version };
     } catch (cause) {

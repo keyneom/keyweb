@@ -115,8 +115,15 @@ export function Unlock({
               </button>
             </div>
           ) : (
+            /*
+              Not "I can't use that Google account". Somebody whose vault was
+              made on a phone *can* use the account — the phone simply cannot
+              create a key for a browser, so the code is their ordinary first
+              visit rather than a last resort. Labelling it as a failure sent
+              them looking for a problem with their Google sign-in.
+            */
             <button type="button" className="linkish" onClick={() => setShowCode(true)}>
-              I can't use that Google account — I have a recovery code
+              Use my recovery code instead — or if my vault was made on a phone
             </button>
           )}
         </>

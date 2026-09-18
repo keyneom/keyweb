@@ -504,7 +504,24 @@ export function useVault(): VaultApi {
       const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
       const sealed = await probe.fetchSealedState();
       if (!sealed) {
-        setError("There's no Keyweb backup in that Google account yet.");
+        /*
+         * A backup with no browser key in it is not the same as no backup.
+         *
+         * A vault made entirely on a phone has only the recovery envelope,
+         * because Android cannot derive the passkey key at all. Telling that
+         * person "there's no backup in that account" is false and sends them
+         * looking for the wrong problem, so the two cases are separated here
+         * even though it costs a second round trip on a path nobody takes
+         * twice.
+         */
+        const onlyRecovery = await probe.fetchRecoverySealed();
+        setError(
+          onlyRecovery
+            ? "This backup was made on your phone, which can't create a key for this " +
+              "browser. Use your recovery code below — just this once. After that this " +
+              "browser unlocks with your face, fingerprint or PIN like the phone does."
+            : "There's no Keyweb backup in that Google account yet.",
+        );
         setPhase("locked");
         return;
       }

@@ -175,3 +175,91 @@ describe("encrypted Drive backup", () => {
     expect(await sync.isFullyBackedUp()).toBe(true);
   });
 });
+
+/**
+ * A backup that a phone made, opened in a browser.
+ *
+ * This is the shape nobody had run: Android has no WebAuthn PRF, so it cannot
+ * derive the passkey key at all and writes `{ v, recovery }` with no passkey
+ * member. The wrapper was being mistaken for the bare pre-wrapper envelope,
+ * which broke restoring *and* would have deleted the recovery envelope on the
+ * next write — the only thing the phone itself can open.
+ */
+describe("a backup written by a phone", () => {
+  const phoneWritten = JSON.stringify({
+    v: 1,
+    recovery: {
+      schemaVersion: 1,
+      algorithm: "AES-GCM-256",
+      compression: "gzip",
+      credentialId: "recovery",
+      rpId: "keyweb",
+      prfInput: "x",
+      kdfSalt: "y",
+      nonce: "z",
+      ciphertext: "sealed-on-the-phone",
+      updatedAt: "2026-09-17T00:00:00.000Z",
+    },
+  });
+
+  async function driveHolding(content: string) {
+    const drive = new FakeDrive();
+    drive.files.set("file-1", {
+      name: "keyweb-vault-v1.json",
+      content,
+      revision: 1,
+      appProperties: { keyweb: "vault-v1" },
+    });
+    return drive;
+  }
+
+  it("is not mistaken for a browser-written one", async () => {
+    const drive = await driveHolding(phoneWritten);
+    const { remote } = await makeDevice(drive, "web", 1);
+
+    // Nothing for a passkey to open — which is different from "no backup".
+    expect(await remote.fetchSealedState()).toBeNull();
+    // And the thing a recovery code *can* open is found.
+    expect(await remote.fetchRecoverySealed()).toMatchObject({
+      ciphertext: "sealed-on-the-phone",
+    });
+  });
+
+  /**
+   * The silent half. A browser that cannot reseal the recovery copy must carry
+   * it forward, and it was reading it off a mis-parse that always returned
+   * undefined — so the write dropped it and the phone lost its way in.
+   */
+  it("keeps the recovery envelope when the browser writes", async () => {
+    const drive = await driveHolding(phoneWritten);
+    const { sync } = await makeDevice(drive, "web", 1);
+
+    await sync.putKeyring({ keyringId: "personal", name: "Just mine" });
+    await sync.sync();
+
+    const after = JSON.parse(drive.files.get("file-1")!.content);
+    expect(after.recovery).toMatchObject({ ciphertext: "sealed-on-the-phone" });
+    // ...and the browser has now added its own way in, so the next visit needs
+    // no code.
+    expect(after.passkey).toBeDefined();
+  });
+
+  /** The genuinely old shape still has to be read as what it is. */
+  it("still reads a bare envelope from before the wrapper existed", async () => {
+    const bare = JSON.stringify({
+      schemaVersion: 1,
+      algorithm: "AES-GCM-256",
+      compression: "gzip",
+      credentialId: "cred",
+      rpId: "localhost",
+      prfInput: "x",
+      kdfSalt: "y",
+      nonce: "z",
+      ciphertext: "sealed-long-ago",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const drive = await driveHolding(bare);
+    const { remote } = await makeDevice(drive, "web", 1);
+    expect(await remote.fetchSealedState()).toMatchObject({ ciphertext: "sealed-long-ago" });
+  });
+});
