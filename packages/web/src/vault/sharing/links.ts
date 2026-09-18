@@ -44,6 +44,21 @@ export type KeywebJoinLink = {
 
 export type KeywebResponseLink = { response: SharingPublicKeyResponseV1 };
 
+/**
+ * A keyring's ownership, on its way to somebody else.
+ *
+ * One link rather than two, unlike the invite exchange. The recipient can
+ * accept the proposal and finalise it without anything coming back — they
+ * already hold a key on the dataset, which is why only an existing member can
+ * be made the owner — so the owner sends one link and is done.
+ *
+ * `kw-own` rather than a `sk-` parameter because sync-kit has no link format
+ * for this; it hands back a signed artifact and leaves the transport to us.
+ * The artifact is signed by the current owner, so a link that has been edited
+ * on the way is refused when it is accepted rather than being believed.
+ */
+const OWNERSHIP_PARAM = "kw-own";
+
 /** Where links land: this page, with no query of its own. */
 export function landingUrl(): string {
   if (typeof window === "undefined") return "https://keyneom.github.io/keyweb/";
@@ -79,6 +94,47 @@ export function buildResponseLink(input: {
     landingUrl: input.landing ?? landingUrl(),
     response: input.response,
   });
+}
+
+export function buildOwnershipLink(input: { transfer: unknown; landing?: string }): string {
+  const params = new URLSearchParams();
+  params.set(OWNERSHIP_PARAM, encodeJson(input.transfer));
+  return `${input.landing ?? landingUrl()}?${params.toString()}`;
+}
+
+export function parseOwnershipLink(search: string | URLSearchParams): unknown | null {
+  const params =
+    typeof search === "string"
+      ? new URLSearchParams(search.startsWith("?") ? search.slice(1) : search)
+      : search;
+  const raw = params.get(OWNERSHIP_PARAM);
+  if (!raw) return null;
+  try {
+    return decodeJson(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * base64url, unpadded, so the artifact survives every messaging app.
+ *
+ * `+` and `/` from plain base64 are mangled by anything that treats the string
+ * as a URL — and this string travels through whatever two people already use
+ * to talk to each other.
+ */
+function encodeJson(value: unknown): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeJson(value: string): unknown {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 export function parseJoinLink(search: string | URLSearchParams): KeywebJoinLink | null {
@@ -121,6 +177,7 @@ export const SHARE_LINK_PARAMS = [
   "sync-kit-join",
   "sync-kit-exchange",
   "sync-kit-folder",
+  OWNERSHIP_PARAM,
   OWNER_PARAM,
   LABEL_PARAM,
 ] as const;

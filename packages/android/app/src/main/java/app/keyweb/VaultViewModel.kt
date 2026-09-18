@@ -285,6 +285,8 @@ data class ShareUiState(
     val pending: List<PendingInvite> = emptyList(),
     /** A link waiting to be sent to somebody. */
     val link: String? = null,
+    /** A handover link, once one has been made, so it can be copied out. */
+    val handoverLink: String? = null,
     /** The invitation this phone was sent, while it is being decided on. */
     val invite: PendingShareInvite? = null,
     val accepted: AcceptedShare? = null,
@@ -1064,7 +1066,12 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(
                     members = members.orEmpty(),
                     youOwnIt = members?.firstOrNull { member -> member.you }
-                        ?.let { me -> me.role == SharingRole.OWNER },
+                        // An admin can invite and revoke too, which is the
+                        // whole point of the role. Checking only for OWNER
+                        // would have offered an admin nothing but a list.
+                        ?.let { me ->
+                            me.role == SharingRole.OWNER || me.role == SharingRole.ADMIN
+                        },
                     pending = pending,
                     busy = false,
                 )
@@ -1098,6 +1105,28 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { engine.cancelInvite(exchangeId) }
             openSharing(keyringId)
+        }
+    }
+
+    /**
+     * Hand a keyring to somebody already on it, and get the link to send them.
+     *
+     * Nothing changes at this point except that a link exists. The transfer
+     * happens when they open it, which is deliberate: there is no moment where
+     * the keyring belongs to nobody, and an owner who changes their mind
+     * before sending the link has changed nothing.
+     */
+    fun proposeOwnership(keyId: String, email: String?) {
+        val engine = sharing ?: return
+        val datasetId = _state.value.share.datasetId ?: return
+        setShare { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val link = engine.proposeOwnership(datasetId, keyId, email.orEmpty())
+                setShare { it.copy(busy = false, handoverLink = link) }
+            } catch (cause: Exception) {
+                setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
         }
     }
 
@@ -1182,6 +1211,25 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
         ShareLinks.parseResponse(url)?.let { response ->
             previewShareResponse(response)
+            return true
+        }
+        /*
+         * A keyring being handed over. Applied rather than shown as a screen
+         * to confirm: there is nothing to decide, because the person receiving
+         * it is already a member, the artifact is signed by the current owner,
+         * and refusing it would leave the keyring owned by somebody who has
+         * already decided to stop owning it. The toast says what happened.
+         */
+        ShareLinks.parseOwnership(url)?.let { transfer ->
+            val engine = sharing ?: return@let
+            viewModelScope.launch {
+                try {
+                    engine.acceptOwnership(transfer)
+                    showToast("That keyring is yours now. You can invite and remove people on it.")
+                } catch (cause: Exception) {
+                    showToast(describeShare(cause))
+                }
+            }
             return true
         }
         return false

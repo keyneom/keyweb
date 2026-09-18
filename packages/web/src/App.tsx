@@ -9,6 +9,7 @@ import { JoinShare } from "./screens/JoinShare";
 import { ShareKeyring } from "./screens/ShareKeyring";
 import {
   parseJoinLink,
+  parseOwnershipLink,
   parseResponseLink,
   stripShareLinkParams,
   type KeywebJoinLink,
@@ -117,13 +118,38 @@ export function App() {
       : (parseResponseLink(window.location.search)?.response ?? null),
   );
 
+  /**
+   * A keyring being handed over, from a link somebody sent.
+   *
+   * Applied as soon as the vault is open rather than shown as a screen to
+   * confirm. There is nothing to decide: the person receiving it is already a
+   * member, the artifact is signed by the current owner, and refusing it would
+   * leave the keyring owned by somebody who has already decided to stop owning
+   * it. The toast says what happened.
+   */
+  const [takingOver, setTakingOver] = useState<unknown | null>(() =>
+    typeof window === "undefined" ? null : parseOwnershipLink(window.location.search),
+  );
+
+  useEffect(() => {
+    if (takingOver === null || vault.phase !== "ready" || !vault.sharing) return;
+    const payload = takingOver;
+    setTakingOver(null);
+    void vault.sharing
+      .acceptOwnership(payload)
+      .then(() => setToast("That keyring is yours now. You can invite and remove people on it."))
+      .catch((cause: unknown) =>
+        setToast(cause instanceof Error ? cause.message : "Keyweb couldn't take that keyring on."),
+      );
+  }, [takingOver, vault.phase, vault.sharing]);
+
   // Consumed from the address bar so a refresh does not reopen the handoff.
   useEffect(() => {
     if (granting) window.history.replaceState({}, "", window.location.pathname);
   }, [granting]);
 
   useEffect(() => {
-    if (!joining && !accepting) return;
+    if (!joining && !accepting && takingOver === null) return;
     window.history.replaceState({}, "", stripShareLinkParams(new URL(window.location.href)));
     // Once: the parameters are already in state, and re-running would only
     // rewrite an address bar that no longer has them.

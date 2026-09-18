@@ -33,6 +33,21 @@ const val KEYWEB_LANDING_URL = "https://keyneom.github.io/keyweb/"
 private const val OWNER_PARAM = "owner"
 private const val LABEL_PARAM = "kw-name"
 
+/**
+ * A keyring's ownership, on its way to somebody else.
+ *
+ * One link rather than two, unlike the invite exchange. The recipient can
+ * accept the proposal and finalise it without anything coming back — they
+ * already hold a key on the dataset, which is why only an existing member can
+ * be made the owner — so the owner sends one link and is done.
+ *
+ * `kw-own` rather than an `sk-` parameter because sync-kit has no link format
+ * for this; it hands back a signed artifact and leaves the transport to us.
+ * The artifact is signed by the current owner, so a link edited on the way is
+ * refused when it is accepted rather than being believed.
+ */
+private const val OWNERSHIP_PARAM = "kw-own"
+
 data class KeywebJoinLink(
     val invitation: SharingInvitationV1,
     val files: List<SharingDatasetFileV1>,
@@ -68,6 +83,29 @@ object ShareLinks {
         landing: String = KEYWEB_LANDING_URL,
     ): String = buildSharingResponseLinkV1(landing, response)
 
+    fun buildOwnership(transferJson: String, landing: String = KEYWEB_LANDING_URL): String =
+        landing + "?" + OWNERSHIP_PARAM + "=" + base64Url(transferJson)
+
+    /** The signed transfer artifact carried by a handover link, as JSON. */
+    fun parseOwnership(url: String): String? {
+        val raw = queryParams(url)[OWNERSHIP_PARAM] ?: return null
+        return runCatching { fromBase64Url(raw) }.getOrNull()
+    }
+
+    /**
+     * base64url, unpadded, so the artifact survives every messaging app.
+     *
+     * `+` and `/` from plain base64 are mangled by anything that treats the
+     * string as a URL — and this string travels through whatever two people
+     * already use to talk to each other.
+     */
+    private fun base64Url(value: String): String =
+        java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(value.toByteArray(Charsets.UTF_8))
+
+    private fun fromBase64Url(value: String): String =
+        String(java.util.Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+
     fun parseJoin(url: String): KeywebJoinLink? {
         val parsed = runCatching { parseSharingJoinLinkV1(url) }.getOrNull() ?: return null
         val params = queryParams(url)
@@ -84,7 +122,8 @@ object ShareLinks {
 
     /** True for a URL this app should handle as a share rather than as a page. */
     fun isShareLink(url: String?): Boolean =
-        url != null && (parseJoin(url) != null || parseResponse(url) != null)
+        url != null &&
+            (parseJoin(url) != null || parseResponse(url) != null || parseOwnership(url) != null)
 
     /**
      * Query parameters, without `android.net.Uri`.

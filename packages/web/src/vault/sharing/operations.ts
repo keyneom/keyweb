@@ -8,7 +8,7 @@ import { sharingKeyFingerprint } from "@keyneom/sync-kit/sharing/web-crypto";
 import type { SharingDatasetFileV1 } from "@keyneom/sync-kit/sharing";
 import { datasetOf, VAULT_DOCUMENT, type VaultState, type VaultSync } from "@keyweb/vault-core";
 import type { SharingController } from "./controller";
-import { buildJoinLink, buildResponseLink } from "./links";
+import { buildJoinLink, buildOwnershipLink, buildResponseLink } from "./links";
 import type { SharingIdentity } from "./identity";
 
 /**
@@ -24,7 +24,43 @@ import type { SharingIdentity } from "./identity";
  * the flow needing anything from the person at all.
  */
 
-export type ShareRole = Exclude<SharingRole, "owner" | "admin">;
+/**
+ * What somebody else may do with a keyring you shared.
+ *
+ * `owner` is absent because it is not something you grant: exactly one person
+ * holds it, and it moves by an ownership transfer rather than by a dropdown.
+ *
+ * `admin` is here now and was not before. Leaving it out meant a shared
+ * keyring had exactly one person who could invite anyone else — so a couple
+ * sharing their household passwords had a household that only one of them
+ * could add anybody to, and losing that person's account meant nobody could
+ * ever add anyone again. That is a worse failure than the one the omission was
+ * avoiding, which was "a second person who can invite people is a bigger
+ * decision than a checkbox". It is a bigger decision, so it gets a sentence
+ * saying what it means rather than being hidden.
+ */
+export type ShareRole = Exclude<SharingRole, "owner">;
+
+/** What each role is called and what it actually lets somebody do. */
+export const SHARE_ROLES: { value: ShareRole; label: string; detail: string }[] = [
+  {
+    value: "viewer",
+    label: "Can look",
+    detail: "They see everything on this keyring. They cannot change it.",
+  },
+  {
+    value: "writer",
+    label: "Can change",
+    detail: "They see everything and can add, edit and delete passwords on it.",
+  },
+  {
+    value: "admin",
+    label: "Can change and invite",
+    detail:
+      "Everything above, and they can invite other people and take their access away again. " +
+      "Give this to someone you would trust to run the keyring if you could not.",
+  },
+];
 
 /** A keyring shared with someone, as a person needs to see it. */
 export type Member = {
@@ -416,6 +452,61 @@ export class KeywebSharing {
       }
     }
     return readOnly;
+  }
+
+  /**
+   * Hand a keyring over to somebody who is already on it.
+   *
+   * Only an existing member can be made the owner, and that is the protocol's
+   * rule rather than a simplification: the new owner has to already hold a key
+   * on the dataset, or there would be nothing to re-sign the head with.
+   *
+   * Returned as a link because there is no Keyweb server to leave a proposal
+   * on. One link, not two — the recipient can accept *and* finalise without
+   * anything coming back, so the person handing it over is finished when they
+   * have sent it.
+   *
+   * The outgoing owner is left as an admin rather than dropped. Somebody
+   * handing over a household keyring almost never means "and remove me from
+   * it", and if they do, the new owner can now do that themselves — which is
+   * the point of there being a new owner.
+   */
+  async proposeOwnership(input: {
+    datasetId: string;
+    keyId: string;
+    email: string;
+  }): Promise<string> {
+    await this.#identity.getOrCreate();
+    const transfer = await this.#controller.prepareOwnershipTransfer({
+      datasetIds: [input.datasetId],
+      toKeyId: input.keyId,
+      recipientEmailAddress: input.email,
+      previousOwnerRole: "admin",
+    });
+    return buildOwnershipLink({ transfer });
+  }
+
+  /**
+   * Take a keyring over, from a link somebody sent.
+   *
+   * Accepting and finalising are one call here because they are one decision
+   * for the person: a half-finished transfer, accepted but never published, is
+   * a keyring with two people believing different things about who owns it.
+   *
+   * sync-kit recognises datasets it has already transferred by transfer id, so
+   * a retry after a failure halfway through is safe rather than a second
+   * transfer.
+   */
+  async acceptOwnership(payload: unknown): Promise<void> {
+    await this.#identity.getOrCreate();
+    const accepted = await this.#controller.acceptOwnershipTransferProposal(payload);
+    const results = await this.#controller.finalizeOwnershipTransfer(accepted);
+    const failed = results.filter((result) => result.status === "failed");
+    if (failed.length > 0) {
+      throw new Error(
+        "Keyweb couldn't finish taking over that keyring. Nothing has changed — ask for the link again.",
+      );
+    }
   }
 
   /** Change what somebody may do. Owners cannot be demoted by design. */

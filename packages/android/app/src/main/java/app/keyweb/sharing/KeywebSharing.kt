@@ -7,6 +7,7 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultSync
 import app.keyweb.vault.datasetOf
 import com.keyneom.synckit.sharing.SharedBackupController
+import com.keyneom.synckit.sharing.SharedBackupOwnershipTransferV1
 import com.keyneom.synckit.sharing.SharingDatasetFileV1
 import com.keyneom.synckit.sharing.SharingDatasetGrantV1
 import com.keyneom.synckit.sharing.SharingInvitationV1
@@ -367,6 +368,63 @@ class KeywebSharing(
                 keyring.id.takeIf { role == SharingRole.VIEWER }
             }
             .toSet()
+    }
+
+    /**
+     * Hand a keyring over to somebody who is already on it.
+     *
+     * Only an existing member can be made the owner, and that is the
+     * protocol's rule rather than a simplification: the new owner has to
+     * already hold a key on the dataset, or there would be nothing to re-sign
+     * the head with.
+     *
+     * Returned as a link because there is no Keyweb server to leave a proposal
+     * on. One link, not two — the recipient can accept *and* finalise without
+     * anything coming back, so the person handing it over is finished when
+     * they have sent it.
+     *
+     * The outgoing owner is left as an admin rather than dropped. Somebody
+     * handing over a household keyring almost never means "and remove me from
+     * it", and if they do, the new owner can now do it themselves — which is
+     * the point of there being a new owner.
+     */
+    suspend fun proposeOwnership(datasetId: String, keyId: String, email: String): String {
+        identity.getOrCreate()
+        val transfer = controller.prepareOwnershipTransfer(
+            listOf(datasetId),
+            keyId,
+            email,
+            SharingRole.ADMIN,
+            null,
+        )
+        val json = Json { encodeDefaults = true }
+            .encodeToString(SharedBackupOwnershipTransferV1.serializer(), transfer)
+        return ShareLinks.buildOwnership(json)
+    }
+
+    /**
+     * Take a keyring over, from a link somebody sent.
+     *
+     * Accepting and finalising are one call because they are one decision for
+     * the person: a half-finished transfer, accepted but never published, is a
+     * keyring with two people believing different things about who owns it.
+     *
+     * sync-kit recognises datasets it has already transferred by transfer id,
+     * so a retry after a failure halfway through is safe rather than a second
+     * transfer.
+     */
+    suspend fun acceptOwnership(transferJson: String) {
+        identity.getOrCreate()
+        val proposal = Json { ignoreUnknownKeys = true }
+            .decodeFromString(SharedBackupOwnershipTransferV1.serializer(), transferJson)
+        val accepted = controller.acceptOwnershipTransferProposal(proposal)
+        val results = controller.finalizeOwnershipTransfer(accepted)
+        if (results.any { it.status == "failed" }) {
+            error(
+                "Keyweb couldn't finish taking over that keyring. Nothing has changed — " +
+                    "ask for the link again.",
+            )
+        }
     }
 
     /** Change what somebody may do. Owners cannot be demoted by design. */

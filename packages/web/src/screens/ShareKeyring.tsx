@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { KeyringRecord } from "@keyweb/vault-core";
 import { AlertIcon, BackIcon, CheckIcon, CopyIcon, ShieldIcon } from "../ui/icons";
 import type { Member, PendingInvite, ShareRole, SharingApi } from "../vault/useVault";
+import { SHARE_ROLES } from "../vault/sharing/operations";
+import type { SharingRole } from "@keyneom/sync-kit/sharing";
 
 /**
  * Who can see one keyring.
@@ -45,6 +47,10 @@ export function ShareKeyring({
    * — and fills in when the answer arrives.
    */
   const [mine, setMine] = useState<boolean | null>(null);
+  /** The role on this keyring, kept apart from "may I manage it". */
+  const [myRole, setMyRole] = useState<SharingRole | null>(null);
+  /** A handover link, once one has been made, so it can be copied out. */
+  const [handover, setHandover] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingInvite[]>([]);
   const [revoking, setRevoking] = useState<Member | null>(null);
 
@@ -57,19 +63,54 @@ export function ShareKeyring({
     try {
       const list = await sharing.members(datasetId);
       setMembers(list);
-      setMine(list.find((member) => member.you)?.role === "owner");
+      /*
+       * An admin can invite and revoke too, which is the whole point of the
+       * role. Checking only for "owner" here would have made the screen offer
+       * an admin nothing but a list to look at.
+       */
+      const yours = list.find((member) => member.you)?.role;
+      setMyRole(yours ?? null);
+      setMine(yours === "owner" || yours === "admin");
     } catch {
       // Not knowing who has access is worth saying nothing about until the
       // person asks for something that needs it. The list is a read of Drive,
       // and Drive is allowed to be away.
       setMembers(null);
       setMine(null);
+      setMyRole(null);
     }
   }, [datasetId, keyring.id, sharing]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  /**
+   * Hand the keyring to somebody already on it.
+   *
+   * Nothing changes at this point except that a link exists. The transfer
+   * happens when they open it, which is deliberate: there is no moment where
+   * the keyring belongs to nobody, and an owner who changes their mind before
+   * sending the link has changed nothing.
+   */
+  async function handOver(member: Member) {
+    if (!datasetId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setHandover(
+        await sharing.proposeOwnership({
+          datasetId,
+          keyId: member.keyId,
+          email: member.email ?? "",
+        }),
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Keyweb couldn't prepare that handover.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function invite() {
     const address = email.trim();
@@ -129,11 +170,7 @@ export function ShareKeyring({
                   <span className="rowtext">
                     <b>{member.email ?? `Key ${member.fingerprint}`}</b>
                     <span>
-                      {member.role === "owner"
-                        ? "Shared it with you"
-                        : member.role === "viewer"
-                          ? "Can look, can't change"
-                          : "Can add and change"}
+                      {describeRole(member.role)}
                     </span>
                   </span>
                 </div>
@@ -231,10 +268,27 @@ export function ShareKeyring({
                 <span className="rowtext">
                   <b>{member.email ?? "Someone you shared with"}</b>
                   <span>
-                    {member.role === "viewer" ? "Can look, can't change" : "Can add and change"} ·
+                    {describeRole(member.role)} ·
                     key {member.fingerprint}
                   </span>
                 </span>
+                {/*
+                  Only the owner, and only for somebody who is not already one.
+                  Handing a keyring over is the one thing an admin cannot do:
+                  there is exactly one owner, and it moves by a decision rather
+                  than by a permission somebody else granted.
+                */}
+                {myRole === "owner" && member.role !== "owner" && (
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    disabled={busy}
+                    onClick={() => void handOver(member)}
+                    aria-label={`Make ${member.email ?? member.fingerprint} the owner`}
+                  >
+                    Make owner
+                  </button>
+                )}
                 <button
                   type="button"
                   className="iconbtn"
@@ -247,6 +301,18 @@ export function ShareKeyring({
               </div>
             ))}
           </div>
+          {handover && (
+            <p className="status" data-tone="attention">
+              <span>
+                <b>Send them this link.</b>
+                <em>
+                  Nothing changes until they open it. Until then you are still the owner, so
+                  there is no moment where the keyring belongs to nobody.
+                </em>
+                <input readOnly value={handover} onFocus={(e) => e.currentTarget.select()} />
+              </span>
+            </p>
+          )}
         </>
       )}
 
@@ -348,35 +414,29 @@ export function ShareKeyring({
         </span>
       </label>
 
+      {/*
+        Driven off the list of roles rather than written out, so a role cannot
+        exist in the type and be missing from the screen — which is exactly how
+        "admin" spent its life in the protocol without ever being offered.
+      */}
       <div className="list" style={{ marginBottom: "0.75rem" }}>
-        <button
-          type="button"
-          className="row"
-          aria-pressed={role === "viewer"}
-          onClick={() => setRole("viewer")}
-        >
-          <span className="avatar" aria-hidden="true">
-            {role === "viewer" ? "●" : "○"}
-          </span>
-          <span className="rowtext">
-            <b>They can look</b>
-            <span>They see the passwords. They can't change or add any.</span>
-          </span>
-        </button>
-        <button
-          type="button"
-          className="row"
-          aria-pressed={role === "writer"}
-          onClick={() => setRole("writer")}
-        >
-          <span className="avatar" aria-hidden="true">
-            {role === "writer" ? "●" : "○"}
-          </span>
-          <span className="rowtext">
-            <b>They can look and change</b>
-            <span>They can add passwords and edit the ones that are here.</span>
-          </span>
-        </button>
+        {SHARE_ROLES.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            className="row"
+            aria-pressed={role === choice.value}
+            onClick={() => setRole(choice.value)}
+          >
+            <span className="avatar" aria-hidden="true">
+              {role === choice.value ? "●" : "○"}
+            </span>
+            <span className="rowtext">
+              <b>{choice.label}</b>
+              <span>{choice.detail}</span>
+            </span>
+          </button>
+        ))}
       </div>
 
       <button
@@ -420,4 +480,25 @@ export function ShareKeyring({
       )}
     </>
   );
+}
+
+/**
+ * What a role means, in one line, wherever a role is shown.
+ *
+ * One function rather than a conditional at each call site: the two places
+ * that described roles had already drifted into saying different things about
+ * the same role, which is how somebody ends up believing a "writer" can invite
+ * people because one screen implied it.
+ */
+function describeRole(role: SharingRole): string {
+  switch (role) {
+    case "owner":
+      return "Shared it with you";
+    case "admin":
+      return "Can change, and invite others";
+    case "writer":
+      return "Can add and change";
+    default:
+      return "Can look, can't change";
+  }
 }

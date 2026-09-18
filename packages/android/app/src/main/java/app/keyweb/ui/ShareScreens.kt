@@ -60,6 +60,7 @@ fun ShareKeyringScreen(
     onStopSharing: () -> Unit,
     onLeave: () -> Unit,
     onCopy: (String) -> Unit,
+    onHandOver: (Member) -> Unit = {},
 ) {
     val colors = LocalKeywebStatus.current
     var email by remember { mutableStateOf("") }
@@ -143,7 +144,27 @@ fun ShareKeyringScreen(
 
             if (others.isNotEmpty()) {
                 Text("People who can see it", style = MaterialTheme.typography.labelLarge)
-                MemberList(others, onRemove = { revoking = it })
+                MemberList(
+                    others,
+                    onRemove = { revoking = it },
+                    onHandOver = if (you?.role == SharingRole.OWNER) {
+                        { member -> onHandOver(member) }
+                    } else {
+                        null
+                    },
+                )
+                share.handoverLink?.let { link ->
+                    StatusLine(
+                        tone = Tone.ATTENTION,
+                        headline = "Send them this link",
+                        detail = "Nothing changes until they open it. Until then you are still " +
+                            "the owner, so there is no moment where the keyring belongs to " +
+                            "nobody.",
+                        modifier = Modifier.padding(top = 8.dp),
+                        actionLabel = "Copy the link",
+                        onAction = { onCopy(link) },
+                    )
+                }
                 Spacer(Modifier.height(20.dp))
             }
 
@@ -184,11 +205,14 @@ fun ShareKeyringScreen(
                 modifier = Modifier.padding(bottom = 12.dp),
             )
 
-            RoleChoice("They can look", "They see the passwords. They can't change or add any.",
-                selected = role == SharingRole.VIEWER) { role = SharingRole.VIEWER }
-            RoleChoice("They can look and change",
-                "They can add passwords and edit the ones that are here.",
-                selected = role == SharingRole.WRITER) { role = SharingRole.WRITER }
+            // Driven off the list of roles rather than written out, so a role
+            // cannot exist in the protocol and be missing from the screen —
+            // which is exactly how "admin" spent its life unoffered.
+            SHARE_ROLES.forEach { choice ->
+                RoleChoice(choice.label, choice.detail, selected = role == choice.role) {
+                    role = choice.role
+                }
+            }
 
             Spacer(Modifier.height(12.dp))
             PrimaryButton(
@@ -239,7 +263,18 @@ fun ShareKeyringScreen(
 }
 
 @Composable
-private fun MemberList(members: List<Member>, onRemove: ((Member) -> Unit)?) {
+private fun MemberList(
+    members: List<Member>,
+    onRemove: ((Member) -> Unit)?,
+    /**
+     * Only the owner, and only for somebody who is not already one.
+     *
+     * Handing a keyring over is the one thing an admin cannot do: there is
+     * exactly one owner, and it moves by a decision rather than by a
+     * permission somebody else granted.
+     */
+    onHandOver: ((Member) -> Unit)? = null,
+) {
     val colors = LocalKeywebStatus.current
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
         Column {
@@ -249,13 +284,13 @@ private fun MemberList(members: List<Member>, onRemove: ((Member) -> Unit)?) {
                         VaultRow(
                             initials = if (member.role == SharingRole.OWNER) "★" else "●",
                             title = member.email ?: "Key ${member.fingerprint}",
-                            subtitle = when (member.role) {
-                                SharingRole.OWNER -> "Shared it with you"
-                                SharingRole.VIEWER -> "Can look, can't change · key ${member.fingerprint}"
-                                else -> "Can add and change · key ${member.fingerprint}"
-                            },
+                            subtitle = describeRole(member.role) +
+                                " · key ${member.fingerprint}",
                             onClick = {},
                         )
+                    }
+                    if (onHandOver != null && member.role != SharingRole.OWNER) {
+                        TextButton(onClick = { onHandOver(member) }) { Text("Make owner") }
                     }
                     if (onRemove != null && member.role != SharingRole.OWNER) {
                         TextButton(onClick = { onRemove(member) }) {
@@ -365,11 +400,16 @@ fun JoinShareScreen(
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
-                        if (invite.role == SharingRole.WRITER) {
-                            "You'll be able to see the passwords in it, and add and change them."
-                        } else {
-                            "You'll be able to see the passwords in it. You won't be able to " +
-                                "change them."
+                        when (invite.role) {
+                            SharingRole.ADMIN ->
+                                "You'll be able to see the passwords in it, add and change " +
+                                    "them, and invite other people to it."
+                            SharingRole.WRITER ->
+                                "You'll be able to see the passwords in it, and add and " +
+                                    "change them."
+                            else ->
+                                "You'll be able to see the passwords in it. You won't be able " +
+                                    "to change them."
                         },
                         color = colors.muted,
                         modifier = Modifier.padding(bottom = 16.dp),
@@ -483,4 +523,57 @@ fun AcceptShareScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * What somebody else may do with a keyring you shared.
+ *
+ * `OWNER` is absent because it is not something you grant: exactly one person
+ * holds it, and it moves by an ownership transfer rather than by a tap.
+ *
+ * `ADMIN` is here now and was not before. Leaving it out meant a shared
+ * keyring had exactly one person who could invite anyone else — so a couple
+ * sharing their household passwords had a household only one of them could add
+ * anybody to, and losing that person's account meant nobody could ever add
+ * anyone again. That is a worse failure than the one the omission avoided,
+ * which was "a second person who can invite people is a bigger decision than a
+ * checkbox". It is a bigger decision, so it gets a sentence saying what it
+ * means rather than being hidden.
+ *
+ * The mirror of the web's `SHARE_ROLES`.
+ */
+data class RoleOption(val role: SharingRole, val label: String, val detail: String)
+
+val SHARE_ROLES = listOf(
+    RoleOption(
+        SharingRole.VIEWER,
+        "Can look",
+        "They see everything on this keyring. They cannot change it.",
+    ),
+    RoleOption(
+        SharingRole.WRITER,
+        "Can change",
+        "They see everything and can add, edit and delete passwords on it.",
+    ),
+    RoleOption(
+        SharingRole.ADMIN,
+        "Can change and invite",
+        "Everything above, and they can invite other people and take their access away " +
+            "again. Give this to someone you would trust to run the keyring if you could not.",
+    ),
+)
+
+/**
+ * What a role means, in one line, wherever a role is shown.
+ *
+ * One function rather than a `when` at each call site: the places that
+ * described roles had already drifted into saying different things about the
+ * same role, which is how somebody ends up believing a writer can invite
+ * people because one screen implied it.
+ */
+fun describeRole(role: SharingRole): String = when (role) {
+    SharingRole.OWNER -> "Shared it with you"
+    SharingRole.ADMIN -> "Can change, and invite others"
+    SharingRole.WRITER -> "Can add and change"
+    else -> "Can look, can't change"
 }

@@ -502,6 +502,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             route = Route.Keyrings
                         },
                         onCopy = { copy(it, "The link") },
+                        onHandOver = { viewModel.proposeOwnership(it.keyId, it.email) },
                     )
 
                     is Route.Settings -> SettingsScreen(

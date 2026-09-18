@@ -169,6 +169,10 @@ export type SharingApi = {
   members(datasetId: string): Promise<Member[]>;
   setRole(input: { datasetId: string; keyId: string; role: ShareRole }): Promise<void>;
   revoke(input: { datasetId: string; keyId: string }): Promise<void>;
+  /** Hand a keyring to somebody already on it. Returns the link to send them. */
+  proposeOwnership(input: { datasetId: string; keyId: string; email: string }): Promise<string>;
+  /** Take a keyring over, from a link somebody sent. */
+  acceptOwnership(payload: unknown): Promise<void>;
   pendingInvites(keyringId?: string): Promise<PendingInvite[]>;
   cancelInvite(exchangeId: string): Promise<void>;
   /** Stop sharing a keyring of your own and bring its passwords home. */
@@ -939,6 +943,13 @@ function sharingApi(
     members: (datasetId) => engine.members(datasetId),
     async setRole(input) {
       await engine.setRole(input);
+    },
+    async proposeOwnership(input) {
+      return engine.proposeOwnership(input);
+    },
+    async acceptOwnership(payload) {
+      await engine.acceptOwnership(payload);
+      refresh();
     },
     async revoke(input) {
       await engine.revoke(input);

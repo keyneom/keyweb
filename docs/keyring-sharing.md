@@ -172,13 +172,58 @@ and the browser does the one thing only it can.
   `docs/two-factor.md` says never to fill a password and a code in one action;
   a shared second factor is a further question.
 
+## Roles
+
+Four exist in the protocol and three can be granted:
+
+| Role | May read | May write | May invite and revoke | May hand it over |
+| --- | --- | --- | --- | --- |
+| viewer | yes | | | |
+| writer | yes | yes | | |
+| admin | yes | yes | yes | |
+| owner | yes | yes | yes | yes |
+
+`admin` was left unoffered for a while on the grounds that "a second person who
+can invite more people is a bigger decision than a checkbox". That was true and
+the conclusion was wrong: leaving it out meant a shared keyring had exactly one
+person who could ever add anybody, so a couple sharing a household had a
+household only one of them could add to, and losing that account meant nobody
+could add anyone again. A bigger decision earns a sentence explaining it, not
+concealment.
+
+`owner` is not granted, it moves. Exactly one person holds it.
+
+## Ownership transfer
+
+Only somebody already on the keyring can be made the owner — the protocol's
+rule rather than a simplification, since the new owner must already hold a key
+on the dataset for there to be anything to re-sign the head with.
+
+It rides on one link, not two. The recipient accepts *and* finalises without
+anything coming back, so the person handing it over is finished once they have
+sent it. Nothing changes until the link is opened, which means there is no
+moment where the keyring belongs to nobody, and an owner who changes their mind
+before sending has changed nothing. Accepting and finalising are a single call
+because they are a single decision for the person: a transfer accepted but
+never published is a keyring with two people believing different things about
+who owns it. sync-kit recognises datasets it has already transferred by
+transfer id, so retrying after an interruption is safe rather than a second
+transfer.
+
+The outgoing owner stays on as an admin. Handing over a household keyring
+almost never means "and remove me from it" — and if it does, the new owner can
+now do that, which is the point of there being a new owner.
+
 ## Still to build
 
-- **Roles beyond reader and writer.** `admin` exists in the protocol and is not
-  offered: a second person who can invite more people is a bigger decision than
-  a checkbox.
-- **Ownership transfer.** sync-kit supports it. Keyweb does not offer it, so a
-  shared keyring dies with its owner's account.
+- **Account binding.** sync-kit can carry a Google ID token plus a passkey
+  assertion in a key response, so the inviter's screen could say "wrap this
+  keyring to mika@gmail.com" instead of naming a key id nobody checks. The web
+  has both halves. Android has no passkey — the sharing identity is derived
+  from the recovery code precisely because it does not — so the binding cannot
+  be produced there, and requiring it would lock phones out of sharing
+  altogether. It needs the App Link work below first, since an Android passkey
+  needs the same `assetlinks.json`.
 - **Link verification on Android.** The app claims its own web address, but
   Android will not honour that until an `assetlinks.json` naming it is served
   from the root of `keyneom.github.io` — a file in another repository. Until
