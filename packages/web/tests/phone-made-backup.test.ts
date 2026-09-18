@@ -57,10 +57,13 @@ async function browser(drive: FakeDrive, sealed: unknown | null = null) {
 
 describe("a backup a phone made, opened in a browser", () => {
   /**
-   * The claim, at its root. Android has no WebAuthn PRF, so it cannot derive
-   * the passkey key at all — it writes the recovery envelope and carries a
-   * browser's forward when one exists. A vault that began on a phone has
-   * never had one.
+   * The claim, at its root. Keyweb's Android app does not write a passkey
+   * envelope — it writes the recovery one and carries a browser's forward when
+   * one exists — so a vault that began on a phone has never had one.
+   *
+   * Note what this does *not* say. The platform is perfectly capable:
+   * sync-kit-android ships `AndroidPasskeyKeyProvider` and easy-bc uses it.
+   * This suite pins what Keyweb does today, not what Android permits.
    */
   it("has nothing in it that a passkey could open", () => {
     const payload = JSON.parse(fixture.content) as Record<string, unknown>;

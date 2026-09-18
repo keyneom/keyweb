@@ -30,8 +30,10 @@ import kotlinx.serialization.json.put
  * ## What this device can and cannot rewrite
  *
  * The file holds the vault sealed twice — once under the web's passkey-derived
- * key, once under the printed recovery code. Android cannot derive the passkey
- * key: that comes from a WebAuthn PRF the phone has no equivalent of. So this
+ * key, once under the printed recovery code. This app does not derive the
+ * passkey key on Android — not because the platform cannot (sync-kit-android
+ * ships `AndroidPasskeyKeyProvider` and easy-bc uses it) but because Keyweb was
+ * built believing it could not, which is a mistake worth undoing. So this
  * device works through the recovery envelope, and carries the `passkey`
  * envelope forward byte for byte on every write.
  *

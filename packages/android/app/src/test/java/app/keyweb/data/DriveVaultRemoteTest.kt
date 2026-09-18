@@ -238,8 +238,10 @@ class DriveVaultRemoteTest {
  * it, and a browser therefore cannot open it without the recovery code" — is
  * demonstrated by the shipping writer rather than asserted about it.
  *
- * The web's `phone-made-backup.test.ts` opens this file. If Android ever gains
- * a way to write the passkey envelope, that test fails and says so.
+ * The web's `phone-made-backup.test.ts` opens this file. When this app starts
+ * writing a passkey envelope on Android — which it should, since
+ * sync-kit-android ships `AndroidPasskeyKeyProvider` and the capability was
+ * only ever missing here — that test fails and says so.
  */
 class PhoneMadeBackupFixtureTest {
 

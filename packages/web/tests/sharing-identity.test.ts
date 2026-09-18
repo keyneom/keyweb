@@ -74,7 +74,7 @@ describe("a sharing identity", () => {
 
   /**
    * The reason the wrapping key comes from the recovery secret rather than
-   * from the passkey: the phone has no passkey, and an identity only the
+   * from the passkey: Keyweb's phone does not use one, and an identity only the
    * browser can open would make one person into two participants.
    */
   it("opens with the printed code alone, which is all the phone has", async () => {

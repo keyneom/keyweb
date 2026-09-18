@@ -120,7 +120,8 @@ Four places where building it changed the design.
 plan assumed sync-kit's passkey-wrapped identity carried over. It does not:
 Keyweb on Android is locked by the Android Keystore and a fingerprint, and
 opens the Drive backup through the *recovery* envelope precisely because there
-is no WebAuthn PRF on that side. An identity only the browser could unwrap
+this app does not use a passkey on that side — which was believed to be
+impossible and is not. An identity only the browser could unwrap
 would have left the phone making its own — one person appearing as two
 participants, unable to open the keyrings they shared themselves. The recovery
 secret is the one secret both platforms genuinely hold, and deriving from it
@@ -253,11 +254,12 @@ something to do casually.
 - **Account binding.** sync-kit can carry a Google ID token plus a passkey
   assertion in a key response, so the inviter's screen could say "wrap this
   keyring to mika@gmail.com" instead of naming a key id nobody checks. The web
-  has both halves. Android has no passkey — the sharing identity is derived
-  from the recovery code precisely because it does not — so the binding cannot
-  be produced there, and requiring it would lock phones out of sharing
-  altogether. It needs the App Link work below first, since an Android passkey
-  needs the same `assetlinks.json`.
+  has both halves, and **so can Android**: sync-kit-android ships
+  `SharingAccountBindings` with a Credential Manager assertion, and the
+  `get_login_creds` asset link that makes it possible is now published. This is
+  unbuilt, not blocked. The note that used to sit here — "Android has no
+  passkey" — was wrong, and the sharing identity being derived from the
+  recovery code rests on the same error.
 ## Link verification on Android
 
 Done. `https://keyneom.github.io/.well-known/assetlinks.json` names

@@ -51,7 +51,9 @@ type BackupPayload = {
   /**
    * Optional, because a vault created on a phone has never had one.
    *
-   * Android has no WebAuthn PRF and so cannot derive the passkey key at all —
+   * Keyweb's Android app does not derive the passkey key — not because it
+ * cannot (sync-kit-android ships `AndroidPasskeyKeyProvider`, and easy-bc
+ * uses it) but because this app was built believing it could not —
    * it writes the recovery envelope and carries any passkey envelope forward
    * untouched. So a backup made entirely on a phone is `{ v, recovery }`, and
    * code that assumes this member is present is code that has only ever been
@@ -92,7 +94,7 @@ export function recoveryIsStale(payload: {
  * This used to decide by asking whether a `passkey` member was present, and
  * treat its absence as "this must be the old bare-envelope format". That was
  * wrong in the one case nobody had run: a vault created on a phone. Android
- * cannot derive the passkey key, so it writes `{ v, recovery }` with no
+ * does not derive the passkey key, so it writes `{ v, recovery }` with no
  * passkey member at all — and the old test read that whole wrapper as if it
  * *were* a bare envelope. Two things followed, both silent:
  *

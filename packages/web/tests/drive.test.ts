@@ -179,9 +179,9 @@ describe("encrypted Drive backup", () => {
 /**
  * A backup that a phone made, opened in a browser.
  *
- * This is the shape nobody had run: Android has no WebAuthn PRF, so it cannot
- * derive the passkey key at all and writes `{ v, recovery }` with no passkey
- * member. The wrapper was being mistaken for the bare pre-wrapper envelope,
+ * This is the shape nobody had run: Keyweb's Android app does not derive the
+ * passkey key, so it writes `{ v, recovery }` with no passkey member. (Not a
+ * platform limit — sync-kit-android ships `AndroidPasskeyKeyProvider`.) The wrapper was being mistaken for the bare pre-wrapper envelope,
  * which broke restoring *and* would have deleted the recovery envelope on the
  * next write — the only thing the phone itself can open.
  */

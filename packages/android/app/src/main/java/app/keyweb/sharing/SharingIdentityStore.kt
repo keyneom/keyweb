@@ -36,7 +36,9 @@ const val KEYWEB_SHARING_APP_ID = "keyweb"
  * The browser's obvious answer — derive it from the vault passkey — cannot
  * work here. Keyweb on Android is locked by the Android Keystore and a
  * fingerprint; it opens the Drive backup through the *recovery* envelope
- * precisely because there is no WebAuthn PRF on this side. So the one secret
+ * because this app does not use a passkey on Android, which was believed to
+ * be impossible and is not: sync-kit-android ships `AndroidPasskeyKeyProvider`.
+ * So the one secret
  * both platforms genuinely hold is the printed recovery code: 160 random bits,
  * minted once, stored sealed on every device.
  *
