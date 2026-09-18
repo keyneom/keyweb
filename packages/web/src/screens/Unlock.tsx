@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertIcon, KeyIcon, ShieldIcon } from "../ui/icons";
-import type { AccountContents } from "../vault/drive";
+import type { AccountContents, BackupFile } from "../vault/drive";
 import type { VaultPhase } from "../vault/useVault";
 
 /**
@@ -19,6 +19,8 @@ export function Unlock({
   onRestore,
   onRestoreWithCode,
   contents,
+  files,
+  onChooseFile,
 }: {
   phase: VaultPhase;
   firstRun: boolean;
@@ -29,6 +31,9 @@ export function Unlock({
   onRestoreWithCode: (code: string) => void;
   /** What the account holds, once something has looked. Null until then. */
   contents: AccountContents | null;
+  /** Vault files in the account, when there is more than one to choose from. */
+  files: BackupFile[];
+  onChooseFile: (fileId: string) => void;
 }) {
   const [code, setCode] = useState("");
   const [showCode, setShowCode] = useState(false);
@@ -101,6 +106,50 @@ export function Unlock({
               {contents.sharedKeyrings.length > 0 &&
                 ` Shared with you: ${contents.sharedKeyrings.join(", ")}.`}
             </em>
+          </span>
+        </div>
+      )}
+
+      {/*
+        Which of these is your vault?
+
+        Refusing to guess was the safe half and only the safe half: it left
+        somebody with a true statement and nothing to do about it. A vault file
+        is the whole vault sealed as one blob, so these cannot be merged and
+        somebody has to say which is theirs — but they can only say it if they
+        are shown enough to tell them apart, which is the date and what is
+        inside, never the name, because the names are identical.
+      */}
+      {files.length > 1 && (
+        <div className="status" data-tone="attn">
+          <AlertIcon />
+          <span>
+            <b>There are {files.length} Keyweb backups in this Google account.</b>
+            <em>
+              These are separate vaults, not parts of one, so Keyweb won&rsquo;t merge them or
+              pick for you. The most recently changed is usually the one you want.
+            </em>
+            <span className="backup-choices">
+              {[...files]
+                .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+                .map((file) => (
+                  <button
+                    key={file.fileId}
+                    type="button"
+                    className="btn sec"
+                    onClick={() => onChooseFile(file.fileId)}
+                  >
+                    Last changed {whenChanged(file.updatedAt)}
+                    <span className="hint" style={{ display: "block" }}>
+                      {file.hasCodeCopy
+                        ? "Your recovery code opens this one"
+                        : "Only the device that made it can open this one"}
+                      {" · "}
+                      {file.fileId.slice(-6)}
+                    </span>
+                  </button>
+                ))}
+            </span>
           </span>
         </div>
       )}

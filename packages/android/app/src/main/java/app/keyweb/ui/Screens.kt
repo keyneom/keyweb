@@ -66,6 +66,7 @@ import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
+import app.keyweb.BackupFileChoice
 import app.keyweb.vault.CsvOmissions
 import app.keyweb.vault.FolderKind
 import app.keyweb.vault.FolderView
@@ -126,6 +127,9 @@ fun VaultListScreen(
     /** The backup has no passkey copy, so it opens on this phone alone. */
     backupPhoneOnly: Boolean = false,
     onAddPasskey: () -> Unit = {},
+    /** Vault files to choose between, when the account holds more than one. */
+    backupFiles: List<BackupFileChoice> = emptyList(),
+    onChooseBackupFile: (String) -> Unit = {},
     onDeleteMany: (List<String>) -> Unit,
     onMoveMany: (List<String>, String) -> Unit,
     /** This build's version, so the update notice knows what to compare. */
@@ -358,6 +362,8 @@ fun VaultListScreen(
                 onReplaceBackup = onReplaceBackup,
                 phoneOnly = backupPhoneOnly,
                 onAddPasskey = onAddPasskey,
+                backupFiles = backupFiles,
+                onChooseBackupFile = onChooseBackupFile,
             )
 
             /*

@@ -20,7 +20,12 @@ import {
   InvalidRecoveryCode,
   parseRecoveryCode,
 } from "./recovery";
-import { type AccountContents, GoogleDriveRemote } from "./drive";
+import {
+  type AccountContents,
+  type BackupFile,
+  chooseBackupFile,
+  GoogleDriveRemote,
+} from "./drive";
 import {
   createKeywebSharingController,
   createSharingIdentity,
@@ -118,6 +123,13 @@ export type VaultApi = {
   accountContents: AccountContents | null;
   /** One line describing the backup file, for comparing against the phone. */
   describeBackupFile(): Promise<string>;
+  /**
+   * Every vault file in the account, when there is more than one to choose
+   * between. Empty until something has looked.
+   */
+  backupFiles: BackupFile[];
+  /** Say which of them is the real vault, and carry on with it. */
+  chooseBackupFile(fileId: string): Promise<void>;
   lock(): void;
   syncNow(): Promise<void>;
   saveItem(input: {
@@ -221,6 +233,7 @@ export function useVault(): VaultApi {
   const [firstRun, setFirstRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountContents, setAccountContents] = useState<AccountContents | null>(null);
+  const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
   const [state, setState] = useState<VaultState>(emptyVault);
   const [status, setStatus] = useState<SyncStatus>({
     pending: 0,
@@ -504,8 +517,16 @@ export function useVault(): VaultApi {
       } catch (cause) {
         if (!quiet) setError(describe(cause));
         setPhase("locked");
+        // Whatever went wrong, show what the account holds and which files are
+        // in it. Both answer questions somebody has at exactly this moment,
+        // and neither needs a key.
+        if (!quiet) {
+          void describeAccount();
+          void listBackupFiles();
+        }
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [describe, start],
   );
 
@@ -529,6 +550,7 @@ export function useVault(): VaultApi {
         .describeContents()
         .then(setAccountContents)
         .catch(() => undefined);
+      void listBackupFiles();
 
       const sealed = await probe.fetchSealedState();
       if (!sealed) {
@@ -630,6 +652,39 @@ export function useVault(): VaultApi {
    * show different things" is unanswerable from either side and obvious from
    * the two read-outs side by side.
    */
+  /**
+   * Offer the choice rather than only refusing to make it.
+   *
+   * Listed whenever reaching the backup failed, because that is the only
+   * moment somebody needs it — and refusing without showing them what the
+   * alternatives are leaves them with a true statement they can do nothing
+   * with.
+   */
+  const describeAccount = useCallback(async () => {
+    if (!BACKUP_CONFIGURED) return;
+    const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+    await probe.describeContents().then(setAccountContents).catch(() => undefined);
+  }, []);
+
+  const listBackupFiles = useCallback(async () => {
+    if (!BACKUP_CONFIGURED) return;
+    const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+    setBackupFiles(await probe.listBackupFiles().catch(() => []));
+  }, []);
+
+  const chooseBackupFileAndRetry = useCallback<VaultApi["chooseBackupFile"]>(
+    async (fileId) => {
+      chooseBackupFile(fileId);
+      setBackupFiles([]);
+      setError(null);
+      // Straight back into the flow that failed, rather than asking somebody
+      // who just answered a question to also work out what to press next.
+      await unlock({ quiet: true }).catch(() => undefined);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   const describeBackupFile = useCallback(async () => {
     if (!BACKUP_CONFIGURED) return "Encrypted backup is not set up in this build.";
     const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
@@ -956,6 +1011,8 @@ export function useVault(): VaultApi {
     adoptRecoveryCode,
     accountContents,
     describeBackupFile,
+    backupFiles,
+    chooseBackupFile: chooseBackupFileAndRetry,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,
     syncNow,

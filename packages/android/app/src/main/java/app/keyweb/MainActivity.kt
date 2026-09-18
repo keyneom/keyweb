@@ -379,6 +379,8 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onReplaceBackup = viewModel::replaceBackupFromThisPhone,
                         backupPhoneOnly = ui.backupPhoneOnly,
                         onAddPasskey = viewModel::addPasskeyToBackup,
+                        backupFiles = ui.backupFiles,
+                        onChooseBackupFile = viewModel::chooseBackupFile,
                         onDeleteMany = viewModel::deleteItems,
                         onMoveMany = viewModel::moveItems,
                         currentVersion = BuildConfig.VERSION_NAME,

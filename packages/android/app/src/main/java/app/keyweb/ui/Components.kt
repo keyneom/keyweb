@@ -45,9 +45,32 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.keyweb.BackupFileChoice
 import app.keyweb.vault.SyncStatus
 
 enum class Tone { SAFE, ATTENTION, RISK, CALM }
+
+/** One option on a status card that asks somebody to choose. */
+data class StatusChoice(val label: String, val detail: String, val onPick: () -> Unit)
+
+/**
+ * When something last changed, in words.
+ *
+ * Somebody choosing between two vaults is deciding which date looks like the
+ * last time they used the app. "2 hours ago" answers that; a timestamp makes
+ * them do arithmetic while worried.
+ */
+fun whenChanged(atMs: Long?): String {
+    if (atMs == null || atMs <= 0) return "at some point"
+    val minutes = (System.currentTimeMillis() - atMs) / 60_000L
+    return when {
+        minutes < 2 -> "just now"
+        minutes < 60 -> "$minutes minutes ago"
+        minutes < 1440 -> "${minutes / 60} hour" + (if (minutes / 60 == 1L) "" else "s") + " ago"
+        minutes < 2880 -> "yesterday"
+        else -> "${minutes / 1440} days ago"
+    }
+}
 
 /**
  * Backup state as a sentence, never a coloured dot.
@@ -74,6 +97,14 @@ fun StatusLine(
      * is no longer where they pressed it.
      */
     actionEnabled: Boolean = true,
+    /**
+     * Several things to pick between, rather than one thing to do.
+     *
+     * A card that says "there are two of these and I won't choose" has to
+     * carry the choice, or it is a true statement somebody can do nothing
+     * with.
+     */
+    choices: List<StatusChoice> = emptyList(),
 ) {
     val status = LocalKeywebStatus.current
     val (fg, bg, icon) = when (tone) {
@@ -102,6 +133,14 @@ fun StatusLine(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(detail, style = MaterialTheme.typography.bodyMedium)
+
+                choices.forEach { choice ->
+                    SecondaryButton(
+                        choice.label + "  ·  " + choice.detail,
+                        choice.onPick,
+                        Modifier.padding(top = 6.dp),
+                    )
+                }
                 // Telling someone what is wrong without telling them where to
                 // go is the same as not telling them.
                 //
@@ -157,6 +196,9 @@ fun BackupStatusLine(
     /** True when the backup has no passkey copy this device can open. */
     phoneOnly: Boolean = false,
     onAddPasskey: (() -> Unit)? = null,
+    /** Vault files to choose between, when the account holds more than one. */
+    backupFiles: List<BackupFileChoice> = emptyList(),
+    onChooseBackupFile: ((String) -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
@@ -202,6 +244,32 @@ fun BackupStatusLine(
          * terms they would notice it in, and offers the one action that fixes
          * it. Then it goes away for good.
          */
+        /*
+         * Which of these is your vault?
+         *
+         * Before the other backup states, because until it is answered none of
+         * them mean anything: each file is a whole vault sealed on its own, so
+         * "backed up" is a claim about one of two different things. They
+         * cannot be merged and the names are identical, so the date is the
+         * only thing anybody can choose on.
+         */
+        backupFiles.size > 1 -> StatusLine(
+            Tone.RISK,
+            "There are ${backupFiles.size} Keyweb backups in this Google account.",
+            "These are separate vaults, not parts of one, so Keyweb won't merge them or pick " +
+                "for you. The most recently changed is usually the one you want.",
+            modifier,
+            choices = backupFiles
+                .sortedByDescending { it.modifiedAtMs ?: 0L }
+                .map { file ->
+                    StatusChoice(
+                        label = "Last changed " + whenChanged(file.modifiedAtMs),
+                        detail = file.fileId.takeLast(6),
+                        onPick = { onChooseBackupFile?.invoke(file.fileId) },
+                    )
+                },
+        )
+
         phoneOnly && onAddPasskey != null -> StatusLine(
             Tone.ATTENTION,
             "This backup only opens on this phone.",

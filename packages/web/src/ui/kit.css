@@ -906,3 +906,15 @@
   flex: 1 1 12rem;
   margin-bottom: 0;
 }
+
+/* Choosing between vault files: each row needs its own date and description. */
+.backup-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+.backup-choices .btn {
+  text-align: left;
+  line-height: 1.35;
+}

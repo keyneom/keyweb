@@ -30,7 +30,16 @@ import kotlinx.serialization.json.putJsonObject
  * Written against HttpURLConnection so the app pulls in no HTTP library for
  * five endpoints.
  */
-class DriveClient(private val token: suspend () -> String) : DriveFiles {
+class DriveClient(
+    private val token: suspend () -> String,
+    /**
+     * Which vault file this phone was told to use, when there are several.
+     *
+     * Supplied rather than read here, because where the answer is kept is the
+     * app's business and this class only needs to be able to ask.
+     */
+    private val chosenFile: (() -> String?)? = null,
+) : DriveFiles {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -69,6 +78,10 @@ class DriveClient(private val token: suspend () -> String) : DriveFiles {
          * wrong one strands everything in the other.
          */
         if (appProperties == VAULT_MARKER && files.size > 1) {
+            // A choice already made is honoured; otherwise somebody is asked.
+            val ids = files.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.content }
+            val chosen = chosenFile?.invoke()
+            if (chosen != null && ids.contains(chosen)) return chosen
             throw TooManyBackupsException(files.size)
         }
 

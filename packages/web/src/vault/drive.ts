@@ -236,6 +236,50 @@ export type AccountContents = {
   sharedKeyrings: string[];
 };
 
+/** One candidate vault file, described without opening it. */
+export type BackupFile = {
+  fileId: string;
+  name: string;
+  /** When the vault inside it last changed, from the newer of its copies. */
+  updatedAt: string | null;
+  hasPasskeyCopy: boolean;
+  hasCodeCopy: boolean;
+  chosen: boolean;
+};
+
+const CHOSEN_KEY = "keyweb.backup-file";
+
+/**
+ * The file this browser was told to use, when the account holds several.
+ *
+ * Per browser rather than in the vault, because it is a statement about which
+ * of two parallel vaults is the real one — and storing it *inside* one of them
+ * would mean the answer is only readable once the question is already settled.
+ */
+export function chosenBackupFile(): string | null {
+  try {
+    return localStorage.getItem(CHOSEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function chooseBackupFile(fileId: string): void {
+  try {
+    localStorage.setItem(CHOSEN_KEY, fileId);
+  } catch {
+    // A browser that cannot remember it will ask again, which is tolerable.
+  }
+}
+
+function safeParse(content: string): BackupPayload | null {
+  try {
+    return parsePayload(content);
+  } catch {
+    return null;
+  }
+}
+
 export type DriveRemoteOptions = {
   clientId: string;
   cipher: VaultCipher;
@@ -294,23 +338,29 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     });
 
     /*
-     * More than one vault file is not something to pick between.
+     * More than one vault file is a question for the person, not a guess.
      *
-     * This took `files.find(name matches) ?? files[0]` — an arbitrary choice,
-     * made silently, from a list Drive returns in no promised order. Two
-     * devices can land on two different files and each be perfectly
-     * consistent: both sync, both succeed, both say they are backed up, and
-     * they show different vaults. There is no error anywhere because from
-     * inside either one nothing is wrong.
+     * This took `files.find(name matches) ?? files[0]` — an arbitrary choice
+     * from a list Drive returns in no promised order — so two devices could
+     * land on two different files and each be perfectly consistent: both sync,
+     * both succeed, both report themselves backed up, and they hold different
+     * vaults. No error anywhere, because from inside either one nothing is
+     * wrong.
      *
      * A vault file is not a keyring. It is the *whole vault* sealed as one
-     * blob, so a second one is a second parallel vault rather than more of
-     * this one — which is exactly why quietly choosing was the wrong
-     * behaviour, and why the answer is to stop and say so rather than to merge
-     * or to guess.
+     * blob, so a second one is a parallel vault rather than more of this one,
+     * and there is no merging them. Somebody has to say which is theirs.
+     *
+     * So: a choice already made is honoured, and otherwise this stops and the
+     * screen lists them. Stopping is the safe half; the list is the useful
+     * half, and the first version of this had only the safe one.
      */
     if (found.files.length > 1) {
-      throw new TooManyBackupsError(found.files.length);
+      const chosen = chosenBackupFile();
+      const match = chosen && found.files.find((file) => file.fileId === chosen);
+      if (!match) throw new TooManyBackupsError(found.files.length);
+      this.#fileId = match.fileId;
+      return this.#fileId;
     }
 
     this.#fileId = found.files[0]?.fileId ?? null;
@@ -434,6 +484,38 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     ];
     const many = found.files.length > 1 ? ` (${found.files.length} vault files!)` : "";
     return `file ${fileId.slice(-8)}${many} · ${copies.join(" · ")}`;
+  }
+
+  /**
+   * Every vault file in this account, for somebody to choose between.
+   *
+   * Each row carries what can be known without a key — when Drive last saw it
+   * change, which copies it holds and when each was sealed — because the
+   * choice is "which of these is mine", and a list of identical file names
+   * answers nothing.
+   */
+  async listBackupFiles(): Promise<BackupFile[]> {
+    const authorization = await this.#auth();
+    const found = await this.#store.list(authorization, { appProperties: VAULT_MARKER });
+
+    return Promise.all(
+      found.files.map(async (file) => {
+        const content = await this.#store.readText(file.fileId, authorization).catch(() => "");
+        const payload = content.trim() ? safeParse(content) : null;
+        return {
+          fileId: file.fileId,
+          name: file.name,
+          updatedAt:
+            [sealedAt(payload?.passkey), sealedAt(payload?.recovery)]
+              .filter((at): at is string => at !== null)
+              .sort()
+              .pop() ?? null,
+          hasPasskeyCopy: payload?.passkey !== undefined,
+          hasCodeCopy: payload?.recovery !== undefined,
+          chosen: file.fileId === chosenBackupFile(),
+        };
+      }),
+    );
   }
 
   async read(): Promise<RemoteRevision | null> {

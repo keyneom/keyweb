@@ -199,6 +199,13 @@ data class ScanUiState(
     val outstanding: Int get() = (total - seen.size).coerceAtLeast(0)
 }
 
+/** One candidate vault file, described without opening it. */
+data class BackupFileChoice(
+    val fileId: String,
+    val modifiedAtMs: Long?,
+    val chosen: Boolean,
+)
+
 enum class VaultPhase {
     /** Working out whether a vault already exists on this device. */
     CHECKING,
@@ -255,6 +262,8 @@ data class VaultUiState(
      * here. True for every vault set up before the phone could hold a passkey.
      */
     val backupPhoneOnly: Boolean = false,
+    /** Vault files to choose between, when the account holds more than one. */
+    val backupFiles: List<BackupFileChoice> = emptyList(),
     val toast: String? = null,
 )
 
@@ -729,7 +738,46 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun driveClient() = DriveClient { authorizer.accessToken() }
+    private fun driveClient() = DriveClient(
+        token = { authorizer.accessToken() },
+        chosenFile = { prefs.getString(CHOSEN_BACKUP_KEY, null) },
+    )
+
+    /**
+     * Every vault file in the account, for somebody to choose between.
+     *
+     * Offered rather than only refused. Refusing to guess was the safe half
+     * and only the safe half: it left somebody with a true statement and
+     * nothing to do about it. These are separate vaults sealed whole, so they
+     * cannot be merged and somebody has to say which is theirs — but they can
+     * only say it if they are shown the dates, because the names are
+     * identical.
+     */
+    fun listBackupFiles() {
+        viewModelScope.launch {
+            val found = runCatching {
+                driveClient().listFiles().filter { it.keywebMarker == "vault-v1" }
+            }.getOrNull().orEmpty()
+            _state.value = _state.value.copy(
+                backupFiles = found.map {
+                    BackupFileChoice(
+                        fileId = it.fileId,
+                        modifiedAtMs = it.modifiedAtMs,
+                        chosen = it.fileId == prefs.getString(CHOSEN_BACKUP_KEY, null),
+                    )
+                },
+            )
+        }
+    }
+
+    /** Say which file is the real vault, and carry on with it. */
+    fun chooseBackupFile(fileId: String) {
+        prefs.edit().putString(CHOSEN_BACKUP_KEY, fileId).apply()
+        _state.value = _state.value.copy(backupFiles = emptyList())
+        viewModelScope.launch {
+            restoreBackupIfConfigured()
+        }
+    }
 
     /**
      * The passkey copy's cipher, when this phone can have one.
@@ -837,6 +885,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 backup = BackupUiState(stage = BackupStage.OFF, error = describeBackup(cause)),
             )
+            // Whatever went wrong, show which files are there. It answers a
+            // question somebody has at exactly this moment and needs no key.
+            listBackupFiles()
         }
     }
 
@@ -2126,6 +2177,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val RECOVERY_SECRET_KEY = "recovery-secret"
+        const val CHOSEN_BACKUP_KEY = "chosen-backup-file"
     }
 }
 

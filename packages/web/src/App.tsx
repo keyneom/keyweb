@@ -214,6 +214,8 @@ export function App() {
           onRestore={() => void vault.restore()}
           onRestoreWithCode={(code) => void vault.restoreWithCode(code)}
           contents={vault.accountContents}
+          files={vault.backupFiles}
+          onChooseFile={(fileId) => void vault.chooseBackupFile(fileId)}
         />
       </main>
     );
