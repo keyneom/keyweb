@@ -113,7 +113,32 @@ class DriveVaultRemote(
         val payload = parse(drive.readText(id)) ?: return@reachable null
         val recovery = payload.recovery ?: return@reachable null
         val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
-        RemoteRevision(cipher.open(envelope), current)
+        val state = cipher.open(envelope)
+
+        /*
+         * Repair a backup written before the envelope carried its own version.
+         *
+         * Builds up to 0.2.0-beta.8 dropped `schemaVersion` and `algorithm`,
+         * because both hold defaults and the serializer used here omitted
+         * those. This phone reads such a file perfectly — a Kotlin decoder
+         * puts the defaults back — so nothing here would ever have noticed,
+         * and a browser could not open the file at all.
+         *
+         * Repaired on read rather than left for the next edit, because the
+         * engine skips a write when nothing has changed: a person whose vault
+         * is simply *correct* would never publish again, and their backup
+         * would stay unreadable in a browser forever. Rewriting it here costs
+         * one upload, once, on a file that is already in hand.
+         *
+         * Idempotent by construction: the rewrite goes out through `wire`,
+         * which emits both fields, so a repaired file never matches again.
+         */
+        if (recovery.jsonObject["schemaVersion"] == null) {
+            runCatching { drive.write(id, sealed(state, payload)) }
+            return@reachable RemoteRevision(state, version(id))
+        }
+
+        RemoteRevision(state, current)
     }
 
     override suspend fun write(state: VaultState, expectedVersion: String?): String {

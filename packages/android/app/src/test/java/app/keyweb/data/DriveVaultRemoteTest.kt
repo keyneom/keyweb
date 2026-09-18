@@ -17,7 +17,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -282,5 +285,100 @@ class PhoneMadeBackupFixtureTest {
                 ),
             ),
         )
+    }
+}
+
+/**
+ * Repairing a backup written before the envelope carried its own version.
+ *
+ * Builds up to 0.2.0-beta.8 dropped `schemaVersion` and `algorithm` from the
+ * envelope they uploaded, because both hold defaults and the serializer used
+ * there omitted defaults. A phone reads such a file perfectly, so nothing on
+ * this side would ever have noticed; a browser could not open it at all.
+ */
+class LegacyEnvelopeRepairTest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * A reader keyed off the envelope already in Drive.
+     *
+     * The salt lives in the envelope, so a cipher minted with a fresh one
+     * derives a different key and opens nothing — the same trap the
+     * round-trip test above documents.
+     */
+    private suspend fun readerFor(drive: FakeDrive, secret: ByteArray): DriveVaultRemote {
+        val existing = assertNotNull(remoteOn(drive, secret).fetchRecoverySealed())
+        return DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret, existing))
+    }
+
+    /** A file exactly as an older build left it: the two fields simply absent. */
+    private fun asOlderBuildsWroteIt(content: String): String {
+        val payload = json.parseToJsonElement(content).jsonObject
+        val recovery = payload.getValue("recovery").jsonObject
+            .filterKeys { it != "schemaVersion" && it != "algorithm" }
+        return buildJsonObject {
+            payload.forEach { (key, value) -> if (key != "recovery") put(key, value) }
+            put("recovery", JsonObject(recovery))
+        }.toString()
+    }
+
+    @Test
+    fun `rewrites the envelope the first time it is read`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        remoteOn(drive, secret).write(vaultWith("still-here"), null)
+
+        val file = assertNotNull(drive.vaultFile())
+        file.content = asOlderBuildsWroteIt(file.content)
+        val before = json.parseToJsonElement(file.content).jsonObject
+            .getValue("recovery").jsonObject
+        assertTrue(before["schemaVersion"] == null, "the fixture is not the old shape")
+
+        // Reading is enough. It has to be: the engine skips a write when
+        // nothing has changed, so a vault that is simply correct would
+        // otherwise never republish and would stay unreadable in a browser.
+        val revision = assertNotNull(readerFor(drive, secret).read())
+        assertEquals("still-here", revision.state.items["bank"]?.field(Fields.PASSWORD))
+
+        val after = json.parseToJsonElement(assertNotNull(drive.vaultFile()).content)
+            .jsonObject.getValue("recovery").jsonObject
+        assertEquals(1, after.getValue("schemaVersion").jsonPrimitive.content.toInt())
+        assertTrue(after["algorithm"] != null)
+    }
+
+    @Test
+    fun `leaves a healthy backup alone`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        remoteOn(drive, secret).write(vaultWith("untouched"), null)
+        val revisionBefore = assertNotNull(drive.vaultFile()).revision
+
+        assertNotNull(readerFor(drive, secret).read())
+
+        // No second upload: a repair that runs every time is a repair that
+        // fights every other device for the revision.
+        assertEquals(revisionBefore, assertNotNull(drive.vaultFile()).revision)
+    }
+
+    @Test
+    fun `the repaired file is what the web's parser requires`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        remoteOn(drive, secret).write(vaultWith("readable"), null)
+        val file = assertNotNull(drive.vaultFile())
+        file.content = asOlderBuildsWroteIt(file.content)
+
+        readerFor(drive, secret).read()
+
+        // The exact field list `parseSyncEnvelopeV1` checks for.
+        val repaired = json.parseToJsonElement(assertNotNull(drive.vaultFile()).content)
+            .jsonObject.getValue("recovery").jsonObject
+        for (required in listOf(
+            "schemaVersion", "algorithm", "credentialId", "rpId",
+            "prfInput", "kdfSalt", "nonce", "ciphertext", "updatedAt",
+        )) {
+            assertTrue(repaired[required] != null, "missing $required")
+        }
     }
 }
