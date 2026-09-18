@@ -1,5 +1,10 @@
 # Feedback for sync-kit: the Android Picker grant handoff
 
+> A second piece of feedback, on Android passkeys, is in
+> `sync-kit-feedback-passkeys.md`. Both have the same shape: a capability sync-kit
+> ships, stated accurately and briefly enough that a consumer built the wrong
+> thing around its apparent absence.
+
 Written from implementing Keyweb against `@keyneom/sync-kit` 0.4.1, with
 easy-bc's Android implementation as the reference for what actually works.
 
