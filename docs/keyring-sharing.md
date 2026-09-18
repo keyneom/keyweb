@@ -214,6 +214,40 @@ The outgoing owner stays on as an admin. Handing over a household keyring
 almost never means "and remove me from it" — and if it does, the new owner can
 now do that, which is the point of there being a new owner.
 
+## The passkey asymmetry is not real, and the code is built on it
+
+**Android can derive the passkey PRF secret.** sync-kit-android ships
+`AndroidPasskeyKeyProvider`, with `unlockPrf`, in the 0.4.1 this app already
+depends on. easy-bc uses exactly that: one envelope, passkey-derived, read by
+its browser and its phone alike, with no second copy and no recovery code at
+all.
+
+Keyweb assumed the opposite. It seals the Drive backup twice — once under a
+passkey the browser holds, once under a printed recovery code — because the
+phone was believed to have no way to reach a passkey. Two consequences follow
+from an assumption that was simply untrue:
+
+- **The two copies diverge.** The phone can only rewrite the recovery envelope
+  and the browser can only rewrite the passkey one, so after any phone edit the
+  browser's copy is stale, and the browser shows old data rather than nothing.
+- **The recovery code became load-bearing.** It was meant to be the way back in
+  when a passkey is lost. Instead it is the phone's everyday key, which is why
+  a browser resealing that envelope under a different code locked a phone out
+  of its own backup.
+
+The requirement for a passkey on Android is a
+`delegate_permission/common.get_login_creds` entry naming the app in the RP
+domain's `assetlinks.json`. easy-bc's entry has always had it. Keyweb's was
+added with `handle_all_urls` only, on the reasoning that a password manager has
+no business receiving credentials saved for that domain — which reads well and
+is the wrong call, because the same relation is what lets the app hold the
+passkey its own vault is sealed with.
+
+Keyweb should keep the recovery code — easy-bc has none, so a lost passkey
+there is lost data — but as a recovery path, not as one platform's primary key.
+That is a key-derivation migration on vaults that already exist, and it is not
+something to do casually.
+
 ## Still to build
 
 - **Account binding.** sync-kit can carry a Google ID token plus a passkey
