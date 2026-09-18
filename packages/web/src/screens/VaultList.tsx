@@ -59,6 +59,15 @@ export function VaultList({
   const [sort, setSort] = useRememberedSort<ItemSort>("item-sort", "name-az");
   /** Where in the folder tree the list is looking. */
   const [folder, setFolder] = useState<string[]>([]);
+  /**
+   * Browsing the tree, or looking at every password at once.
+   *
+   * Two genuinely different questions — "what is in here" and "where is this
+   * one thing" — and a list that only answers the first makes the second take
+   * a walk through folders somebody did not build. Both keep the keyring chips
+   * and the ordering, so a filter is a filter either way.
+   */
+  const [flat, setFlat] = useRememberedSort<"folders" | "flat">("browse-mode", "folders");
 
   /**
    * Selection mode.
@@ -130,8 +139,11 @@ export function VaultList({
    */
   const searching = query.trim() !== "";
   const view = useMemo(
-    () => (searching ? { folders: [], items: shown } : browseFolders(shown, state, folder, ring)),
-    [searching, shown, state, folder, ring],
+    () =>
+      searching || flat === "flat"
+        ? { folders: [], items: shown }
+        : browseFolders(shown, state, folder, ring),
+    [searching, flat, shown, state, folder, ring],
   );
 
   return (
@@ -230,7 +242,35 @@ export function VaultList({
         what is in the list and ordering decides where in it to look, and
         reading them in that order matches doing them in it.
       */}
-      <SortPicker label="Order" value={sort} options={ITEM_SORTS} onChange={setSort} />
+      <div className="browserow">
+        <SortPicker label="Order" value={sort} options={ITEM_SORTS} onChange={setSort} />
+        {/*
+          Two buttons rather than one whose label is its state: "In folders" on
+          a single toggle could mean "you are" or "make it so", and there is no
+          way to tell from looking.
+        */}
+        <div className="rings" role="group" aria-label="How to browse">
+          <button
+            type="button"
+            className="ring"
+            aria-pressed={flat === "folders"}
+            onClick={() => setFlat("folders")}
+          >
+            In folders
+          </button>
+          <button
+            type="button"
+            className="ring"
+            aria-pressed={flat === "flat"}
+            onClick={() => {
+              setFlat("flat");
+              setFolder([]);
+            }}
+          >
+            Everything
+          </button>
+        </div>
+      </div>
 
       <StatusLine
         status={status}
@@ -246,7 +286,7 @@ export function VaultList({
         each one click away — going from "Leslie / Banks / Cards" to the top
         should not be three gestures and a guess about how deep you were.
       */}
-      {!searching && folder.length > 0 && (
+      {!searching && flat === "folders" && folder.length > 0 && (
         <nav className="crumbs" aria-label="Folders">
           <button type="button" className="linkish" onClick={() => setFolder([])}>
             All

@@ -132,6 +132,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
     var keyringSort by rememberSaveable {
         mutableStateOf(prefs.getString("keyring-sort", null) ?: KeyringSort.NAME_AZ.id)
     }
+    var browseFlat by rememberSaveable { mutableStateOf(prefs.getBoolean("browse-flat", false)) }
 
     /*
      * Reading a QR code without asking for the camera.
@@ -382,6 +383,11 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onSortChanged = {
                             itemSort = it
                             prefs.edit().putString("item-sort", it).apply()
+                        },
+                        savedFlat = browseFlat,
+                        onFlatChanged = {
+                            browseFlat = it
+                            prefs.edit().putBoolean("browse-flat", it).apply()
                         },
                         // Through GrantBrowser, which knows the things that
                         // make an https intent fail silently on Android — the

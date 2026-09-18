@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -130,6 +131,9 @@ fun VaultListScreen(
     /** The ordering last chosen, remembered across launches. */
     savedSort: String = ItemSort.NAME_AZ.id,
     onSortChanged: (String) -> Unit = {},
+    /** Whether the list was last left showing everything rather than folders. */
+    savedFlat: Boolean = false,
+    onFlatChanged: (Boolean) -> Unit = {},
 ) {
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
@@ -142,6 +146,15 @@ fun VaultListScreen(
      * reassembled by hand.
      */
     var folderPath by rememberSaveable { mutableStateOf("") }
+    /**
+     * Browsing the tree, or looking at every password at once.
+     *
+     * Two genuinely different questions — "what is in here" and "where is this
+     * one thing" — and a list that only answers the first makes the second
+     * take a walk through folders somebody did not build. Both keep the
+     * keyring chips and the ordering, so a filter is a filter either way.
+     */
+    var flat by rememberSaveable { mutableStateOf(savedFlat) }
     val folder = folderPath.split('\u0000').filter { it.isNotEmpty() }
     val statusColors = LocalKeywebStatus.current
 
@@ -189,7 +202,7 @@ fun VaultListScreen(
      * that a password they can see in the list does not exist.
      */
     val searching = query.isNotBlank()
-    val view = if (searching) {
+    val view = if (searching || flat) {
         FolderView(emptyList(), shown)
     } else {
         browseFolders(shown, state, folder, ring)
@@ -286,15 +299,43 @@ fun VaultListScreen(
             // Under the filters rather than beside the search box: filtering
             // narrows what is in the list and ordering decides where in it to
             // look, and reading them in that order matches doing them in it.
-            SortPicker(
-                current = sort,
-                options = ItemSort.entries.map { it.id to it.label },
-                onPick = {
-                    sort = it
-                    onSortChanged(it)
-                },
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SortPicker(
+                    current = sort,
+                    options = ItemSort.entries.map { it.id to it.label },
+                    onPick = {
+                        sort = it
+                        onSortChanged(it)
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                // Two chips rather than one button whose label is its state:
+                // "In folders" on a button could mean "you are" or "make it
+                // so", and there is no way to tell from looking.
+                FilterChip(
+                    selected = !flat,
+                    onClick = {
+                        flat = false
+                        onFlatChanged(false)
+                    },
+                    colors = keywebChipColors(),
+                    label = { Text("In folders") },
+                )
+                Spacer(Modifier.width(6.dp))
+                FilterChip(
+                    selected = flat,
+                    onClick = {
+                        flat = true
+                        folderPath = ""
+                        onFlatChanged(true)
+                    },
+                    colors = keywebChipColors(),
+                    label = { Text("Everything") },
+                )
+            }
 
             // Above the backup notice: a stale build is the more urgent of the
             // two, since it can be the reason the rest is misbehaving.
@@ -320,7 +361,7 @@ fun VaultListScreen(
              * a keyring should not be two gestures and a guess about how deep
              * you were.
              */
-            if (!searching && folder.isNotEmpty()) {
+            if (!searching && !flat && folder.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                         .padding(bottom = 6.dp),
