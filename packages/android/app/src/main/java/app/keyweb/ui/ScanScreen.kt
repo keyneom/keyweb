@@ -1,5 +1,6 @@
 package app.keyweb.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -7,13 +8,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -33,7 +37,12 @@ import androidx.compose.ui.unit.dp
 import app.keyweb.ScanUiState
 import app.keyweb.vault.AccountPlan
 import app.keyweb.vault.PlanReason
+import app.keyweb.vault.Fields
+import app.keyweb.vault.ItemSort
 import app.keyweb.vault.VaultState
+import app.keyweb.vault.field
+import app.keyweb.vault.sortItems
+import app.keyweb.vault.visibleItems
 
 /**
  * Bringing second-factor codes in from an authenticator app.
@@ -59,12 +68,30 @@ fun ScanScreen(
     onToggle: (String) -> Unit,
     onSelectAll: (Boolean) -> Unit,
     onAdd: (keyringId: String?, newKeyringName: String?) -> Unit,
+    onRetarget: (key: String, itemId: String?) -> Unit = { _, _ -> },
 ) {
     val colors = LocalKeywebStatus.current
     val rings = state.keyrings.values.filter { !it.deleted.value }
     var destination by rememberSaveable { mutableStateOf<String?>(null) }
     var newRingName by rememberSaveable { mutableStateOf("") }
+    // Which row is being redirected by hand, if any.
+    var choosing by rememberSaveable { mutableStateOf<String?>(null) }
     val ticked = scan.accounts.count { it.selected }
+
+    choosing?.let { key ->
+        DestinationPicker(
+            state = state,
+            // Already spoken for by another row. Offering them would be
+            // offering to lose a code.
+            takenBy = scan.accounts.filter { it.key != key }
+                .mapNotNull { it.plan.existingItemId }.toSet(),
+            onPick = { itemId ->
+                onRetarget(key, itemId)
+                choosing = null
+            },
+            onDismiss = { choosing = null },
+        )
+    }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
@@ -170,6 +197,16 @@ fun ScanScreen(
                                     },
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
+                                // The rules refuse to guess wherever guessing
+                                // could lose a code, which leaves the person
+                                // who knows the answer with no way to say it.
+                                // This is that way.
+                                TextButton(
+                                    onClick = { choosing = pending.key },
+                                    contentPadding = PaddingValues(0.dp),
+                                ) {
+                                    Text("Send it somewhere else")
+                                }
                                 if (pending.account.counterBased) {
                                     Text(
                                         "This one counts up instead of using the clock. " +
@@ -243,6 +280,82 @@ fun ScanScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * Choosing by hand which password a code belongs to.
+ *
+ * A search box rather than a plain list, because a vault with two hundred
+ * passwords in it makes a list a worse answer than no list. Passwords already
+ * spoken for by another row are shown greyed and refuse the tap, so the reason
+ * they cannot be chosen is visible rather than being a gap in the list that
+ * looks like a bug.
+ */
+@Composable
+private fun DestinationPicker(
+    state: VaultState,
+    takenBy: Set<String>,
+    onPick: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalKeywebStatus.current
+    var query by rememberSaveable { mutableStateOf("") }
+    val needle = query.trim().lowercase()
+    val choices = sortItems(
+        visibleItems(state).filter {
+            needle.isEmpty() ||
+                listOfNotNull(it.field(Fields.TITLE), it.field(Fields.USERNAME))
+                    .joinToString(" ").lowercase().contains(needle)
+        },
+        ItemSort.NAME_AZ,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Which password is this code for?") },
+        text = {
+            Column(Modifier.heightIn(max = 380.dp)) {
+                EditField("Search", query, { query = it }, "Start typing a name")
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    choices.forEach { item ->
+                        val taken = takenBy.contains(item.id)
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !taken) { onPick(item.id) }
+                                .padding(vertical = 8.dp),
+                        ) {
+                            Text(
+                                item.field(Fields.TITLE) ?: "Untitled",
+                                color = if (taken) colors.muted else MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                if (taken) {
+                                    "Already taken by another code on this screen"
+                                } else {
+                                    item.field(Fields.USERNAME).orEmpty()
+                                },
+                                color = colors.muted,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        HorizontalDivider(color = colors.line)
+                    }
+                    if (choices.isEmpty()) {
+                        Text(
+                            "Nothing matches that.",
+                            color = colors.muted,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPick(null) }) { Text("Make it a new password") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**

@@ -1,4 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import {
+  csvOmissions,
+  exportCsv,
+  exportVault,
+  type VaultState,
+} from "@keyweb/vault-core";
 import { BackIcon } from "../ui/icons";
 import type { Appearance, TextSize } from "../vault/useDisplaySettings";
 import type { SharingApi } from "../vault/useVault";
@@ -116,6 +122,7 @@ export function Settings({
   onBack,
   onImport,
   onLock,
+  state,
   sharing,
 }: {
   textSize: TextSize;
@@ -125,6 +132,8 @@ export function Settings({
   onBack: () => void;
   onImport: () => void;
   onLock: () => void;
+  /** The vault as it stands, so an export is built from what is on screen. */
+  state: VaultState;
   /** Null when this build has no Google account and so cannot share at all. */
   sharing: SharingApi | null;
 }) {
@@ -183,6 +192,8 @@ export function Settings({
         </button>
       </fieldset>
 
+      <ExportSection state={state} />
+
       {sharing && <SharingKey sharing={sharing} />}
 
       <Choice
@@ -197,5 +208,84 @@ export function Settings({
         onChange={onAppearance}
       />
     </>
+  );
+}
+
+/**
+ * Taking a copy of everything out.
+ *
+ * The door has to swing both ways. The import was built on the promise that
+ * somebody could bring their KeePass file in and delete the original, and
+ * without this that promise reads "your data is yours as long as you keep
+ * using Keyweb" — the Drive backup is a sealed envelope only Keyweb can open,
+ * which is a safety net and not a way out.
+ */
+function ExportSection({ state }: { state: VaultState }) {
+  // Built once per render of this screen rather than on the click, so the
+  // counts below and the file that gets written come from the same pass: a
+  // warning derived separately from the thing it warns about goes stale.
+  const exported = useMemo(() => exportVault(state), [state]);
+  const omissions = csvOmissions(exported);
+
+  function save(kind: "json" | "csv") {
+    const text = kind === "csv" ? exportCsv(exported) : JSON.stringify(exported, null, 2);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([text], {
+      type: kind === "csv" ? "text/csv;charset=utf-8" : "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `keyweb-${stamp}.${kind}`;
+    link.click();
+    // The blob holds every password in memory until it is released, and the
+    // download has already been handed to the browser by this point.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
+  const losses = [
+    omissions.files > 0 && `${omissions.files} attached file${omissions.files === 1 ? "" : "s"}`,
+    omissions.customFields > 0 &&
+      `${omissions.customFields} of your own field${omissions.customFields === 1 ? "" : "s"}`,
+    omissions.history > 0 &&
+      `${omissions.history} earlier value${omissions.history === 1 ? "" : "s"}`,
+  ].filter((part): part is string => typeof part === "string");
+
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
+      <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
+        Take a copy of everything
+      </legend>
+      <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+        Your passwords in a plain file you can read, print, or load into another password app.
+      </p>
+      {/*
+        Before the buttons, not after the file exists. Somebody who decides
+        this is a bad idea should be able to decide it while there is still
+        nothing on disk.
+      */}
+      <p className="status" data-tone="attention" style={{ margin: "0 0 0.7rem" }}>
+        <span>
+          <b>This file is not locked.</b>
+          <em>
+            Anyone who opens it can read every password in it. Save it somewhere only you can
+            reach, and delete it when you&rsquo;re done.
+          </em>
+        </span>
+      </p>
+      <div className="stack">
+        <button type="button" className="btn sec big" onClick={() => save("json")}>
+          Save everything (keeps files and history)
+        </button>
+        <button type="button" className="btn sec big" onClick={() => save("csv")}>
+          Save for another password app
+        </button>
+      </div>
+      <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0.6rem 0 0" }}>
+        {exported.items.length} password{exported.items.length === 1 ? "" : "s"} either way. The
+        second file is the one other apps can read
+        {losses.length > 0 ? `, and it leaves behind ${losses.join(", ")} — those only fit in the first.` : "."}
+      </p>
+    </fieldset>
   );
 }

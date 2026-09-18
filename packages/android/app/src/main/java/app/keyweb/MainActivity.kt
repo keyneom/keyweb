@@ -258,6 +258,20 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
             if (uri != null && blobId != null) viewModel.saveAttachment(blobId, uri)
         }
 
+        /*
+         * A separate launcher from the attachment one, with its own MIME type,
+         * so the system's file chooser offers the right name and the right
+         * apps. Sharing one launcher would mean a `.csv` offered as
+         * `application/octet-stream`, which several file apps then refuse to
+         * open afterwards.
+         */
+        var exportingCsv by rememberSaveable { mutableStateOf(false) }
+        val exportFile = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("*/*"),
+        ) { uri ->
+            if (uri != null) viewModel.writeExport(uri, exportingCsv)
+        }
+
         val clipboardScope = rememberCoroutineScope()
 
         fun copy(value: String, label: String) {
@@ -513,6 +527,14 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             viewModel.lock()
                             route = Route.List
                         },
+                        exportSummary = viewModel.exportSummary(),
+                        onExport = { csv ->
+                            exportingCsv = csv
+                            val stamp = java.time.LocalDate.now()
+                            exportFile.launch(
+                                if (csv) "keyweb-$stamp.csv" else "keyweb-$stamp.json",
+                            )
+                        },
                         onImport = {
                             // Quietly: if Drive access already exists the list
                             // fills in, and if it does not, nothing interrupts.
@@ -532,6 +554,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onToggle = viewModel::toggleScanned,
                         onSelectAll = viewModel::setAllScanned,
                         onAdd = viewModel::addScanned,
+                        onRetarget = viewModel::retargetScanned,
                     )
 
                     is Route.Import -> ImportScreen(

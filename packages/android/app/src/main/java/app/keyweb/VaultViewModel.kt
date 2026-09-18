@@ -41,6 +41,12 @@ import app.keyweb.vault.InvalidRecoveryCode
 import app.keyweb.vault.Fields
 import app.keyweb.vault.AccountPlan
 import app.keyweb.vault.Authenticator
+import app.keyweb.vault.CsvOmissions
+import app.keyweb.vault.PlanReason
+import app.keyweb.vault.csvOmissions
+import app.keyweb.vault.exportCsv
+import app.keyweb.vault.exportJson
+import app.keyweb.vault.exportVault
 import app.keyweb.vault.planAccounts
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.NotAnAccountCode
@@ -1625,6 +1631,54 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         setScan { it.copy(error = message, busy = false) }
     }
 
+    /**
+     * Say by hand where a scanned code should go.
+     *
+     * The automatic rules refuse to guess wherever guessing could lose a
+     * second factor, which is right and also leaves the person who *knows* the
+     * answer with no way to say it. This is that way.
+     *
+     * It does not relax the guarantees, it satisfies them differently. Pointing
+     * a code at a password takes that password away from any other row holding
+     * it, because two rows writing one `otp` field would still lose one of
+     * them — a person choosing the destination is choosing, not overriding the
+     * arithmetic. Passing null sends it back to being a new password.
+     */
+    fun retargetScanned(key: String, itemId: String?) {
+        val item = itemId?.let { _state.value.vault.items[it] }
+        setScan { state ->
+            state.copy(
+                error = null,
+                accounts = state.accounts.map { row ->
+                    when {
+                        row.key == key -> row.copy(
+                            plan = row.plan.copy(
+                                existingItemId = item?.id,
+                                existingTitle = item?.field(Fields.TITLE),
+                                existingUsername = item?.field(Fields.USERNAME),
+                                reason = if (item == null) {
+                                    PlanReason.NEW
+                                } else {
+                                    PlanReason.ONTO_EXISTING
+                                },
+                            ),
+                        )
+
+                        // Guarantee 1 still holds: nothing else may keep it.
+                        item != null && row.plan.existingItemId == item.id -> row.copy(
+                            plan = row.plan.copy(
+                                existingItemId = null,
+                                reason = PlanReason.NEW,
+                            ),
+                        )
+
+                        else -> row
+                    }
+                },
+            )
+        }
+    }
+
     fun toggleScanned(key: String) {
         setScan { state ->
             state.copy(
@@ -1747,6 +1801,52 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         error = cause.message ?: "Keyweb couldn't add those.",
                     )
                 }
+            }
+        }
+    }
+
+    // ---- Taking everything back out ------------------------------------
+
+    /**
+     * What an export would contain, so the screen can say it before writing.
+     *
+     * Counted rather than estimated, and counted from the same function that
+     * builds the file — a warning derived separately from the thing it warns
+     * about is a warning that goes stale.
+     */
+    fun exportSummary(): Pair<Int, CsvOmissions> {
+        val exported = exportVault(_state.value.vault, java.time.Instant.now().toString())
+        return exported.items.size to csvOmissions(exported)
+    }
+
+    /**
+     * Write a plaintext copy of everything to a file the person chose.
+     *
+     * Unencrypted on purpose: an encrypted export that only Keyweb can open is
+     * the thing being escaped from. The screen says so, and so does the file.
+     */
+    fun writeExport(uri: android.net.Uri, asCsv: Boolean) {
+        viewModelScope.launch {
+            try {
+                val exported = withContext(Dispatchers.Default) {
+                    exportVault(_state.value.vault, java.time.Instant.now().toString())
+                }
+                val text = withContext(Dispatchers.Default) {
+                    if (asCsv) exportCsv(exported) else exportJson(exported)
+                }
+                withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver
+                        .openOutputStream(uri, "wt")
+                        ?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        ?: error("Keyweb couldn't write to that file.")
+                }
+                showToast(
+                    "Saved ${exported.items.size} password" +
+                        (if (exported.items.size == 1) "" else "s") +
+                        ". Remember it isn't encrypted.",
+                )
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't save that file.")
             }
         }
     }

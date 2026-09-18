@@ -65,6 +65,7 @@ import app.keyweb.vault.Totp
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
+import app.keyweb.vault.CsvOmissions
 import app.keyweb.vault.ItemSort
 import app.keyweb.vault.KeyringSort
 import app.keyweb.vault.PastValue
@@ -1265,6 +1266,9 @@ fun SettingsScreen(
     onImport: () -> Unit,
     onScanCodes: () -> Unit = {},
     onLock: () -> Unit = {},
+    onExport: (csv: Boolean) -> Unit = {},
+    /** How many passwords, and what a CSV would leave behind. */
+    exportSummary: Pair<Int, CsvOmissions>? = null,
     /** Null when this build has no Google account and so cannot share at all. */
     sharingKey: String? = null,
     canShare: Boolean = false,
@@ -1363,6 +1367,61 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Lock now", onLock)
+
+            /*
+             * The door has to swing both ways.
+             *
+             * The import was built on the promise that somebody could bring
+             * their KeePass file in and delete the original. Without this,
+             * that promise reads "your data is yours as long as you keep using
+             * Keyweb" — the Drive backup is a sealed envelope only Keyweb can
+             * open, which is a safety net and not a way out.
+             */
+            Spacer(Modifier.height(24.dp))
+            Text("Take a copy of everything", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Your passwords in a plain file you can read, print, or load into another " +
+                    "password app.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            // Before the buttons, not after the file exists. Somebody who
+            // decides this is a bad idea should be able to decide it while
+            // there is still nothing on disk.
+            StatusLine(
+                tone = Tone.ATTENTION,
+                headline = "This file is not locked",
+                detail = "Anyone who opens it can read every password in it. Save it somewhere " +
+                    "only you can reach, and delete it when you're done.",
+                modifier = Modifier.padding(bottom = 10.dp),
+            )
+            SecondaryButton(
+                "Save everything (keeps files and history)",
+                { onExport(false) },
+                Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Save for another password app", { onExport(true) })
+            exportSummary?.let { (count, omissions) ->
+                val losses = buildList {
+                    if (omissions.files > 0) add("${omissions.files} attached file" + if (omissions.files == 1) "" else "s")
+                    if (omissions.customFields > 0) add("${omissions.customFields} of your own field" + if (omissions.customFields == 1) "" else "s")
+                    if (omissions.history > 0) add("${omissions.history} earlier value" + if (omissions.history == 1) "" else "s")
+                }
+                Text(
+                    "$count password" + (if (count == 1) "" else "s") + " either way. " +
+                        if (losses.isEmpty()) {
+                            "The second file is the one other apps can read."
+                        } else {
+                            "The second file is the one other apps can read, and it leaves " +
+                                "behind " + losses.joinToString(", ") +
+                                " — those only fit in the first."
+                        },
+                    color = statusColors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
             Text("Text size", style = MaterialTheme.typography.labelLarge)

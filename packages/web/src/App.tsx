@@ -366,6 +366,7 @@ export function App() {
             vault.lock();
             setRoute({ name: "list" });
           }}
+          state={vault.state}
           sharing={vault.sharing}
         />
       )}
