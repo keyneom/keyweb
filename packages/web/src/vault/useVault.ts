@@ -20,7 +20,7 @@ import {
   InvalidRecoveryCode,
   parseRecoveryCode,
 } from "./recovery";
-import { GoogleDriveRemote } from "./drive";
+import { type AccountContents, GoogleDriveRemote } from "./drive";
 import {
   createKeywebSharingController,
   createSharingIdentity,
@@ -108,6 +108,14 @@ export type VaultApi = {
   recoveryNeedsCode: boolean;
   /** Prove the existing code, then keep the recovery copy current from here. */
   adoptRecoveryCode(code: string): Promise<void>;
+  /**
+   * What the signed-in Google account holds, without opening any of it.
+   *
+   * Null until something asks. It exists so a screen that cannot show the
+   * vault can still answer "is my data gone?", which is the only question
+   * somebody actually has when a password manager comes up empty.
+   */
+  accountContents: AccountContents | null;
   lock(): void;
   syncNow(): Promise<void>;
   saveItem(input: {
@@ -210,6 +218,7 @@ export function useVault(): VaultApi {
   const [phase, setPhase] = useState<VaultPhase>("checking");
   const [firstRun, setFirstRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountContents, setAccountContents] = useState<AccountContents | null>(null);
   const [state, setState] = useState<VaultState>(emptyVault);
   const [status, setStatus] = useState<SyncStatus>({
     pending: 0,
@@ -512,6 +521,13 @@ export function useVault(): VaultApi {
     try {
       // Only the raw envelope is needed here, and fetching it never decrypts.
       const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+      // Whatever happens next, say what is in the account. An empty screen and
+      // an empty account are opposite situations that look identical.
+      void probe
+        .describeContents()
+        .then(setAccountContents)
+        .catch(() => undefined);
+
       const sealed = await probe.fetchSealedState();
       if (!sealed) {
         /*
@@ -911,6 +927,7 @@ export function useVault(): VaultApi {
     newRecoveryCode,
     recoveryNeedsCode,
     adoptRecoveryCode,
+    accountContents,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,
     syncNow,

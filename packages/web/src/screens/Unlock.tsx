@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AlertIcon, KeyIcon, ShieldIcon } from "../ui/icons";
+import type { AccountContents } from "../vault/drive";
 import type { VaultPhase } from "../vault/useVault";
 
 /**
@@ -17,6 +18,7 @@ export function Unlock({
   onUnlock,
   onRestore,
   onRestoreWithCode,
+  contents,
 }: {
   phase: VaultPhase;
   firstRun: boolean;
@@ -25,6 +27,8 @@ export function Unlock({
   onUnlock: () => void;
   onRestore: () => void;
   onRestoreWithCode: (code: string) => void;
+  /** What the account holds, once something has looked. Null until then. */
+  contents: AccountContents | null;
 }) {
   const [code, setCode] = useState("");
   const [showCode, setShowCode] = useState(false);
@@ -68,6 +72,37 @@ export function Unlock({
             <em>You can try again below.</em>
           </span>
         </p>
+      )}
+
+      {/*
+        What is in the account, whenever something went wrong reaching it.
+
+        The complaint this answers is a screen that comes up empty and says it
+        is synced, which is indistinguishable from an account with nothing in
+        it. Those are opposite situations, and nobody should have to tell them
+        apart by feel. None of it needs a key: the timestamp comes from the
+        envelope header and the names are Drive file names their owner chose.
+      */}
+      {error && contents && (
+        <div className="status" data-tone="calm">
+          <ShieldIcon />
+          <span>
+            <b>Your passwords are still there.</b>
+            <em>
+              {contents.backup
+                ? `This Google account has a Keyweb backup, last changed ${whenChanged(
+                    contents.backup.updatedAt,
+                  )}. ${
+                    contents.backup.opensWithCode
+                      ? "Your recovery code opens it."
+                      : "It has no recovery copy, so only the device that made it can open it."
+                  }`
+                : "This Google account has no Keyweb backup in it yet."}
+              {contents.sharedKeyrings.length > 0 &&
+                ` Shared with you: ${contents.sharedKeyrings.join(", ")}.`}
+            </em>
+          </span>
+        </div>
       )}
 
       <button type="button" className="btn pri big" onClick={onUnlock} disabled={busy}>
@@ -143,4 +178,24 @@ export function Unlock({
       )}
     </section>
   );
+}
+
+/**
+ * When the backup last changed, in words.
+ *
+ * Somebody checking whether their passwords survived is reading this to decide
+ * whether the date looks like the last time they used the app. "3 hours ago"
+ * answers that; an ISO timestamp makes them do arithmetic under stress.
+ */
+function whenChanged(at: string | null): string {
+  if (!at) return "at some point";
+  const then = Date.parse(at);
+  if (Number.isNaN(then)) return "at some point";
+  const minutes = Math.floor((Date.now() - then) / 60_000);
+  if (minutes < 2) return "just now";
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }

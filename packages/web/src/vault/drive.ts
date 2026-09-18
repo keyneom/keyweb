@@ -1,4 +1,5 @@
 import { GoogleDriveFileStore } from "@keyneom/sync-kit/stores/google-drive";
+import { listAccessibleSyncKitDatasets } from "@keyneom/sync-kit/stores/google-drive/sharing";
 import type { Authorization } from "@keyneom/sync-kit/core";
 import {
   BackupUnreadableError,
@@ -199,6 +200,23 @@ function looksLikeEnvelope(value: object): boolean {
   return (value as { schemaVersion?: unknown }).schemaVersion === 1;
 }
 
+/**
+ * What is in a Google account, as far as can be told without a key.
+ *
+ * Deliberately says nothing about contents. Names of shared keyrings come from
+ * Drive file names, which their owner chose and Drive already shows them; the
+ * vault's own contents stay sealed.
+ */
+export type AccountContents = {
+  backup: {
+    /** When the vault last changed, from whichever copy is newer. */
+    updatedAt: string | null;
+    opensWithPasskey: boolean;
+    opensWithCode: boolean;
+  } | null;
+  sharedKeyrings: string[];
+};
+
 export type DriveRemoteOptions = {
   clientId: string;
   cipher: VaultCipher;
@@ -310,6 +328,48 @@ export class GoogleDriveRemote implements RemoteVaultStore {
         cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
       );
     }
+  }
+
+  /**
+   * What this Google account actually holds, without opening any of it.
+   *
+   * Every field here is readable from file metadata and envelope headers, so
+   * it answers the question somebody asks when a screen comes up empty —
+   * *is my data gone?* — without a key to anything.
+   *
+   * The empty screen was the real complaint. A browser that cannot open the
+   * backup showed nothing and said it was synced, which is indistinguishable
+   * from an account with nothing in it. Those are opposite situations and a
+   * person cannot be expected to tell them apart by feel.
+   */
+  async describeContents(): Promise<AccountContents> {
+    const authorization = await this.#auth();
+    const shared = await listAccessibleSyncKitDatasets({
+      appId: "keyweb",
+      authorization,
+    }).catch(() => []);
+
+    const fileId = await this.#findFile(authorization);
+    if (!fileId) return { backup: null, sharedKeyrings: shared.map((d) => d.name) };
+
+    const content = await this.#store.readText(fileId, authorization);
+    const payload = content.trim() ? parsePayload(content) : null;
+    if (!payload) return { backup: null, sharedKeyrings: shared.map((d) => d.name) };
+
+    return {
+      backup: {
+        // The newer of the two, because that is when the vault last changed —
+        // whichever device happened to write that copy.
+        updatedAt:
+          [sealedAt(payload.passkey), sealedAt(payload.recovery)]
+            .filter((at): at is string => at !== null)
+            .sort()
+            .pop() ?? null,
+        opensWithPasskey: payload.passkey !== undefined,
+        opensWithCode: payload.recovery !== undefined,
+      },
+      sharedKeyrings: shared.map((dataset) => dataset.name),
+    };
   }
 
   async read(): Promise<RemoteRevision | null> {

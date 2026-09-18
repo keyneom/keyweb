@@ -213,6 +213,7 @@ export function App() {
           onUnlock={() => void vault.unlock()}
           onRestore={() => void vault.restore()}
           onRestoreWithCode={(code) => void vault.restoreWithCode(code)}
+          contents={vault.accountContents}
         />
       </main>
     );
