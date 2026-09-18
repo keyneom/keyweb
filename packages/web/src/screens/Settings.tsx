@@ -121,6 +121,7 @@ export function Settings({
   onAppearance,
   onBack,
   onImport,
+  onScanCodes,
   onLock,
   state,
   sharing,
@@ -131,6 +132,7 @@ export function Settings({
   onAppearance: (value: Appearance) => void;
   onBack: () => void;
   onImport: () => void;
+  onScanCodes: () => void;
   onLock: () => void;
   /** The vault as it stands, so an export is built from what is on screen. */
   state: VaultState;
@@ -187,9 +189,18 @@ export function Settings({
         <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
           Bring in a KeePass or KeeWeb file, keeping your folders and tags.
         </p>
-        <button type="button" className="btn sec big" onClick={onImport}>
-          Import from KeePass or KeeWeb
-        </button>
+        <div className="stack">
+          <button type="button" className="btn sec big" onClick={onImport}>
+            Import from KeePass or KeeWeb
+          </button>
+          <button type="button" className="btn sec big" onClick={onScanCodes}>
+            Codes from another app
+          </button>
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0.6rem 0 0" }}>
+          The second one brings your six-digit codes over from Google Authenticator, so they live
+          beside the passwords they belong to.
+        </p>
       </fieldset>
 
       <ExportSection state={state} />

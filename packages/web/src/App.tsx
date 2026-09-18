@@ -19,6 +19,7 @@ import type { SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
 import { Settings } from "./screens/Settings";
+import { ScanCodes } from "./screens/ScanCodes";
 import { RecoverySheet } from "./screens/RecoverySheet";
 import { Unlock } from "./screens/Unlock";
 import { VaultList } from "./screens/VaultList";
@@ -33,6 +34,7 @@ type Route =
   | { name: "keyrings" }
   | { name: "settings" }
   | { name: "import" }
+  | { name: "scan" }
   | { name: "share"; keyringId: string };
 
 export function App() {
@@ -362,12 +364,21 @@ export function App() {
           onAppearance={display.setAppearance}
           onBack={() => setRoute({ name: "list" })}
           onImport={() => setRoute({ name: "import" })}
+          onScanCodes={() => setRoute({ name: "scan" })}
           onLock={() => {
             vault.lock();
             setRoute({ name: "list" });
           }}
           state={vault.state}
           sharing={vault.sharing}
+        />
+      )}
+
+      {route.name === "scan" && (
+        <ScanCodes
+          state={vault.state}
+          onBack={() => setRoute({ name: "settings" })}
+          onAdd={vault.addScannedCodes}
         />
       )}
 

@@ -36,6 +36,7 @@ export type { Member, PendingInvite, ShareRole } from "./sharing";
 import type { SharingDatasetFileV1, SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import type { SharingInvitationV1 } from "@keyneom/sync-kit/sharing";
 import { importOperations } from "./keepass";
+import type { AccountPlan } from "./account-plan";
 import { prepareFile } from "./attachments";
 import type { ImportPreview, UngroupedDestination } from "./keepass";
 
@@ -115,6 +116,11 @@ export type VaultApi = {
     fields: Partial<Record<ItemField, string>>;
   }): Promise<void>;
   deleteItem(itemId: string): Promise<void>;
+  /** Write scanned second-factor codes where their plans say they go. */
+  addScannedCodes(
+    plans: AccountPlan[],
+    destination: { keyringId: string } | { newKeyringName: string },
+  ): Promise<void>;
   moveItem(itemId: string, keyringId: string): Promise<void>;
   deleteItems(itemIds: string[]): Promise<void>;
   moveItems(itemIds: string[], keyringId: string): Promise<void>;
@@ -597,6 +603,77 @@ export function useVault(): VaultApi {
     [refresh, backgroundSync],
   );
 
+  /**
+   * Write scanned second-factor codes where their plans say they go.
+   *
+   * The check is not belt and braces. An item holds one `otp` field, so two
+   * puts on one item resolve to the later one and lose the other — exactly the
+   * failure the planner exists to prevent — and this is the last place before
+   * the writes where it can still be stopped.
+   */
+  const addScannedCodes = useCallback<VaultApi["addScannedCodes"]>(
+    async (plans, destination) => {
+      const sync = syncRef.current;
+      if (!sync) return;
+
+      const targets = plans.map((plan) => plan.existingItemId).filter((id) => id !== null);
+      if (new Set(targets).size !== targets.length) {
+        throw new Error("Two codes were pointed at the same password.");
+      }
+
+      const ops: VaultOp[] = [];
+      let keyringId: string;
+      if ("keyringId" in destination) {
+        keyringId = destination.keyringId;
+      } else {
+        const name = destination.newKeyringName.trim();
+        const existing = Object.values(state.keyrings).find(
+          (ring) => !ring.deleted.value && ring.name.value === name,
+        );
+        if (existing) {
+          keyringId = existing.id;
+        } else {
+          keyringId = crypto.randomUUID();
+          const { opId, ts } = sync.stamp();
+          ops.push({ kind: "keyring.put", opId, ts, keyringId, name });
+        }
+      }
+
+      for (const plan of plans) {
+        const { opId, ts } = sync.stamp();
+        if (plan.existingItemId !== null) {
+          // Only the code. Nothing else about the password they already have
+          // is this QR code's business.
+          ops.push({
+            kind: "item.put",
+            opId,
+            ts,
+            itemId: plan.existingItemId,
+            keyringId: state.items[plan.existingItemId]?.keyring.value ?? keyringId,
+            fields: { otp: plan.account.otp },
+          });
+        } else {
+          ops.push({
+            kind: "item.put",
+            opId,
+            ts,
+            itemId: crypto.randomUUID(),
+            keyringId,
+            fields: {
+              title: plan.account.issuer || plan.account.name || "Second-factor code",
+              ...(plan.account.name ? { username: plan.account.name } : {}),
+              otp: plan.account.otp,
+            },
+          });
+        }
+      }
+
+      refresh(await sync.commitAll(ops));
+      backgroundSync();
+    },
+    [state.keyrings, state.items, refresh, backgroundSync],
+  );
+
   const deleteItem = useCallback(
     async (itemId: string) => {
       const sync = syncRef.current;
@@ -816,6 +893,7 @@ export function useVault(): VaultApi {
     lock,
     syncNow,
     saveItem,
+    addScannedCodes,
     deleteItem,
     moveItem,
     deleteItems,
