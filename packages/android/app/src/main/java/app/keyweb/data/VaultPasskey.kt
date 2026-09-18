@@ -1,0 +1,172 @@
+package app.keyweb.data
+
+import android.app.Activity
+import app.keyweb.vault.EnvelopeMetadata
+import app.keyweb.vault.KeywebEnvelope
+import app.keyweb.vault.SyncEnvelopeV1
+import app.keyweb.vault.VaultEnvelopeCipher
+import com.keyneom.synckit.core.SyncCodec
+import com.keyneom.synckit.crypto.PasskeyProfile
+import com.keyneom.synckit.crypto.V1CompatibilityProfile
+import com.keyneom.synckit.crypto.V1Compression
+import com.keyneom.synckit.crypto.V1EnvelopeCrypto
+import com.keyneom.synckit.keys.AndroidPasskeyKeyProvider
+
+/**
+ * The same passkey the browser uses, on the phone.
+ *
+ * ## Why this exists, late
+ *
+ * Keyweb was built believing an Android app could not reach a WebAuthn PRF
+ * secret, and every awkward thing about its backup follows from that: the Drive
+ * file is sealed twice, once under the browser's passkey and once under the
+ * printed recovery code, because no key appeared to be reachable from both
+ * sides. Each platform could only rewrite one of the two, so they drifted apart
+ * — and a browser resealing the recovery envelope under its own code once
+ * locked a phone out of its own backup.
+ *
+ * The belief was simply wrong. `AndroidPasskeyKeyProvider` ships in the
+ * sync-kit-android this app already depends on, easy-bc has used it from the
+ * start, and the only thing missing was a `get_login_creds` entry in the RP
+ * domain's `assetlinks.json` — which Keyweb's own asset link deliberately
+ * omitted, with a confident and inverted explanation of why.
+ *
+ * ## What it derives
+ *
+ * `unlock` hands back the raw PRF output. The HKDF that turns that into a
+ * content key lives in [VaultEnvelopeCipher.forPasskeySecret], and is the same
+ * derivation over the same salt with the same label that the browser runs. So
+ * the two arrive at the same key, and the `passkey` envelope is readable and
+ * writable from either side.
+ *
+ * ## The RP id
+ *
+ * `keyneom.github.io`, the registrable domain the web app is served from. A
+ * passkey is bound to it exactly, so this must match `keywebRpId()` on the web
+ * or the phone will create a second credential rather than find the existing
+ * one. Getting it wrong does not fail loudly; it simply never finds anything.
+ */
+object VaultPasskey {
+
+    /**
+     * The RP the passkey belongs to.
+     *
+     * The bare domain, not the `/keyweb/` path — an RP id is a domain and
+     * cannot carry one. It is shared with easy-bc, which is noted rather than
+     * liked: two apps under one RP id are distinguished only by credential id.
+     */
+    const val RP_ID = "keyneom.github.io"
+
+    /**
+     * Mirrors the web's `keywebV1Profile` exactly.
+     *
+     * Every value here is part of the wire format. Changing one makes existing
+     * backups unreadable, and disagreeing with the browser over any of them
+     * means the two derive different keys from the same passkey and neither
+     * can open what the other wrote.
+     */
+    private val profile = V1CompatibilityProfile(
+        appId = "keyweb",
+        filename = "keyweb-vault-v1.json",
+        aad = KeywebEnvelope.AAD,
+        hkdfInfo = KeywebEnvelope.HKDF_INFO,
+        compression = V1Compression.GZIP_IF_SMALLER,
+        passkey = PasskeyProfile(
+            rpName = "Keyweb",
+            userName = "vault",
+            userDisplayName = "Keyweb vault",
+        ),
+    )
+
+    /**
+     * A codec the provider requires and this use never exercises.
+     *
+     * `AndroidPasskeyKeyProvider` is constructed with an envelope crypto, which
+     * is constructed with a payload codec — but nothing here seals a payload
+     * through it. Keyweb's own [VaultEnvelopeCipher] does that, because the
+     * envelope format is pinned byte for byte against the browser by fixtures
+     * and must keep going through the implementation those fixtures cover.
+     */
+    private object UnusedCodec : SyncCodec<Unit> {
+        override fun serialize(value: Unit): ByteArray = ByteArray(0)
+
+        override fun parse(bytes: ByteArray) = Unit
+
+        override fun merge(local: Unit, remote: Unit) = Unit
+
+        override fun fingerprint(value: Unit): String = ""
+
+        override fun updatedAt(value: Unit): String = "1970-01-01T00:00:00.000Z"
+    }
+
+    private val provider by lazy {
+        AndroidPasskeyKeyProvider(profile, RP_ID, V1EnvelopeCrypto(profile, UnusedCodec))
+    }
+
+    /**
+     * Raised when the phone has no passkey for this vault, or cannot use one.
+     *
+     * Its own type because the caller's response is specific: carry on with the
+     * recovery envelope and say so, rather than treat the backup as broken.
+     * A missing `get_login_creds` asset link surfaces from Credential Manager
+     * as a bare "no credential", indistinguishable from "this person has never
+     * made one" — which is exactly the signal that produced the wrong
+     * conclusion this class exists to undo.
+     */
+    class Unavailable(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+    /** Open an existing passkey envelope, giving back a cipher for it. */
+    suspend fun unlock(activity: Activity, envelope: SyncEnvelopeV1): VaultEnvelopeCipher =
+        try {
+            val secret = provider.unlock(activity, envelope.toSyncKit())
+            VaultEnvelopeCipher.forPasskeySecret(secret, envelope.toMetadata())
+        } catch (cause: Exception) {
+            throw Unavailable(
+                "This phone couldn't use the passkey that opens your backup.",
+                cause,
+            )
+        }
+
+    /** Make a passkey for this vault, for a backup that has none yet. */
+    suspend fun create(activity: Activity): VaultEnvelopeCipher =
+        try {
+            val created = provider.create(activity, "Keyweb vault")
+            VaultEnvelopeCipher.forPasskeySecret(
+                created.key,
+                EnvelopeMetadata(
+                    credentialId = created.metadata.credentialId,
+                    rpId = created.metadata.rpId,
+                    prfInput = created.metadata.prfInput,
+                    kdfSalt = created.metadata.kdfSalt,
+                ),
+            )
+        } catch (cause: Exception) {
+            throw Unavailable("This phone couldn't make a passkey for your backup.", cause)
+        }
+
+    /** Drop the cached key, so the next use asks again. */
+    fun clear() = provider.clear()
+}
+
+/** Keyweb's envelope as sync-kit's, for the one call that needs its shape. */
+private fun SyncEnvelopeV1.toSyncKit(): com.keyneom.synckit.crypto.SyncEnvelopeV1 =
+    com.keyneom.synckit.crypto.SyncEnvelopeV1(
+        schemaVersion = schemaVersion,
+        algorithm = algorithm,
+        compression = compression,
+        credentialId = credentialId,
+        rpId = rpId,
+        prfInput = prfInput,
+        kdfSalt = kdfSalt,
+        nonce = nonce,
+        ciphertext = ciphertext,
+        updatedAt = updatedAt,
+    )
+
+private fun SyncEnvelopeV1.toMetadata(): EnvelopeMetadata =
+    EnvelopeMetadata(
+        credentialId = credentialId,
+        rpId = rpId,
+        prfInput = app.keyweb.vault.Base64Url.decode(prfInput),
+        kdfSalt = app.keyweb.vault.Base64Url.decode(kdfSalt),
+    )

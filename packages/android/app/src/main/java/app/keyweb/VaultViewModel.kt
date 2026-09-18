@@ -10,6 +10,7 @@ import app.keyweb.data.DriveVaultRemote
 import app.keyweb.data.DriveFiles
 import app.keyweb.data.GoogleAuthorizer
 import app.keyweb.data.RoomVaultStorage
+import app.keyweb.data.VaultPasskey
 import app.keyweb.data.SwitchableRemote
 import app.keyweb.data.UnlockResult
 import app.keyweb.data.VaultDatabase
@@ -414,6 +415,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * dismissed, and the prompt cannot be raised again automatically without
      * making the app impossible to leave.
      */
+    /** The Activity a passkey sheet can be raised from, while one is unlocked. */
+    private var passkeyHost: java.lang.ref.WeakReference<FragmentActivity>? = null
+
     fun unlock(activity: FragmentActivity) {
         val firstRun = _state.value.firstRun
         _state.value = _state.value.copy(
@@ -438,7 +442,19 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         error = result.message,
                     )
 
-                is UnlockResult.Unlocked -> openVault()
+                is UnlockResult.Unlocked -> {
+                    /*
+                     * Held for the passkey ceremony, which Credential Manager
+                     * can only run from an Activity — and the backup is
+                     * restored a moment later, off this same unlock.
+                     *
+                     * A weak reference so a rotated-away Activity cannot be
+                     * kept alive by the view model, and cleared on lock. The
+                     * only thing it is ever used for is raising the sheet.
+                     */
+                    passkeyHost = java.lang.ref.WeakReference(activity)
+                    openVault()
+                }
             }
         }
     }
@@ -530,6 +546,8 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     /** Drop the decrypted vault. The Keystore window may still be open, but
      *  nothing readable stays in memory. */
     fun lock() {
+        passkeyHost = null
+        VaultPasskey.clear()
         sync = null
         sharingIdentity?.clear()
         sharingIdentity = null
@@ -705,6 +723,80 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun driveClient() = DriveClient { authorizer.accessToken() }
 
+    /**
+     * The passkey copy's cipher, when this phone can have one.
+     *
+     * Best effort on purpose. A phone that declines the sheet, has no
+     * Credential Manager, or is on a build where the asset link has not
+     * propagated still syncs perfectly through the recovery envelope — it
+     * simply carries the passkey copy forward instead of refreshing it, which
+     * is what any device that cannot rewrite an envelope should do.
+     *
+     * When there is no passkey envelope in the file yet, one is *not* created
+     * here. Making a passkey is a sheet with a fingerprint on it, and raising
+     * that unprompted during a background restore is the kind of thing that
+     * teaches people to dismiss security prompts. It is offered deliberately
+     * instead, from the backup screen.
+     */
+    private suspend fun passkeyCipherFor(probe: DriveVaultRemote): VaultEnvelopeCipher? {
+        val activity = passkeyHost?.get() ?: return null
+        val envelope = runCatching { probe.fetchPasskeySealed() }.getOrNull() ?: return null
+        return runCatching { VaultPasskey.unlock(activity, envelope) }.getOrNull()
+    }
+
+    /**
+     * Give this phone a passkey for the backup, so it writes both copies.
+     *
+     * The thing that ends the divergence. Until a device can seal both
+     * envelopes, whichever one it cannot write goes stale the moment it edits
+     * anything — and the other device reads that stale copy believing it is
+     * current.
+     */
+    fun addPasskeyToBackup() {
+        val activity = passkeyHost?.get()
+        if (activity == null) {
+            showToast("Open Keyweb and unlock it first.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val secret = storedSecret()
+                if (secret == null) {
+                    showToast("Set up backup first.")
+                    return@launch
+                }
+                val client = driveClient()
+                val probe = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
+                val existing = probe.fetchRecoverySealed()
+                // An envelope already there is joined, not replaced: replacing
+                // it would lock out whichever browser wrote it.
+                val onFile = runCatching { probe.fetchPasskeySealed() }.getOrNull()
+                val passkey = if (onFile != null) {
+                    VaultPasskey.unlock(activity, onFile)
+                } else {
+                    VaultPasskey.create(activity)
+                }
+                remote.attach(
+                    DriveVaultRemote(
+                        client,
+                        VaultEnvelopeCipher.forRecoveryCode(secret, existing),
+                        passkeyCipher = passkey,
+                    ),
+                )
+                syncNow()
+                showToast(
+                    if (onFile != null) {
+                        "This phone can open the browser's copy now."
+                    } else {
+                        "Done. Your browser can open this backup with the same passkey."
+                    },
+                )
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't set up a passkey for the backup.")
+            }
+        }
+    }
+
     /** Turn the remote back on at unlock, silently, if it was set up before. */
     private suspend fun restoreBackupIfConfigured() {
         val secret = storedSecret() ?: return
@@ -712,10 +804,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             val client = driveClient()
             // Reuse the salt already in Drive, or the derived key will differ
             // from the one that sealed the backup and open nothing.
-            val existing = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
-                .fetchRecoverySealed()
+            val probe = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
+            val existing = probe.fetchRecoverySealed()
             remote.attach(
-                DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret, existing)),
+                DriveVaultRemote(
+                    client,
+                    VaultEnvelopeCipher.forRecoveryCode(secret, existing),
+                    passkeyCipher = passkeyCipherFor(probe),
+                ),
             )
             _state.value = _state.value.copy(
                 backupConfigured = true,

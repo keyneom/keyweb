@@ -384,3 +384,116 @@ class LegacyEnvelopeRepairTest {
         }
     }
 }
+
+/**
+ * One vault, two envelopes, neither of them going stale.
+ *
+ * The backup is sealed twice — under a browser's passkey and under the printed
+ * recovery code — and for most of this app's life the phone could only rewrite
+ * one of them. So every phone edit left the browser's copy behind, and the
+ * browser read that stale copy as current: not an error, just quietly old.
+ *
+ * Now that the phone derives the same passkey secret the browser does, a write
+ * from here refreshes both. These pin that, and pin the case where it cannot.
+ */
+class BothEnvelopesTest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** Stands in for the passkey-derived cipher, which needs an Activity. */
+    private fun passkeyLike(seed: Byte) =
+        VaultEnvelopeCipher.forPasskeySecret(
+            ByteArray(32) { seed },
+            app.keyweb.vault.EnvelopeMetadata(
+                credentialId = "browser-credential",
+                rpId = "keyneom.github.io",
+                prfInput = ByteArray(32) { 7 },
+                kdfSalt = ByteArray(32) { 9 },
+            ),
+        )
+
+    private fun envelopeAt(content: String, member: String) =
+        json.parseToJsonElement(content).jsonObject[member]?.jsonObject
+
+    @Test
+    fun `a write from the phone refreshes both copies`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        val passkey = passkeyLike(3)
+
+        val remote = DriveVaultRemote(
+            drive,
+            VaultEnvelopeCipher.forRecoveryCode(secret),
+            passkeyCipher = passkey,
+        )
+        remote.write(vaultWith("written-on-the-phone"), null)
+
+        val content = assertNotNull(drive.vaultFile()).content
+        assertTrue(envelopeAt(content, "passkey") != null, "no passkey envelope: $content")
+        assertTrue(envelopeAt(content, "recovery") != null, "no recovery envelope")
+
+        // The decisive part: what a browser would open holds the same vault as
+        // what the phone would open. Neither copy is behind the other.
+        val viaPasskey = passkey.open(
+            json.decodeFromJsonElement(
+                app.keyweb.vault.SyncEnvelopeV1.serializer(),
+                envelopeAt(content, "passkey")!!,
+            ),
+        )
+        assertEquals(
+            "written-on-the-phone",
+            viaPasskey.items["bank"]?.field(Fields.PASSWORD),
+        )
+    }
+
+    /** And it reads the browser's copy back, which it never could before. */
+    @Test
+    fun `the phone reads what a browser wrote`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        val passkey = passkeyLike(3)
+
+        // A browser publishes; only it can seal the passkey copy, so the
+        // recovery copy here is deliberately something else entirely.
+        DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret), passkey)
+            .write(vaultWith("written-in-the-browser"), null)
+
+        val phone = DriveVaultRemote(
+            drive,
+            VaultEnvelopeCipher.forRecoveryCode(secret, null),
+            passkeyCipher = passkey,
+        )
+        val revision = assertNotNull(phone.read())
+        assertEquals(
+            "written-in-the-browser",
+            revision.state.items["bank"]?.field(Fields.PASSWORD),
+        )
+    }
+
+    /**
+     * A phone that cannot use the passkey — sheet declined, Credential Manager
+     * missing, asset link not yet propagated — must carry the copy it cannot
+     * rewrite, not drop it. Dropping one silently removes somebody's way into
+     * their own backup, and they find out on the day they need it.
+     */
+    @Test
+    fun `without a passkey it carries the browser's copy forward`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+
+        DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret), passkeyLike(3))
+            .write(vaultWith("first"), null)
+        val before = envelopeAt(assertNotNull(drive.vaultFile()).content, "passkey")
+
+        // The same phone, now unable to produce a passkey cipher.
+        val existing = assertNotNull(
+            DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret))
+                .fetchRecoverySealed(),
+        )
+        DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(secret, existing))
+            .write(vaultWith("second"), null)
+
+        val after = envelopeAt(assertNotNull(drive.vaultFile()).content, "passkey")
+        assertEquals(before, after, "the passkey copy was rewritten or dropped")
+    }
+}

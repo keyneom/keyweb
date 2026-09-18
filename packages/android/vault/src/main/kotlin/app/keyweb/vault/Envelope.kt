@@ -245,6 +245,25 @@ class VaultEnvelopeCipher internal constructor(
             return fromMetadata(secret, metadata)
         }
 
+        /**
+         * The cipher for a passkey-derived backup.
+         *
+         * [prfSecret] is the raw PRF output a WebAuthn assertion produces —
+         * what sync-kit's `KeyProvider.unlock` hands back, on either platform.
+         * The HKDF below is the same one the browser runs over the same bytes
+         * with the same salt and the same label, so a phone and a browser
+         * arrive at the same key and one envelope serves both.
+         *
+         * That this was possible on Android all along is the point: sync-kit
+         * ships `AndroidPasskeyKeyProvider`, this app just never called it, and
+         * the second recovery-code-sealed envelope exists only because of that
+         * omission.
+         */
+        fun forPasskeySecret(
+            prfSecret: ByteArray,
+            metadata: EnvelopeMetadata,
+        ): VaultEnvelopeCipher = fromMetadata(prfSecret, metadata)
+
         internal fun fromMetadata(secret: ByteArray, metadata: EnvelopeMetadata): VaultEnvelopeCipher {
             val derived =
                 hkdfSha256(

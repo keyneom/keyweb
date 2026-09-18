@@ -215,7 +215,26 @@ The outgoing owner stays on as an admin. Handing over a household keyring
 almost never means "and remove me from it" — and if it does, the new owner can
 now do that, which is the point of there being a new owner.
 
-## The passkey asymmetry is not real, and the code is built on it
+## The passkey asymmetry is not real — and is no longer assumed
+
+**Fixed 2026-09-18.** The phone derives the passkey PRF secret through
+sync-kit's `AndroidPasskeyKeyProvider`, feeds it to the same HKDF the browser
+runs, and arrives at the same key. So the phone can now read *and* write the
+`passkey` envelope, and every write from either device refreshes both copies
+from one state. Neither side is left reading a copy the other cannot update.
+
+The recovery code stays, and goes back to being what it was for: the way in
+when a passkey is gone. easy-bc has no equivalent, so a lost passkey there is
+lost data, and for a password manager that is not acceptable.
+
+Two deliberate limits. A phone that cannot use the passkey — sheet declined, no
+Credential Manager, asset link not yet propagated — still syncs through the
+recovery envelope and **carries the passkey copy forward untouched** rather
+than dropping it. And a passkey is never created during a background restore;
+raising a fingerprint sheet unprompted is how people learn to dismiss security
+prompts, so it is offered from the backup screen instead.
+
+## How the wrong assumption got in
 
 **Android can derive the passkey PRF secret.** sync-kit-android ships
 `AndroidPasskeyKeyProvider`, with `unlockPrf`, in the 0.4.1 this app already

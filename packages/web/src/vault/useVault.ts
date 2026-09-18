@@ -572,6 +572,17 @@ export function useVault(): VaultApi {
         const { cipher, lock } = await unlockVault(null);
         const storage = await IndexedDbVaultStorage.open({ cipher });
         await storage.applyRemote(recovered);
+        /*
+         * Keep the code, so this browser can rewrite the recovery copy too.
+         *
+         * Without it the browser can only ever seal the passkey envelope and
+         * the phone can only ever seal the recovery one, so whichever device
+         * wrote last leaves the other's copy stale — and the stale one is read
+         * as current, which is worse than an error. The code was just proved
+         * against the live envelope a few lines above, so this is storing
+         * something already verified rather than something believed.
+         */
+        await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
         await start(cipher, lock, false);
       } catch (cause) {
         setError(describe(cause));

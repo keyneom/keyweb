@@ -44,6 +44,16 @@ import kotlinx.serialization.json.put
 class DriveVaultRemote(
     private val drive: DriveFiles,
     private val cipher: VaultEnvelopeCipher,
+    /**
+     * The passkey-sealed copy, when this phone has opened one.
+     *
+     * Null is not "there isn't one" — it is "this phone cannot write it right
+     * now", which happens when the passkey ceremony was declined or Credential
+     * Manager was unavailable. Either way the envelope is carried forward
+     * untouched rather than dropped, because a device that cannot rewrite an
+     * envelope has no business deleting it.
+     */
+    private val passkeyCipher: VaultEnvelopeCipher? = null,
 ) : RemoteVaultStore {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -111,10 +121,39 @@ class DriveVaultRemote(
         json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
     }
 
+    /** The passkey-sealed copy, when the file has one. */
+    suspend fun fetchPasskeySealed(): SyncEnvelopeV1? = reachable {
+        val id = locate() ?: return@reachable null
+        val passkey = parse(drive.readText(id))?.passkey ?: return@reachable null
+        runCatching {
+            json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), passkey)
+        }.getOrNull()
+    }
+
     override suspend fun read(): RemoteRevision? = reachable {
         val id = locate() ?: return@reachable null
         val current = version(id)
         val payload = parse(drive.readText(id)) ?: return@reachable null
+
+        /*
+         * The passkey copy first, when this phone can open one.
+         *
+         * Both copies hold the same vault whenever the device that wrote them
+         * could seal both — which, now that the phone has a passkey, is every
+         * ordinary write. Preferring the passkey envelope is what makes a
+         * browser's write visible here without waiting for anything, and it is
+         * the direction that used to be impossible: the phone could only ever
+         * read the copy the browser could not rewrite.
+         */
+        val viaPasskey = passkeyCipher?.let { key ->
+            payload.passkey?.let { raw ->
+                runCatching {
+                    key.open(json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), raw))
+                }.getOrNull()
+            }
+        }
+        if (viaPasskey != null) return@reachable RemoteRevision(viaPasskey, current)
+
         val recovery = payload.recovery ?: return@reachable null
         val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
         /*
@@ -209,14 +248,34 @@ class DriveVaultRemote(
         }
     }
 
+    /**
+     * The file as this device would write it now.
+     *
+     * Both envelopes when this phone can seal both, which since it gained a
+     * passkey is the ordinary case. That is the whole point of the passkey:
+     * every write refreshes both copies from the same state, so they cannot
+     * drift apart, and neither device is left reading a copy the other cannot
+     * update.
+     *
+     * Whatever cannot be sealed here is carried forward byte for byte. A
+     * device that cannot rewrite an envelope has no business deleting it —
+     * dropping one silently removes somebody's way into their own backup, and
+     * they find out on the day they need it.
+     */
     private fun sealed(state: VaultState, existing: Payload?): String {
-        val envelope = cipher.seal(state, updatedAt = Instant.now().toString())
+        val at = Instant.now().toString()
+        val rewritten = mutableSetOf("recovery")
+        val recovery = cipher.seal(state, updatedAt = at)
+        val passkey = passkeyCipher?.seal(state, updatedAt = at)?.also { rewritten += "passkey" }
+
         val next = buildJsonObject {
             put("v", 1)
-            // Every member of the existing payload survives except the one this
-            // device is authoritative for.
-            existing?.raw?.forEach { (key, value) -> if (key != "recovery") put(key, value) }
-            put("recovery", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), envelope))
+            // Every member this device is not authoritative for survives.
+            existing?.raw?.forEach { (key, value) -> if (key !in rewritten) put(key, value) }
+            put("recovery", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), recovery))
+            passkey?.let {
+                put("passkey", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), it))
+            }
         }
         return next.toString()
     }
