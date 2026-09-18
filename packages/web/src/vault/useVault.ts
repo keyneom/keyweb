@@ -583,6 +583,12 @@ export function useVault(): VaultApi {
          * something already verified rather than something believed.
          */
         await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
+        // The envelope too, not just the code. The key is derived from the
+        // code *and the salt recorded in the envelope*, so without this the
+        // next unlock mints a fresh salt, derives a key that opens nothing,
+        // and this browser silently loses the ability to reseal the copy it
+        // just proved it could open.
+        await storage.writeMeta("recovery-envelope", sealed);
         await start(cipher, lock, false);
       } catch (cause) {
         setError(describe(cause));

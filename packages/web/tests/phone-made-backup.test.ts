@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { itemField } from "@keyweb/vault-core";
+import { itemField, RemoteUnavailableError } from "@keyweb/vault-core";
 import { BackupNeedsRecoveryCodeError, GoogleDriveRemote } from "../src/vault/drive";
 import { createRecoveryCipher, unlockVault } from "../src/vault/crypto";
 import {
@@ -222,5 +222,55 @@ describe("a browser must not overwrite a backup it cannot read", () => {
     // Byte for byte. The phone's way into its own backup is not this
     // browser's to retire.
     expect(after).toEqual(before);
+  });
+});
+
+/**
+ * A browser holding the wrong passkey is not a browser that is offline.
+ *
+ * It happens whenever the credential that sealed the file is not the one this
+ * browser has: a second browser, a reinstall, a profile that lost its passkey.
+ * The decrypt fails, and it used to be flattened into `RemoteUnavailableError`
+ * — which means "offline", so the engine retried quietly forever and the
+ * screen never said the one thing that would have helped. There was no way
+ * out, because the way out is a recovery code nobody was asked for.
+ */
+describe("a browser whose passkey does not fit", () => {
+  it("asks for the recovery code instead of looking offline", async () => {
+    const drive = new FakeDrive();
+
+    // One browser writes the backup...
+    const first = await browser(drive);
+    await first.write(
+      {
+        keyrings: {
+          ring: {
+            id: "ring",
+            name: { value: "Home", ts: "001700000000000-00000-w" },
+            deleted: { value: false, ts: "000000000000000-00000-" },
+            dataset: { value: "", ts: "000000000000000-00000-" },
+          },
+        },
+        items: {},
+      },
+      null,
+    );
+
+    // ...and a different one, with a different credential, reads it.
+    const { cipher } = await unlockVault(null, {
+      rpId: "localhost",
+      navigator: fakeAuthenticator(42),
+      secureContext: () => true,
+    });
+    const other = new GoogleDriveRemote({
+      clientId: "test",
+      cipher,
+      store: drive.asStore(),
+      authorize: async () => ({ accessToken: "token" }) as never,
+    });
+
+    await expect(other.read()).rejects.toThrow(BackupNeedsRecoveryCodeError);
+    // And it is emphatically not the error that means "retry later, quietly".
+    await expect(other.read()).rejects.not.toThrow(RemoteUnavailableError);
   });
 });

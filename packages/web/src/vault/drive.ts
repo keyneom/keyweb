@@ -296,7 +296,24 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       if (payload.passkey === undefined) {
         throw new BackupNeedsRecoveryCodeError();
       }
-      const state = await this.#cipher.openState(payload.passkey);
+      /*
+       * A passkey envelope this passkey cannot open is the same problem as no
+       * passkey envelope at all, and needs the same answer.
+       *
+       * It happens whenever a browser holds a *different* credential from the
+       * one that sealed the file — a second browser, a reinstall, a profile
+       * that lost its passkey. Left as a raw failure it became
+       * `RemoteUnavailableError`, which means "offline": the engine retries
+       * quietly forever, the screen says nothing useful, and there is no way
+       * out because the thing that would fix it is a recovery code nobody was
+       * asked for.
+       */
+      let state: VaultState;
+      try {
+        state = await this.#cipher.openState(payload.passkey);
+      } catch {
+        throw new BackupNeedsRecoveryCodeError();
+      }
       return { state, version };
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
