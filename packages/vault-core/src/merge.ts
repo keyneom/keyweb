@@ -6,7 +6,15 @@ import type {
   Reg,
   VaultState,
 } from "./model.js";
-import { fieldsOf, historyOf, HISTORY_LIMIT, pickReg, reg } from "./model.js";
+import {
+  fieldsOf,
+  historyOf,
+  HISTORY_LIMIT,
+  itemsOf,
+  keyringsOf,
+  pickReg,
+  reg,
+} from "./model.js";
 import { HLC_ZERO } from "./hlc.js";
 
 /**
@@ -83,9 +91,13 @@ function normalise(item: ItemRecord): ItemRecord {
 
 export function mergeVaults(a: VaultState, b: VaultState): VaultState {
   const items: Record<string, ItemRecord> = {};
-  for (const id of new Set([...Object.keys(a.items), ...Object.keys(b.items)])) {
-    const left = a.items[id];
-    const right = b.items[id];
+  // Through the accessors: both maps are absent-meaning-empty on anything a
+  // phone wrote, and a merge is the first thing that touches a remote read.
+  const aItems = itemsOf(a);
+  const bItems = itemsOf(b);
+  for (const id of new Set([...Object.keys(aItems), ...Object.keys(bItems)])) {
+    const left = aItems[id];
+    const right = bItems[id];
     if (left && right) items[id] = mergeItem(left, right);
     // Normalised on the way through, not merely tolerated on the way in. An
     // item that only one side has is copied rather than merged, so without
@@ -95,9 +107,11 @@ export function mergeVaults(a: VaultState, b: VaultState): VaultState {
     else if (right) items[id] = normalise(right);
   }
   const keyrings: Record<string, KeyringRecord> = {};
-  for (const id of new Set([...Object.keys(a.keyrings), ...Object.keys(b.keyrings)])) {
-    const left = a.keyrings[id];
-    const right = b.keyrings[id];
+  const aRings = keyringsOf(a);
+  const bRings = keyringsOf(b);
+  for (const id of new Set([...Object.keys(aRings), ...Object.keys(bRings)])) {
+    const left = aRings[id];
+    const right = bRings[id];
     if (left && right) keyrings[id] = mergeKeyring(left, right);
     else if (left) keyrings[id] = left;
     else if (right) keyrings[id] = right;

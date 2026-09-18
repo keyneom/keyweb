@@ -1,5 +1,13 @@
 import { attachmentsOf, isBlobItem, itemField, itemsOnKeyrings, type VaultState } from "./model.js";
-import { fieldLabel, isSecretField, type ItemRecord } from "./model.js";
+import {
+  fieldLabel,
+  fieldsOf,
+  historyOf,
+  isSecretField,
+  itemsOf,
+  keyringsOf,
+  type ItemRecord,
+} from "./model.js";
 import { decodeHlc } from "./hlc.js";
 
 /**
@@ -82,7 +90,7 @@ const WARNING =
   "Keep it somewhere safe, or delete it once you have finished with it.";
 
 export function exportVault(state: VaultState, now: Date = new Date()): VaultExport {
-  const keyrings = Object.values(state.keyrings)
+  const keyrings = Object.values(keyringsOf(state))
     .filter((ring) => !ring.deleted.value)
     .map((ring) => ({ id: ring.id, name: ring.name.value }));
 
@@ -106,7 +114,7 @@ const PRESENTED = new Set(["title", "username", "password", "url", "note", "otp"
 function exportItem(item: ItemRecord, state: VaultState): ExportedItem {
   const of = (name: string) => itemField(item, name) ?? "";
 
-  const fields = Object.keys(item.fields)
+  const fields = Object.keys(fieldsOf(item))
     // The pointer at a file is plumbing; the file itself is in `files`.
     .filter((name) => !PRESENTED.has(name) && !name.startsWith("file:"))
     .filter((name) => of(name) !== "")
@@ -114,7 +122,7 @@ function exportItem(item: ItemRecord, state: VaultState): ExportedItem {
     .map((name) => ({ name: fieldLabel(name), value: of(name), secret: isSecretField(name) }));
 
   const files = attachmentsOf(item).flatMap((attachment) => {
-    const blob = state.items[attachment.blobId];
+    const blob = itemsOf(state)[attachment.blobId];
     if (!blob) return [];
     const data = itemField(blob, "secret:data") ?? "";
     if (data === "") return [];
@@ -131,7 +139,7 @@ function exportItem(item: ItemRecord, state: VaultState): ExportedItem {
   return {
     id: item.id,
     keyring: item.keyring.value,
-    keyringName: state.keyrings[item.keyring.value]?.name.value ?? "",
+    keyringName: keyringsOf(state)[item.keyring.value]?.name.value ?? "",
     title: of("title"),
     username: of("username"),
     password: of("password"),
@@ -142,7 +150,7 @@ function exportItem(item: ItemRecord, state: VaultState): ExportedItem {
     tags: of("tags"),
     fields,
     files,
-    history: item.history
+    history: historyOf(item)
       .filter((entry) => entry.value !== "")
       .map((entry) => ({
         field: fieldLabel(entry.field),

@@ -326,10 +326,10 @@ export function visibleItems(state: VaultState): ItemRecord[] {
  * and readable by whoever still has that document.
  */
 export function itemsOnKeyrings(state: VaultState): ItemRecord[] {
-  return Object.values(state.items)
+  return Object.values(itemsOf(state))
     .filter((item) => !item.deleted.value)
     .filter((item) => {
-      const ring = state.keyrings[item.keyring.value];
+      const ring = keyringsOf(state)[item.keyring.value];
       return ring !== undefined && !ring.deleted.value;
     });
 }
@@ -369,16 +369,47 @@ export function historyOf(item: ItemRecord): HistoryEntry[] {
 }
 
 /**
+ * Where a keyring's items live, whatever the wire left out.
+ *
+ * `dataset` holds a default, so a keyring a phone wrote has no `dataset` key
+ * at all — and `maxHlc` read `.ts` straight off it on every single sync,
+ * immediately after every read. That is "Cannot read properties of undefined
+ * (reading 'ts')", and it fired before anything else could go right.
+ */
+export function datasetReg(keyring: KeyringRecord): Reg<string> {
+  return keyring.dataset ?? { value: "", ts: HLC_ZERO };
+}
+
+/**
+ * The five members a Kotlin writer is allowed to omit.
+ *
+ * Kotlin drops a property still holding its default, so `items`, `keyrings`,
+ * `fields`, `history` and `dataset` are all absent-meaning-empty on anything a
+ * phone wrote. Every one of them has now cost a crash or a silent wrong answer
+ * on the web, one at a time, because each was found and fixed alone.
+ *
+ * So they are listed here together and read through accessors. A new defaulted
+ * property on the Kotlin side is a wire change that belongs on this list.
+ */
+export function itemsOf(state: VaultState): Record<string, ItemRecord> {
+  return state.items ?? {};
+}
+
+export function keyringsOf(state: VaultState): Record<string, KeyringRecord> {
+  return state.keyrings ?? {};
+}
+
+/**
  * A stable content fingerprint. Two states that would present identically to
  * the user produce the same string, so we can skip a pointless upload — but it
  * deliberately covers timestamps too, because a state whose registers advanced
  * is genuinely different and must be published for other devices to converge.
  */
 export function fingerprint(state: VaultState): string {
-  const items = Object.keys(state.items)
+  const items = Object.keys(itemsOf(state))
     .sort()
     .map((id) => {
-      const item = state.items[id];
+      const item = itemsOf(state)[id];
       if (!item) return "";
       const fields = Object.keys(fieldsOf(item))
         .sort()
@@ -390,10 +421,10 @@ export function fingerprint(state: VaultState): string {
       return `${id}|${item.keyring.ts}:${item.keyring.value}|${item.deleted.ts}:${item.deleted.value}|${fields}`;
     })
     .join(";");
-  const keyrings = Object.keys(state.keyrings)
+  const keyrings = Object.keys(keyringsOf(state))
     .sort()
     .map((id) => {
-      const ring = state.keyrings[id];
+      const ring = keyringsOf(state)[id];
       if (!ring) return "";
       const base = `${id}|${ring.name.ts}:${ring.name.value}|${ring.deleted.ts}:${ring.deleted.value}`;
       // Appended only once the register has actually been written, so a vault

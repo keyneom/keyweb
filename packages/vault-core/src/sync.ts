@@ -8,9 +8,13 @@ import {
   BLOB_KIND,
   isBlobItem,
   datasetOf,
+  datasetReg,
   emptyVault,
+  fieldsOf,
   fingerprint,
+  itemsOf,
   itemsOnKeyrings,
+  keyringsOf,
 } from "./model.js";
 import type { VaultOp } from "./ops.js";
 import { applyOp, applyOps } from "./ops.js";
@@ -46,18 +50,21 @@ export function maxHlc(state: VaultState): Hlc {
   const bump = (ts: Hlc) => {
     if (ts > max) max = ts;
   };
-  for (const item of Object.values(state.items)) {
+  // Read through the accessors: every one of these members is absent, not
+  // empty, on anything a phone wrote, and this runs on the result of every
+  // single read.
+  for (const item of Object.values(itemsOf(state))) {
     bump(item.keyring.ts);
     bump(item.deleted.ts);
-    for (const field of Object.values(item.fields)) bump(field.ts);
+    for (const field of Object.values(fieldsOf(item))) bump(field.ts);
   }
-  for (const ring of Object.values(state.keyrings)) {
+  for (const ring of Object.values(keyringsOf(state))) {
     bump(ring.name.ts);
     bump(ring.deleted.ts);
     // Where a keyring lives is causal time like any other write. Skipping it
     // would let a device that has just learned of a binding stamp its next
     // edit *before* that binding, and lose to it.
-    bump(ring.dataset.ts);
+    bump(datasetReg(ring).ts);
   }
   return max;
 }

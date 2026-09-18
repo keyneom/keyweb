@@ -1,5 +1,5 @@
 import { decodeHlc } from "./hlc.js";
-import { itemField, type ItemRecord, type KeyringRecord } from "./model.js";
+import { fieldsOf, itemField, type ItemRecord, type KeyringRecord } from "./model.js";
 
 /**
  * How a list is ordered, as one choice rather than two.
@@ -46,7 +46,7 @@ export const KEYRING_SORTS: { value: KeyringSort; label: string }[] = [
  */
 export function lastChangedAt(item: ItemRecord): number {
   let newest = decodeHlc(item.keyring.ts).wall;
-  for (const register of Object.values(item.fields)) {
+  for (const register of Object.values(fieldsOf(item))) {
     const wall = decodeHlc(register.ts).wall;
     if (wall > newest) newest = wall;
   }
