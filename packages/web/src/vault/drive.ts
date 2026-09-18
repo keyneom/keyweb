@@ -169,6 +169,25 @@ export class BackupBehindError extends BackupUnreadableError {
   }
 }
 
+/**
+ * This Google account holds more than one Keyweb vault file.
+ *
+ * Refused rather than resolved. Picking one means writing to it, and writing
+ * to the wrong one strands everything in the other — so the only safe move is
+ * to stop and let somebody look at their own Drive, where the files are
+ * visible and dated.
+ */
+export class TooManyBackupsError extends BackupUnreadableError {
+  constructor(readonly count: number) {
+    super(
+      `There are ${count} Keyweb backup files in this Google account, and Keyweb won't ` +
+        "guess which one is yours. Open Google Drive, look in the Keyweb folder, and remove " +
+        "or rename the ones you don't want — the newest is usually the one to keep.",
+    );
+    this.name = "TooManyBackupsError";
+  }
+}
+
 /** Can this cipher actually open that envelope? The only honest test is to try. */
 async function opens(cipher: VaultCipher, envelope: unknown): Promise<boolean> {
   try {
@@ -273,8 +292,28 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     const found = await this.#store.list(authorization, {
       appProperties: VAULT_MARKER,
     });
-    const file = found.files.find((entry) => entry.name === FILE_NAME) ?? found.files[0];
-    this.#fileId = file?.fileId ?? null;
+
+    /*
+     * More than one vault file is not something to pick between.
+     *
+     * This took `files.find(name matches) ?? files[0]` — an arbitrary choice,
+     * made silently, from a list Drive returns in no promised order. Two
+     * devices can land on two different files and each be perfectly
+     * consistent: both sync, both succeed, both say they are backed up, and
+     * they show different vaults. There is no error anywhere because from
+     * inside either one nothing is wrong.
+     *
+     * A vault file is not a keyring. It is the *whole vault* sealed as one
+     * blob, so a second one is a second parallel vault rather than more of
+     * this one — which is exactly why quietly choosing was the wrong
+     * behaviour, and why the answer is to stop and say so rather than to merge
+     * or to guess.
+     */
+    if (found.files.length > 1) {
+      throw new TooManyBackupsError(found.files.length);
+    }
+
+    this.#fileId = found.files[0]?.fileId ?? null;
     return this.#fileId;
   }
 

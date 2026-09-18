@@ -9,7 +9,7 @@ import {
   VersionConflictError,
 } from "@keyweb/vault-core";
 import type { GoogleDriveFileStore } from "@keyneom/sync-kit/stores/google-drive";
-import { GoogleDriveRemote } from "../src/vault/drive";
+import { GoogleDriveRemote, TooManyBackupsError } from "../src/vault/drive";
 import { unlockVault } from "../src/vault/crypto";
 import { FakeDrive, fakeAuthenticator } from "./helpers";
 
@@ -265,5 +265,52 @@ describe("a backup written by a phone", () => {
     const drive = await driveHolding(bare);
     const { remote } = await makeDevice(drive, "web", 1);
     expect(await remote.fetchSealedState()).toMatchObject({ ciphertext: "sealed-long-ago" });
+  });
+});
+
+/**
+ * Two vault files in one account is a silent partition, not a choice.
+ *
+ * Both platforms took the first match from a list Drive returns in no promised
+ * order. Two devices can land on two different files and each be perfectly
+ * consistent: both sync, both succeed, both report themselves backed up, and
+ * they hold different vaults. No error appears anywhere, because from inside
+ * either one nothing is wrong — which is exactly what "both say they are
+ * synced and show different things" looks like.
+ */
+describe("more than one backup file", () => {
+  it("refuses to pick, rather than picking silently", async () => {
+    const drive = new FakeDrive();
+    for (const id of ["file-1", "file-2"]) {
+      drive.files.set(id, {
+        name: "keyweb-vault-v1.json",
+        content: "{}",
+        revision: 1,
+        appProperties: { keyweb: "vault-v1" },
+      });
+    }
+
+    const { remote } = await makeDevice(drive, "web", 1);
+    await expect(remote.read()).rejects.toThrow(TooManyBackupsError);
+    // And says how many, because the next step is looking at them in Drive.
+    await expect(remote.read()).rejects.toThrow(/2 Keyweb backup files/);
+  });
+
+  /** Writing must not be the thing that discovers this. */
+  it("refuses to write into the ambiguity", async () => {
+    const drive = new FakeDrive();
+    for (const id of ["file-1", "file-2"]) {
+      drive.files.set(id, {
+        name: "keyweb-vault-v1.json",
+        content: "{}",
+        revision: 1,
+        appProperties: { keyweb: "vault-v1" },
+      });
+    }
+    const { remote } = await makeDevice(drive, "web", 1);
+    await expect(remote.write({ items: {}, keyrings: {} }, null)).rejects.toThrow();
+    // Neither file was touched on the way to finding out.
+    expect(drive.files.get("file-1")!.content).toBe("{}");
+    expect(drive.files.get("file-2")!.content).toBe("{}");
   });
 });

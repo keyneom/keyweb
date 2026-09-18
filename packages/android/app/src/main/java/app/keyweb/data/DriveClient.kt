@@ -7,6 +7,7 @@ import java.net.URLEncoder
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import app.keyweb.vault.TooManyBackupsException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -51,8 +52,26 @@ class DriveClient(private val token: suspend () -> String) : DriveFiles {
         }
         val body = json.parseToJsonElement(get(query)).jsonObject
         val files = body["files"]?.jsonArray ?: emptyList()
-        // Prefer the canonical name, but accept whatever carries the marker: a
-        // rename in Drive must not orphan the backup.
+
+        /*
+         * More than one file carrying this marker is not a choice to make.
+         *
+         * This preferred the canonical name and otherwise took the first — an
+         * arbitrary pick from a list Drive returns in no promised order. Two
+         * devices can land on two different files and each be perfectly
+         * consistent: both sync, both succeed, both report themselves backed
+         * up, and they hold different vaults. No error appears anywhere,
+         * because from inside either one nothing is wrong.
+         *
+         * A vault file is the *whole vault* sealed as one blob, so a second
+         * one is a parallel vault rather than more of this one. Stopping is
+         * the only safe answer: picking means writing, and writing to the
+         * wrong one strands everything in the other.
+         */
+        if (appProperties == VAULT_MARKER && files.size > 1) {
+            throw TooManyBackupsException(files.size)
+        }
+
         val match = files.firstOrNull {
             it.jsonObject["name"]?.jsonPrimitive?.content == VAULT_FILE_NAME
         } ?: files.firstOrNull()

@@ -129,9 +129,23 @@ class RemoteUnavailableException(
  * one. Unreadable is its own answer, it stops the sync, and it is somebody's
  * decision what to do next rather than the engine's.
  */
-class BackupUnreadableException(
+open class BackupUnreadableException(
     message: String = "This backup was not written by this vault.",
 ) : Exception(message)
+
+/**
+ * This Google account holds more than one Keyweb vault file.
+ *
+ * Refused rather than resolved. Picking one means writing to it, and writing
+ * to the wrong one strands everything in the other — so the only safe move is
+ * to stop and let somebody look at their own Drive, where the files are
+ * visible and dated.
+ */
+class TooManyBackupsException(count: Int) : BackupUnreadableException(
+    "There are $count Keyweb backup files in this Google account, and Keyweb won't guess " +
+        "which one is yours. Open Google Drive, look in the Keyweb folder, and remove or " +
+        "rename the ones you don't want — the newest is usually the one to keep.",
+)
 
 data class RemoteRevision(val state: VaultState, val version: String)
 
