@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   fieldLabel,
+  folderPath,
   storedFieldName,
   isSecretField,
   itemField,
@@ -71,6 +72,15 @@ export function ItemEdit({
    * logins do not have one, not because it is difficult.
    */
   const [otp, setOtp] = useState(item ? (itemField(item, "otp") ?? "") : "");
+  /*
+   * The folder, relative to the keyring.
+   *
+   * Stored and shown without the keyring's own name at the front, even though
+   * an import writes it that way — `folderPath` strips it either way, and
+   * putting "Leslie / " in front of every folder on the Leslie keyring is
+   * noise somebody would have to delete to type anything.
+   */
+  const [folder, setFolder] = useState(item ? folderPath(item, state).join(" / ") : "");
   const [extras, setExtras] = useState<EditableField[]>(() => editableFields(item));
   const [saving, setSaving] = useState(false);
   /**
@@ -127,6 +137,11 @@ export function ItemEdit({
           url,
           note,
           otp: otp.trim(),
+          folder: folder
+            .split("/")
+            .map((part) => part.trim())
+            .filter((part) => part !== "")
+            .join(" / "),
           ...customFields(item, extras),
         },
       });
@@ -241,8 +256,25 @@ export function ItemEdit({
         // Open for an item that already has some. Hiding a field somebody can
         // see today, on the grounds that it is advanced, is how these fields
         // went missing in the first place.
-        initiallyOpen={extras.length > 0 || otp !== ""}
+        initiallyOpen={extras.length > 0 || otp !== "" || folder !== ""}
       >
+      <label className="field">
+        <span>Folder</span>
+        <div className="box">
+          <input
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            placeholder="Banks"
+            autoComplete="off"
+          />
+        </div>
+        <span className="hint">
+          A folder is just a way of finding things later. Use a slash for a folder inside a
+          folder, like &ldquo;Banks / Cards&rdquo;. Leave it blank to keep this at the top of the
+          keyring.
+        </span>
+      </label>
+
       <label className="field">
         <span>Second-factor code</span>
         <div className="box">

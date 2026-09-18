@@ -66,10 +66,13 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
 import app.keyweb.vault.CsvOmissions
+import app.keyweb.vault.FolderView
+import app.keyweb.vault.browseFolders
 import app.keyweb.vault.ItemSort
 import app.keyweb.vault.KeyringSort
 import app.keyweb.vault.PastValue
 import app.keyweb.vault.fieldLabel
+import app.keyweb.vault.folderPath
 import app.keyweb.vault.pastValues
 import app.keyweb.vault.sortItems
 import app.keyweb.vault.sortKeyrings
@@ -130,6 +133,15 @@ fun VaultListScreen(
     var query by remember { mutableStateOf("") }
     var ring by remember { mutableStateOf<String?>(null) }
     var sort by rememberSaveable { mutableStateOf(savedSort) }
+    /**
+     * Where in the folder tree the list is looking.
+     *
+     * Saved as a joined string rather than a list because `rememberSaveable`
+     * takes a Bundle, and this is the one place the separator has to be
+     * reassembled by hand.
+     */
+    var folderPath by rememberSaveable { mutableStateOf("") }
+    val folder = folderPath.split('\u0000').filter { it.isNotEmpty() }
     val statusColors = LocalKeywebStatus.current
 
     /**
@@ -168,6 +180,20 @@ fun VaultListScreen(
         }
         .let { sortItems(it, ItemSort.of(sort)) }
 
+    /*
+     * Searching looks everywhere, on purpose.
+     *
+     * Somebody who types a name is asking "where is this", and answering only
+     * from the folder they happen to be standing in is how a search reports
+     * that a password they can see in the list does not exist.
+     */
+    val searching = query.isNotBlank()
+    val view = if (searching) {
+        FolderView(emptyList(), shown)
+    } else {
+        browseFolders(shown, state, folder)
+    }
+
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             Row(
@@ -181,13 +207,17 @@ fun VaultListScreen(
                     Text("${chosen.size} selected", fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = {
-                        selected = if (chosen.size == shown.size) {
+                        // What is on screen, not everything the filters let
+                        // through. Inside a folder those differ, and "select
+                        // all" meaning "also the ones you cannot see" is how
+                        // somebody deletes a keyring by mistake.
+                        selected = if (chosen.size == view.items.size) {
                             emptySet()
                         } else {
-                            shown.map { it.id }.toSet()
+                            view.items.map { it.id }.toSet()
                         }
                     }) {
-                        Text(if (chosen.size == shown.size) "Clear" else "Select all")
+                        Text(if (chosen.size == view.items.size) "Clear" else "Select all")
                     }
                 } else {
                     Text(
@@ -272,13 +302,41 @@ fun VaultListScreen(
                 onSync = onSync,
             )
 
+            /*
+             * Where you are, and the way back up.
+             *
+             * A breadcrumb rather than a back arrow, because the levels above
+             * are each one tap away — going from "Banks / Cards" to the top of
+             * a keyring should not be two gestures and a guess about how deep
+             * you were.
+             */
+            if (!searching && folder.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                        .padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { folderPath = "" }) { Text("All") }
+                    folder.forEachIndexed { index, name ->
+                        Text("/", color = statusColors.muted)
+                        TextButton(
+                            onClick = {
+                                folderPath = folder.take(index + 1).joinToString("\u0000")
+                            },
+                        ) { Text(name) }
+                    }
+                }
+            }
+
             Box(Modifier.weight(1f)) {
-                if (shown.isEmpty()) {
+                if (view.folders.isEmpty() && view.items.isEmpty()) {
                     Text(
-                        if (items.isEmpty()) {
-                            "No passwords saved yet. Add your first one below."
-                        } else {
-                            "Nothing matches that search."
+                        when {
+                            items.isEmpty() ->
+                                "No passwords saved yet. Add your first one below."
+                            searching -> "Nothing matches that search."
+                            folder.isNotEmpty() -> "This folder is empty."
+                            else -> "Nothing here."
                         },
                         color = statusColors.muted,
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 32.dp),
@@ -289,7 +347,22 @@ fun VaultListScreen(
                         color = MaterialTheme.colorScheme.surface,
                     ) {
                         LazyColumn {
-                            items(shown, key = { it.id }) { item ->
+                            // Folders first, because a folder is a place and
+                            // the things in this one are its contents.
+                            items(view.folders, key = { "folder:" + it.path.joinToString("/") }) { child ->
+                                VaultRow(
+                                    initials = "\uD83D\uDCC1",
+                                    title = child.name,
+                                    subtitle = "${child.count} password" +
+                                        if (child.count == 1) "" else "s",
+                                    onClick = {
+                                        folderPath = child.path.joinToString("\u0000")
+                                    },
+                                    accent = statusColors.muted,
+                                )
+                                HorizontalDivider(color = statusColors.line)
+                            }
+                            items(view.items, key = { it.id }) { item ->
                                 val title = item.field(Fields.TITLE) ?: "Untitled"
                                 val ringName = state.keyrings[item.keyring.value]?.name?.value
                                     ?: "No keyring"
@@ -795,6 +868,19 @@ fun ItemEditScreen(
      * logins do not have one, not because it is difficult.
      */
     var otp by remember { mutableStateOf(item?.field(Fields.OTP).orEmpty()) }
+    /*
+     * The folder, relative to the keyring.
+     *
+     * Stored and shown without the keyring's own name at the front, even
+     * though an import writes it that way — `folderPath` strips it either way,
+     * and putting "Leslie / " in front of every folder on the Leslie keyring
+     * is noise somebody would have to delete to type anything.
+     */
+    var folder by remember(item?.id) {
+        mutableStateOf(
+            item?.let { folderPath(it, state).joinToString(" / ") }.orEmpty(),
+        )
+    }
     var keyringId by remember { mutableStateOf(item?.keyring?.value ?: defaultKeyringId) }
     var generating by remember { mutableStateOf<GenerateInto?>(null) }
     /**
@@ -929,8 +1015,18 @@ fun ItemEditScreen(
                 // Opened for an item that already has some. Hiding a field
                 // somebody can see today, on the grounds that it is advanced,
                 // is how these fields went missing in the first place.
-                initiallyOpen = extras.isNotEmpty() || otp.isNotEmpty(),
+                initiallyOpen = extras.isNotEmpty() || otp.isNotEmpty() || folder.isNotEmpty(),
             ) {
+            EditField("Folder", folder, { folder = it }, "Banks")
+            Text(
+                "A folder is just a way of finding things later. Use a slash for a folder " +
+                    "inside a folder, like \"Banks / Cards\". Leave it blank to keep this at " +
+                    "the top of the keyring.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+
             EditField(
                 "Second-factor code",
                 otp,
@@ -1021,6 +1117,10 @@ fun ItemEditScreen(
                             Fields.URL to url,
                             Fields.NOTE to note,
                             Fields.OTP to otp.trim(),
+                            Fields.FOLDER to folder.split('/')
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .joinToString(" / "),
                         ) + customFields(item, extras),
                     )
                 },

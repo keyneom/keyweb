@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import {
+  browseFolders,
   ITEM_SORTS,
   itemField,
   sortItems,
@@ -56,6 +57,8 @@ export function VaultList({
   const [query, setQuery] = useState("");
   const [ring, setRing] = useState<string | null>(null);
   const [sort, setSort] = useRememberedSort<ItemSort>("item-sort", "name-az");
+  /** Where in the folder tree the list is looking. */
+  const [folder, setFolder] = useState<string[]>([]);
 
   /**
    * Selection mode.
@@ -118,6 +121,19 @@ export function VaultList({
   // what is on screen.
   const shown = useMemo(() => sortItems(matching, sort), [matching, sort]);
 
+  /*
+   * Searching looks everywhere, on purpose.
+   *
+   * Somebody who types a name is asking "where is this", and answering only
+   * from the folder they happen to be standing in is how a search reports that
+   * a password they can see in the list does not exist.
+   */
+  const searching = query.trim() !== "";
+  const view = useMemo(
+    () => (searching ? { folders: [], items: shown } : browseFolders(shown, state, folder)),
+    [searching, shown, state, folder],
+  );
+
   return (
     <>
       {selecting ? (
@@ -133,13 +149,17 @@ export function VaultList({
             className="iconbtn"
             onClick={() =>
               setSelected(
-                selected.size === shown.length
+                // What is on screen, not everything the filters let through.
+                // Inside a folder those differ, and "select all" meaning "also
+                // the ones you cannot see" is how somebody deletes a keyring by
+                // mistake.
+                selected.size === view.items.length
                   ? new Set()
-                  : new Set(shown.map((item) => item.id)),
+                  : new Set(view.items.map((item) => item.id)),
               )
             }
           >
-            {selected.size === shown.length ? "Clear" : "Select all"}
+            {selected.size === view.items.length ? "Clear" : "Select all"}
           </button>
         </header>
       ) : (

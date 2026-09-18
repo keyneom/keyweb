@@ -2,6 +2,7 @@ export * from "./hlc.js";
 export * from "./model.js";
 export * from "./kinds.js";
 export * from "./export.js";
+export * from "./folders.js";
 export * from "./generator.js";
 export * from "./ops.js";
 export * from "./merge.js";
