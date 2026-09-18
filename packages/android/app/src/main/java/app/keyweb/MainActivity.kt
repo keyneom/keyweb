@@ -377,6 +377,8 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onSetUpBackup = { route = Route.Backup },
                         onSync = viewModel::syncNow,
                         onReplaceBackup = viewModel::replaceBackupFromThisPhone,
+                        backupPhoneOnly = ui.backupPhoneOnly,
+                        onAddPasskey = viewModel::addPasskeyToBackup,
                         onDeleteMany = viewModel::deleteItems,
                         onMoveMany = viewModel::moveItems,
                         currentVersion = BuildConfig.VERSION_NAME,
@@ -535,7 +537,6 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             viewModel.lock()
                             route = Route.List
                         },
-                        onAddPasskey = viewModel::addPasskeyToBackup,
                         exportSummary = viewModel.exportSummary(),
                         onExport = { csv ->
                             exportingCsv = csv

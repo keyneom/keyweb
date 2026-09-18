@@ -123,6 +123,9 @@ fun VaultListScreen(
     onSetUpBackup: () -> Unit,
     onSync: () -> Unit,
     onReplaceBackup: () -> Unit = {},
+    /** The backup has no passkey copy, so it opens on this phone alone. */
+    backupPhoneOnly: Boolean = false,
+    onAddPasskey: () -> Unit = {},
     onDeleteMany: (List<String>) -> Unit,
     onMoveMany: (List<String>, String) -> Unit,
     /** This build's version, so the update notice knows what to compare. */
@@ -353,6 +356,8 @@ fun VaultListScreen(
                 onSetUpBackup = onSetUpBackup,
                 onSync = onSync,
                 onReplaceBackup = onReplaceBackup,
+                phoneOnly = backupPhoneOnly,
+                onAddPasskey = onAddPasskey,
             )
 
             /*
@@ -1437,7 +1442,6 @@ fun SettingsScreen(
     onScanCodes: () -> Unit = {},
     onLock: () -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
-    onAddPasskey: () -> Unit = {},
     /** How many passwords, and what a CSV would leave behind. */
     exportSummary: Pair<Int, CsvOmissions>? = null,
     /** Null when this build has no Google account and so cannot share at all. */
@@ -1538,27 +1542,6 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Lock now", onLock)
-
-            /*
-             * The one action that stops the two copies drifting apart.
-             *
-             * The backup is sealed twice — once with a passkey a browser
-             * holds, once with the printed code this phone uses — and a device
-             * that can only rewrite one of them leaves the other stale the
-             * moment it edits anything. Giving this phone the same passkey
-             * means every write from here refreshes both.
-             */
-            Spacer(Modifier.height(24.dp))
-            Text("Keyweb in a browser", style = MaterialTheme.typography.labelLarge)
-            Text(
-                "Use the same face or fingerprint for the copy in Google Drive that a browser " +
-                    "uses. Without it, changes you make here take a recovery code to see on a " +
-                    "computer, and the browser's copy goes out of date.",
-                color = statusColors.muted,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            SecondaryButton("Use the same key as my browser", onAddPasskey)
 
             /*
              * The door has to swing both ways.

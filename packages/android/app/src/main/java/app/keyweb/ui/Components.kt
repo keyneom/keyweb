@@ -154,6 +154,9 @@ fun BackupStatusLine(
     onSync: (() -> Unit)? = null,
     /** Overwrite a backup this vault cannot read with this device's copy. */
     onReplaceBackup: (() -> Unit)? = null,
+    /** True when the backup has no passkey copy this device can open. */
+    phoneOnly: Boolean = false,
+    onAddPasskey: (() -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
@@ -188,6 +191,29 @@ fun BackupStatusLine(
          * and fails the same way. The only thing that helps is replacing it,
          * and that is destructive enough to be named rather than implied.
          */
+        /*
+         * Said where the doubt is, and only while it is true.
+         *
+         * A backup with no passkey copy opens on this phone and nowhere else:
+         * a browser needs the printed code every single time and never sees a
+         * change made here. That is not a setting somebody should have to go
+         * looking for under a name describing how it works — it is a thing
+         * that is wrong with their backup, so it says what is wrong, in the
+         * terms they would notice it in, and offers the one action that fixes
+         * it. Then it goes away for good.
+         */
+        phoneOnly && onAddPasskey != null -> StatusLine(
+            Tone.ATTENTION,
+            "This backup only opens on this phone.",
+            "Keyweb can use the same face or fingerprint for the copy in Google Drive that a " +
+                "browser does. Without it, opening your passwords on a computer needs your " +
+                "recovery code every time, and changes you make here never show up there.",
+            modifier,
+            actionLabel = label("Fix this"),
+            onAction = onAddPasskey,
+            actionEnabled = !status.syncing,
+        )
+
         status.backupUnreadable -> StatusLine(
             Tone.RISK,
             "The backup in Drive isn't this phone's.",

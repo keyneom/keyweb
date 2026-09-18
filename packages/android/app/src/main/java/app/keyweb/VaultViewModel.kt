@@ -247,6 +247,14 @@ data class VaultUiState(
      * file — which would look exactly like saving, and never arrive.
      */
     val readOnlyKeyrings: Set<String> = emptySet(),
+    /**
+     * The backup has no passkey copy this phone can open.
+     *
+     * Which means it opens on this phone and nowhere else — a browser would
+     * need the printed code every time, and would never see a change made
+     * here. True for every vault set up before the phone could hold a passkey.
+     */
+    val backupPhoneOnly: Boolean = false,
     val toast: String? = null,
 )
 
@@ -783,12 +791,13 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         passkeyCipher = passkey,
                     ),
                 )
+                _state.value = _state.value.copy(backupPhoneOnly = false)
                 syncNow()
                 showToast(
                     if (onFile != null) {
-                        "This phone can open the browser's copy now."
+                        "Done. This phone and your browser share one backup now."
                     } else {
-                        "Done. Your browser can open this backup with the same passkey."
+                        "Done. You can open this backup in a browser now."
                     },
                 )
             } catch (cause: Exception) {
@@ -806,13 +815,17 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             // from the one that sealed the backup and open nothing.
             val probe = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
             val existing = probe.fetchRecoverySealed()
+            val passkey = passkeyCipherFor(probe)
             remote.attach(
                 DriveVaultRemote(
                     client,
                     VaultEnvelopeCipher.forRecoveryCode(secret, existing),
-                    passkeyCipher = passkeyCipherFor(probe),
+                    passkeyCipher = passkey,
                 ),
             )
+            // Said, not silently endured: without it this backup opens only on
+            // this phone, and the person cannot know that from anywhere else.
+            _state.value = _state.value.copy(backupPhoneOnly = passkey == null)
             _state.value = _state.value.copy(
                 backupConfigured = true,
                 backup = BackupUiState(stage = BackupStage.ON),
@@ -915,12 +928,53 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun finishSetup(secret: ByteArray, existing: app.keyweb.vault.SyncEnvelopeV1?) {
         rememberSecret(secret)
+        val client = driveClient()
+        /*
+         * The passkey is part of setting up a backup, not a later chore.
+         *
+         * Somebody turning on backup is already here, already deliberate, and
+         * already expecting to be asked something — so the sheet belongs in
+         * this moment rather than in a settings screen they would have to be
+         * told to visit. A backup that only opens on the device that made it
+         * is not the thing they think they are turning on.
+         *
+         * Best effort: if the sheet is declined or unavailable, backup still
+         * works through the recovery code, and the phone says what is missing
+         * rather than failing setup over it.
+         */
         remote.attach(
-            DriveVaultRemote(driveClient(), VaultEnvelopeCipher.forRecoveryCode(secret, existing)),
+            DriveVaultRemote(
+                client,
+                VaultEnvelopeCipher.forRecoveryCode(secret, existing),
+                passkeyCipher = establishPasskey(client),
+            ),
         )
         // Publish immediately, so "backup is on" is true the moment it is said
         // rather than at some later sync.
         syncNow()
+    }
+
+    /**
+     * The passkey for the backup: the one already on the file, or a new one.
+     *
+     * Joined rather than replaced when the file already has a passkey copy —
+     * replacing it would lock out whichever browser wrote it, which is the
+     * exact failure this whole arrangement exists to stop.
+     */
+    private suspend fun establishPasskey(client: DriveClient): VaultEnvelopeCipher? {
+        val activity = passkeyHost?.get() ?: return null
+        return try {
+            val probe = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(ByteArray(20)))
+            val onFile = runCatching { probe.fetchPasskeySealed() }.getOrNull()
+            if (onFile != null) {
+                VaultPasskey.unlock(activity, onFile)
+            } else {
+                VaultPasskey.create(activity)
+            }
+        } catch (cause: Exception) {
+            _state.value = _state.value.copy(backupPhoneOnly = true)
+            null
+        }
     }
 
     /** Dismiss the written-down code. It is never shown again. */
