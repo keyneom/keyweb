@@ -1,6 +1,6 @@
 {
     "note": "Written by Android's DriveVaultRemote. Do not edit.",
-    "recoveryCode": "QK07-QMTP-T62C-WJ1Q-8JV6-2RR6-WVKC-PHJP",
+    "recoveryCode": "QJ7V-4ZYX-WSQ2-V3PS-4G3B-5B7J-AAWC-5SAW",
     "password": "phone-only-password",
-    "content": "{\"v\":1,\"recovery\":{\"schemaVersion\":1,\"algorithm\":\"AES-256-GCM+HKDF-SHA-256\",\"compression\":\"gzip\",\"credentialId\":\"recovery\",\"rpId\":\"keyweb\",\"prfInput\":\"1dsi-_CczR7YAhmDHv7DY3EZdP7b6N4OGvKp-5vgRa0\",\"kdfSalt\":\"6tbNVUGdDvCoej_NZy-5dacabttzBwU-i36vibkJnVE\",\"nonce\":\"AItqtrNxJCyKR7-z\",\"ciphertext\":\"qUmaKK-L2Wq6vi5YHpKEwb8wrYJSiFMRfEQnqE2upJ82MUTKml3HRHxuS_AAmoQJNJXE5wCPn194ojt9rTSIodfLlrssm3smqUX8FGA9QtbcVr0ZRP8nFhRKn0YgKg_NvKKdAF5Hs-RdQjrFGLaM3pBuE4Ee5NyT93BSNcjkF1LDJTP9Zp46hWNEqTlIJAdD7KAnMO6329L8Lavk4jBiRE7TKPWxfo0JUkDKyz83U7d7AGJj6sB-XphejNVDPU5yiTDGYvpldA8PmO4\",\"updatedAt\":\"2026-09-18T19:35:36.811178Z\"}}"
+    "content": "{\"v\":1,\"recovery\":{\"schemaVersion\":1,\"algorithm\":\"AES-256-GCM+HKDF-SHA-256\",\"compression\":\"gzip\",\"credentialId\":\"recovery\",\"rpId\":\"keyweb\",\"prfInput\":\"H2r7D4mbd4Wn3TFF1fPYZUdeA5Jn-8AZ8StKOsAvQRM\",\"kdfSalt\":\"A_aCp5eJDIDEDszMBrpW3y1xnFWm4vkTgjHCb_w1i50\",\"nonce\":\"SsjalhizyYBlO32_\",\"ciphertext\":\"npkHungqixPzhvH59zg-XB20ALE_7sHbpPDlOlZFSkZsS2g1Xi1QzF65kjfdASftgUrfqQtokc5xFOk6XjgCI3VmCBLP-u_rAje5Vst81bNkMWcAcJPMst0XEzuaOmWuclrrOodauBMcqccPzhz9wH8Z8djUK0dgFWjK4mdOa2emWXXf3kX9SS8xFYDKI8XTfqA-ZO9FLa41cd3y73mzOYQ4TwmRWV1ox--xQUzeaxptTT8RdwiLR0UeLnB6RFrRo4nHzqVlBNiJr_c\",\"updatedAt\":\"2026-09-18T19:45:58.399756Z\"}}"
 }

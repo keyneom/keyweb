@@ -1442,6 +1442,7 @@ fun SettingsScreen(
     onScanCodes: () -> Unit = {},
     onLock: () -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
+    onDescribeBackup: () -> Unit = {},
     /** How many passwords, and what a CSV would leave behind. */
     exportSummary: Pair<Int, CsvOmissions>? = null,
     /** Null when this build has no Google account and so cannot share at all. */
@@ -1542,6 +1543,26 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Lock now", onLock)
+
+            /*
+             * A diagnostic, in the open rather than behind a gesture.
+             *
+             * "Both devices say they are synced and show different things" is
+             * unanswerable from the outside and trivial from here: which file,
+             * which copies, when each was sealed. It is a Drive file id and
+             * two timestamps — nothing secret — and having it beats another
+             * round of inferring the file's contents from behaviour.
+             */
+            Spacer(Modifier.height(24.dp))
+            Text("If something looks wrong", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Shows which backup file this phone is using and when each copy in it was " +
+                    "last written. Useful when this phone and a browser disagree.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Check the backup file", onDescribeBackup)
 
             /*
              * The door has to swing both ways.

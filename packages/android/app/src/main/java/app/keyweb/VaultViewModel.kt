@@ -2078,6 +2078,32 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Read out what is in the backup file, and what this phone holds.
+     *
+     * A diagnostic that exists because the alternative was another round of
+     * inferring the file's contents from two apps' behaviour. One line
+     * somebody can read back settles which file each device is on, which
+     * copies exist and when each was written.
+     */
+    fun describeBackupFile() {
+        viewModelScope.launch {
+            val secret = storedSecret()
+            if (secret == null) {
+                showToast("No backup set up on this phone.")
+                return@launch
+            }
+            try {
+                val remote = DriveVaultRemote(driveClient(), VaultEnvelopeCipher.forRecoveryCode(secret))
+                val local = sync?.state()
+                val items = local?.let { visibleItems(it).size } ?: 0
+                showToast("$items here · " + remote.describe())
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Couldn't read the backup file.")
+            }
+        }
+    }
+
     fun reportImportProblem(message: String) {
         setImport { it.copy(error = message, busy = false) }
     }

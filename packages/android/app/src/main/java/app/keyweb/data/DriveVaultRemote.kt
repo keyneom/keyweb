@@ -122,6 +122,32 @@ class DriveVaultRemote(
         json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
     }
 
+    /**
+     * What is actually in the backup file, for a person to read out.
+     *
+     * Every question about "both devices say they are synced and show
+     * different things" is answerable from this and unanswerable without it:
+     * which file, which copies it holds, and when each was sealed. Guessing at
+     * it from behaviour has cost more rounds than building it would have.
+     *
+     * Nothing here is secret. It is a Drive file id and two timestamps.
+     */
+    suspend fun describe(): String = reachable {
+        val id = locate() ?: return@reachable "No Keyweb backup file in this Google account."
+        val all = drive.listFiles().filter { it.keywebMarker == "vault-v1" }
+        val payload = parse(drive.readText(id))
+            ?: return@reachable "File $id is empty."
+
+        buildString {
+            append("file ").append(id.takeLast(8))
+            if (all.size > 1) append(" (").append(all.size).append(" vault files!)")
+            append(" · passkey copy ")
+            append(payload.passkey?.let { sealedAt(it) ?: "yes" } ?: "none")
+            append(" · code copy ")
+            append(payload.recovery?.let { sealedAt(it) ?: "yes" } ?: "none")
+        }
+    }
+
     /** The passkey-sealed copy, when the file has one. */
     suspend fun fetchPasskeySealed(): SyncEnvelopeV1? = reachable {
         val id = locate() ?: return@reachable null

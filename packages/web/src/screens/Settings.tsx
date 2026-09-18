@@ -123,6 +123,7 @@ export function Settings({
   onImport,
   onScanCodes,
   onLock,
+  describeBackupFile,
   state,
   sharing,
 }: {
@@ -134,6 +135,8 @@ export function Settings({
   onImport: () => void;
   onScanCodes: () => void;
   onLock: () => void;
+  /** One line describing the backup file, for comparing against the phone. */
+  describeBackupFile: () => Promise<string>;
   /** The vault as it stands, so an export is built from what is on screen. */
   state: VaultState;
   /** Null when this build has no Google account and so cannot share at all. */
@@ -202,6 +205,8 @@ export function Settings({
           beside the passwords they belong to.
         </p>
       </fieldset>
+
+      <BackupDiagnostic describe={describeBackupFile} />
 
       <ExportSection state={state} />
 
@@ -297,6 +302,50 @@ function ExportSection({ state }: { state: VaultState }) {
         second file is the one other apps can read
         {losses.length > 0 ? `, and it leaves behind ${losses.join(", ")} — those only fit in the first.` : "."}
       </p>
+    </fieldset>
+  );
+}
+
+/**
+ * What this browser is looking at, in one line.
+ *
+ * In the open rather than behind a gesture, because the moment somebody needs
+ * it is the moment they are least willing to hunt. "Both devices say they are
+ * synced and show different things" is unanswerable from either side alone and
+ * obvious from the two read-outs side by side — which file each is on, which
+ * copies it holds, when each was written. A Drive file id and two timestamps;
+ * nothing secret.
+ */
+function BackupDiagnostic({ describe }: { describe: () => Promise<string> }) {
+  const [line, setLine] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
+      <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
+        If something looks wrong
+      </legend>
+      <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+        Shows which backup file this browser is using and when each copy in it was last written.
+        Useful when this browser and your phone disagree.
+      </p>
+      <button
+        type="button"
+        className="btn sec big"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setLine(await describe());
+          setBusy(false);
+        }}
+      >
+        {busy ? "Checking…" : "Check the backup file"}
+      </button>
+      {line && (
+        <p className="mono" style={{ fontSize: "0.82em", marginTop: "0.6rem", userSelect: "all" }}>
+          {line}
+        </p>
+      )}
     </fieldset>
   );
 }

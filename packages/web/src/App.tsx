@@ -396,6 +396,7 @@ export function App() {
             vault.lock();
             setRoute({ name: "list" });
           }}
+          describeBackupFile={vault.describeBackupFile}
           state={vault.state}
           sharing={vault.sharing}
         />

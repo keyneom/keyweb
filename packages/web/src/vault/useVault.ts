@@ -116,6 +116,8 @@ export type VaultApi = {
    * somebody actually has when a password manager comes up empty.
    */
   accountContents: AccountContents | null;
+  /** One line describing the backup file, for comparing against the phone. */
+  describeBackupFile(): Promise<string>;
   lock(): void;
   syncNow(): Promise<void>;
   saveItem(input: {
@@ -621,6 +623,24 @@ export function useVault(): VaultApi {
     [describe, start],
   );
 
+  /**
+   * What this browser is looking at, in one line a person can read back.
+   *
+   * Exists for the same reason the phone's does: "both say they are synced and
+   * show different things" is unanswerable from either side and obvious from
+   * the two read-outs side by side.
+   */
+  const describeBackupFile = useCallback(async () => {
+    if (!BACKUP_CONFIGURED) return "Encrypted backup is not set up in this build.";
+    const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+    const items = visibleItems(state).length;
+    try {
+      return `${items} here · ${await probe.describeFile()}`;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Couldn't read the backup file.";
+    }
+  }, [state]);
+
   const lock = useCallback(() => {
     lockRef.current?.();
     lockRef.current = null;
@@ -935,6 +955,7 @@ export function useVault(): VaultApi {
     recoveryNeedsCode,
     adoptRecoveryCode,
     accountContents,
+    describeBackupFile,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,
     syncNow,

@@ -372,6 +372,31 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     };
   }
 
+  /**
+   * The same one-line read-out the phone gives, for comparing them.
+   *
+   * The question it answers is "are these two devices even looking at the same
+   * file", which is invisible from either side alone and decides everything
+   * else. A file id and two timestamps; nothing secret.
+   */
+  async describeFile(): Promise<string> {
+    const authorization = await this.#auth();
+    const fileId = await this.#findFile(authorization);
+    if (!fileId) return "No Keyweb backup file in this Google account.";
+
+    const found = await this.#store.list(authorization, { appProperties: VAULT_MARKER });
+    const content = await this.#store.readText(fileId, authorization);
+    const payload = content.trim() ? parsePayload(content) : null;
+    if (!payload) return `File ${fileId.slice(-8)} is empty.`;
+
+    const copies = [
+      `passkey copy ${payload.passkey === undefined ? "none" : (sealedAt(payload.passkey) ?? "yes")}`,
+      `code copy ${payload.recovery === undefined ? "none" : (sealedAt(payload.recovery) ?? "yes")}`,
+    ];
+    const many = found.files.length > 1 ? ` (${found.files.length} vault files!)` : "";
+    return `file ${fileId.slice(-8)}${many} · ${copies.join(" · ")}`;
+  }
+
   async read(): Promise<RemoteRevision | null> {
     const authorization = await this.#auth();
     try {
