@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -155,6 +156,27 @@ class DriveVaultRemote(
         if (viaPasskey != null) return@reachable RemoteRevision(viaPasskey, current)
 
         val recovery = payload.recovery ?: return@reachable null
+
+        /*
+         * Refuse the recovery copy when the passkey copy is demonstrably newer.
+         *
+         * The mirror of the browser's check, and the same failure: opening a
+         * copy that is behind succeeds, so the phone reports itself synced
+         * while showing a vault a browser has moved on from. A wrong answer
+         * delivered confidently is worse than an error, and the timestamps are
+         * the only evidence available without the key to the other envelope.
+         *
+         * Only when this phone cannot open the passkey copy — if it could, it
+         * already returned it above.
+         */
+        val passkeyCopy = payload.passkey
+        if (passkeyCopy != null && behind(recovery, passkeyCopy)) {
+            throw BackupUnreadableException(
+                "A browser has newer passwords than this phone can read. Set up the shared " +
+                    "key on this phone to catch up.",
+            )
+        }
+
         val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
         /*
          * A backup that exists and will not open is not an absent backup.
@@ -279,6 +301,25 @@ class DriveVaultRemote(
         }
         return next.toString()
     }
+
+    /**
+     * Is [older] sealed before [newer]?
+     *
+     * Read off `updatedAt`, which is the one thing comparable without holding
+     * either key. Equal is not behind: a device that can seal both writes both
+     * in one pass, from one state, at one moment — which is the normal case
+     * and must not be reported as a problem.
+     */
+    private fun behind(older: JsonElement, newer: JsonElement): Boolean {
+        val a = sealedAt(older) ?: return false
+        val b = sealedAt(newer) ?: return false
+        return a < b
+    }
+
+    private fun sealedAt(envelope: JsonElement): String? =
+        runCatching {
+            envelope.jsonObject["updatedAt"]?.jsonPrimitive?.content
+        }.getOrNull()
 
     private suspend fun ensureFolder(): String {
         folderId?.let { return it }

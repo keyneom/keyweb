@@ -89,6 +89,31 @@ export function recoveryIsStale(payload: {
 }
 
 /**
+ * True when *this browser's* copy is the one that has fallen behind.
+ *
+ * The other direction, and the one that hurt. A phone that can only reseal the
+ * recovery envelope leaves the passkey copy frozen at whatever a browser last
+ * wrote — so the browser opens its own copy, succeeds, reports itself synced,
+ * and shows a vault that is weeks out of date or, when the browser's copy was
+ * written by a fresh setup, empty.
+ *
+ * Nothing about that looks like a failure from inside the browser. The
+ * decrypt works, the file is there, the sync completes. The only evidence is
+ * the timestamp on the envelope it cannot open, which is exactly what this
+ * reads. Two devices each reporting success against a different copy of
+ * somebody's passwords is worse than either of them erroring.
+ *
+ * Equal timestamps are fine and are the normal case: a device that can seal
+ * both writes both in one pass, from one state, at one moment.
+ */
+export function passkeyCopyIsStale(payload: { passkey?: unknown; recovery?: unknown }): boolean {
+  const primary = sealedAt(payload.passkey);
+  const recovery = sealedAt(payload.recovery);
+  if (primary === null || recovery === null) return false;
+  return primary < recovery;
+}
+
+/**
  * Recognising the wrapper, and the bare envelope that predates it.
  *
  * This used to decide by asking whether a `passkey` member was present, and
@@ -121,6 +146,25 @@ export class BackupNeedsRecoveryCodeError extends BackupUnreadableError {
         "Enter your recovery code once and this browser will make its own.",
     );
     this.name = "BackupNeedsRecoveryCodeError";
+  }
+}
+
+/**
+ * This browser's copy of the backup is older than the one beside it.
+ *
+ * Its own error so the screen can say the true thing — your phone has newer
+ * passwords than this browser can read — rather than either lying about being
+ * up to date or claiming the backup is broken. The recovery code is the way
+ * across, and after one use this browser writes both copies and stops falling
+ * behind.
+ */
+export class BackupBehindError extends BackupUnreadableError {
+  constructor() {
+    super(
+      "Your phone has newer passwords than this browser can read. Enter your recovery code " +
+        "once to catch up — after that this browser stays in step on its own.",
+    );
+    this.name = "BackupBehindError";
   }
 }
 
@@ -308,6 +352,19 @@ export class GoogleDriveRemote implements RemoteVaultStore {
        * out because the thing that would fix it is a recovery code nobody was
        * asked for.
        */
+      /*
+       * Refuse a copy that is demonstrably behind the other one.
+       *
+       * Opening it would succeed, and that is the problem: the browser would
+       * report itself synced while showing a vault the phone has since moved
+       * on from — or an empty one. A wrong answer delivered confidently is
+       * worse than an error, and this is the only evidence available without
+       * the key to the other envelope.
+       */
+      if (passkeyCopyIsStale(payload)) {
+        throw new BackupBehindError();
+      }
+
       let state: VaultState;
       try {
         state = await this.#cipher.openState(payload.passkey);
@@ -317,9 +374,16 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       return { state, version };
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
-      // Not a transport failure, and not something to retry quietly: it needs
-      // a person and a recovery code.
-      if (cause instanceof BackupNeedsRecoveryCodeError) throw cause;
+      /*
+       * The base class, not each sibling by name.
+       *
+       * This listed `BackupNeedsRecoveryCodeError` specifically, so the next
+       * unreadable-backup error added — the one for a copy that has fallen
+       * behind — was silently re-wrapped as a transport failure and became
+       * "offline" again. Catching the family means a new member cannot be
+       * quietly downgraded by a rethrow list nobody remembered to update.
+       */
+      if (cause instanceof BackupUnreadableError) throw cause;
       throw new RemoteUnavailableError(
         cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
       );

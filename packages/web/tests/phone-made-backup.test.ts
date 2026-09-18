@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { itemField, RemoteUnavailableError } from "@keyweb/vault-core";
-import { BackupNeedsRecoveryCodeError, GoogleDriveRemote } from "../src/vault/drive";
+import {
+  BackupBehindError,
+  BackupNeedsRecoveryCodeError,
+  GoogleDriveRemote,
+} from "../src/vault/drive";
 import { createRecoveryCipher, unlockVault } from "../src/vault/crypto";
 import {
   formatRecoveryCode,
@@ -272,5 +276,80 @@ describe("a browser whose passkey does not fit", () => {
     await expect(other.read()).rejects.toThrow(BackupNeedsRecoveryCodeError);
     // And it is emphatically not the error that means "retry later, quietly".
     await expect(other.read()).rejects.not.toThrow(RemoteUnavailableError);
+  });
+});
+
+/**
+ * Two devices, both reporting success, against different copies.
+ *
+ * The phone can only reseal the recovery envelope, so the passkey copy stays
+ * frozen at whatever a browser last wrote. The browser then opens its own
+ * copy — which works — and says it is synced while showing a vault the phone
+ * moved on from, or an empty one.
+ *
+ * Nothing about that looks like a failure from inside the browser: the decrypt
+ * succeeds, the file is there, the sync completes. Two clients each confidently
+ * reporting success against a different copy of somebody's passwords is worse
+ * than either of them erroring.
+ */
+describe("a browser whose copy has fallen behind", () => {
+  /** A real envelope sealed by the same fake authenticator `browser()` uses. */
+  async function aPasskeyEnvelopeThisBrowserCanOpen(): Promise<string> {
+    const staging = new FakeDrive();
+    await (await browser(staging)).write({ items: {}, keyrings: {} }, null);
+    // The folder is in this map too, created with empty content.
+    const vault = [...staging.files.values()].find(
+      (file) => file.appProperties["keyweb"] === "vault-v1",
+    );
+    return vault!.content;
+  }
+
+  function fileWith(passkeyAt: string, recoveryAt: string, passkeyBody: unknown) {
+    const drive = new FakeDrive();
+    drive.files.set("file-1", {
+      name: "keyweb-vault-v1.json",
+      content: JSON.stringify({
+        v: 1,
+        passkey: { ...(passkeyBody as object), updatedAt: passkeyAt },
+        recovery: {
+          schemaVersion: 1,
+          algorithm: "AES-GCM-256",
+          credentialId: "recovery",
+          rpId: "keyweb",
+          prfInput: "x",
+          kdfSalt: "y",
+          nonce: "z",
+          ciphertext: "newer-on-the-phone",
+          updatedAt: recoveryAt,
+        },
+      }),
+      revision: 1,
+      appProperties: { keyweb: "vault-v1" },
+    });
+    return drive;
+  }
+
+  it("says so instead of reporting itself synced", async () => {
+    // A real passkey envelope this browser can open, deliberately older.
+    const mine = JSON.parse(await aPasskeyEnvelopeThisBrowserCanOpen()).passkey;
+
+    const drive = fileWith("2026-09-01T00:00:00.000Z", "2026-09-18T00:00:00.000Z", mine);
+    const remote = await browser(drive);
+
+    // Not "an empty vault, synced". The copy it can read is behind the one it
+    // cannot, and that is knowable from the timestamps alone.
+    await expect(remote.read()).rejects.toThrow(BackupBehindError);
+  });
+
+  /** Equal timestamps are the normal case: one device sealed both at once. */
+  it("is happy when both copies were written together", async () => {
+    const written = JSON.parse(await aPasskeyEnvelopeThisBrowserCanOpen());
+    const at = written.passkey.updatedAt as string;
+
+    const drive = fileWith(at, at, written.passkey);
+    // Unlocking the envelope that is there, rather than minting a fresh
+    // credential that could not open it.
+    const remote = await browser(drive, written.passkey);
+    await expect(remote.read()).resolves.not.toBeNull();
   });
 });
