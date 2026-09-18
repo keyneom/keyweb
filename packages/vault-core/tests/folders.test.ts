@@ -48,6 +48,39 @@ function vault() {
 }
 
 describe("finding things by folder", () => {
+  /**
+   * The bug the earlier tests here walked straight past.
+   *
+   * Every case below filtered to one keyring before browsing, which is what
+   * the screen does only when a keyring chip is selected. With "All" selected
+   * the list holds every keyring at once, each path was computed relative to
+   * its *own* keyring, and Leslie's "Banks" and Mika's "Banks" became one
+   * folder holding both. The data never collided; the view invented the
+   * collision, which is worse — the two passwords looked like they were in
+   * one place.
+   */
+  it("does not merge two keyrings' folders when showing all of them", () => {
+    const state = vault();
+    const all = visibleItems(state);
+
+    const top = browseFolders(all, state, [], null);
+    // The keyrings, not their insides: at this level "Banks" is ambiguous and
+    // the honest answer is to say which one first.
+    expect(top.folders.map((f) => f.name)).toEqual(["Leslie", "Mika"]);
+    expect(top.folders.every((f) => f.kind === "keyring")).toBe(true);
+
+    const leslie = browseFolders(all, state, ["Leslie"], null);
+    expect(leslie.folders.map((f) => f.name)).toEqual(["Banks", "Utilities"]);
+    expect(leslie.folders.every((f) => f.kind === "folder")).toBe(true);
+
+    expect(
+      browseFolders(all, state, ["Leslie", "Banks"], null).items.map((i) => itemField(i, "title")),
+    ).toEqual(["Chase"]);
+    expect(
+      browseFolders(all, state, ["Mika", "Banks"], null).items.map((i) => itemField(i, "title")),
+    ).toEqual(["Wells Fargo"]);
+  });
+
   /** The question that prompted this: do the two "Banks" collide? */
   it("keeps two folders of the same name under different keyrings apart", () => {
     const state = vault();
@@ -56,10 +89,10 @@ describe("finding things by folder", () => {
     const leslie = items.filter((item) => item.keyring.value === "leslie");
     const mika = items.filter((item) => item.keyring.value === "mika");
 
-    expect(browseFolders(leslie, state, ["Banks"]).items.map((i) => itemField(i, "title"))).toEqual([
+    expect(browseFolders(leslie, state, ["Banks"], "leslie").items.map((i) => itemField(i, "title"))).toEqual([
       "Chase",
     ]);
-    expect(browseFolders(mika, state, ["Banks"]).items.map((i) => itemField(i, "title"))).toEqual([
+    expect(browseFolders(mika, state, ["Banks"], "mika").items.map((i) => itemField(i, "title"))).toEqual([
       "Wells Fargo",
     ]);
   });
@@ -79,7 +112,7 @@ describe("finding things by folder", () => {
     const state = vault();
     const leslie = visibleItems(state).filter((i) => i.keyring.value === "leslie");
 
-    const top = browseFolders(leslie, state, []);
+    const top = browseFolders(leslie, state, [], "leslie");
     expect(top.folders.map((f) => f.name)).toEqual(["Banks", "Utilities"]);
     expect(top.items.map((i) => itemField(i, "title"))).toEqual(["Loose"]);
   });
@@ -91,18 +124,18 @@ describe("finding things by folder", () => {
   it("counts everything beneath a folder, not only what is directly in it", () => {
     const state = vault();
     const leslie = visibleItems(state).filter((i) => i.keyring.value === "leslie");
-    const banks = browseFolders(leslie, state, []).folders.find((f) => f.name === "Banks")!;
+    const banks = browseFolders(leslie, state, [], "leslie").folders.find((f) => f.name === "Banks")!;
     expect(banks.count).toBe(2);
   });
 
   it("descends", () => {
     const state = vault();
     const leslie = visibleItems(state).filter((i) => i.keyring.value === "leslie");
-    const banks = browseFolders(leslie, state, ["Banks"]);
+    const banks = browseFolders(leslie, state, ["Banks"], "leslie");
     expect(banks.folders.map((f) => f.name)).toEqual(["Cards"]);
     expect(banks.items.map((i) => itemField(i, "title"))).toEqual(["Chase"]);
     expect(
-      browseFolders(leslie, state, ["Banks", "Cards"]).items.map((i) => itemField(i, "title")),
+      browseFolders(leslie, state, ["Banks", "Cards"], "leslie").items.map((i) => itemField(i, "title")),
     ).toEqual(["Amex"]);
   });
 

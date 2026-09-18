@@ -2,6 +2,7 @@ package app.keyweb.vault
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The folders an import has been preserving and nothing ever showed.
@@ -35,6 +36,42 @@ class FoldersTest {
 
     private fun titles(items: List<ItemRecord>) = items.map { it.fields["title"]?.value }
 
+    /**
+     * The bug the other cases here walked straight past.
+     *
+     * Every one of them filters to a keyring before browsing, which is what
+     * the screen does only when a keyring chip is selected. With "All"
+     * selected the list holds every keyring at once, each path was computed
+     * relative to its *own* keyring, and Leslie's "Banks" and Mika's "Banks"
+     * became one folder holding both. The data never collided; the view
+     * invented the collision, which is worse — the two passwords looked like
+     * they were in one place.
+     */
+    @Test
+    fun `does not merge two keyrings' folders when showing all of them`() {
+        val state = vault()
+        val all = visibleItems(state)
+
+        val top = browseFolders(all, state, emptyList(), null)
+        // The keyrings, not their insides: at this level "Banks" is ambiguous
+        // and the honest answer is to say which one first.
+        assertEquals(listOf("Leslie", "Mika"), top.folders.map { it.name })
+        assertTrue(top.folders.all { it.kind == FolderKind.KEYRING })
+
+        val leslie = browseFolders(all, state, listOf("Leslie"), null)
+        assertEquals(listOf("Banks", "Utilities"), leslie.folders.map { it.name })
+        assertTrue(leslie.folders.all { it.kind == FolderKind.FOLDER })
+
+        assertEquals(
+            listOf("Chase"),
+            titles(browseFolders(all, state, listOf("Leslie", "Banks"), null).items),
+        )
+        assertEquals(
+            listOf("Wells Fargo"),
+            titles(browseFolders(all, state, listOf("Mika", "Banks"), null).items),
+        )
+    }
+
     /** The question that prompted this: do the two "Banks" collide? */
     @Test
     fun `keeps two folders of the same name under different keyrings apart`() {
@@ -43,10 +80,10 @@ class FoldersTest {
         val leslie = items.filter { it.keyring.value == "leslie" }
         val mika = items.filter { it.keyring.value == "mika" }
 
-        assertEquals(listOf("Chase"), titles(browseFolders(leslie, state, listOf("Banks")).items))
+        assertEquals(listOf("Chase"), titles(browseFolders(leslie, state, listOf("Banks"), "leslie").items))
         assertEquals(
             listOf("Wells Fargo"),
-            titles(browseFolders(mika, state, listOf("Banks")).items),
+            titles(browseFolders(mika, state, listOf("Banks"), "mika").items),
         )
     }
 
@@ -66,7 +103,7 @@ class FoldersTest {
     fun `shows the folders and the loose items at one level`() {
         val state = vault()
         val leslie = visibleItems(state).filter { it.keyring.value == "leslie" }
-        val top = browseFolders(leslie, state, emptyList())
+        val top = browseFolders(leslie, state, emptyList(), "leslie")
         assertEquals(listOf("Banks", "Utilities"), top.folders.map { it.name })
         assertEquals(listOf("Loose"), titles(top.items))
     }
@@ -79,7 +116,7 @@ class FoldersTest {
     fun `counts everything beneath a folder, not only what is directly in it`() {
         val state = vault()
         val leslie = visibleItems(state).filter { it.keyring.value == "leslie" }
-        val banks = browseFolders(leslie, state, emptyList()).folders.first { it.name == "Banks" }
+        val banks = browseFolders(leslie, state, emptyList(), "leslie").folders.first { it.name == "Banks" }
         assertEquals(2, banks.count)
     }
 
@@ -87,12 +124,12 @@ class FoldersTest {
     fun `descends`() {
         val state = vault()
         val leslie = visibleItems(state).filter { it.keyring.value == "leslie" }
-        val banks = browseFolders(leslie, state, listOf("Banks"))
+        val banks = browseFolders(leslie, state, listOf("Banks"), "leslie")
         assertEquals(listOf("Cards"), banks.folders.map { it.name })
         assertEquals(listOf("Chase"), titles(banks.items))
         assertEquals(
             listOf("Amex"),
-            titles(browseFolders(leslie, state, listOf("Banks", "Cards")).items),
+            titles(browseFolders(leslie, state, listOf("Banks", "Cards"), "leslie").items),
         )
     }
 

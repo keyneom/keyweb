@@ -41,12 +41,41 @@ fun folderPath(item: ItemRecord, state: VaultState): List<String> {
     return if (keyring != null && segments.firstOrNull() == keyring) segments.drop(1) else segments
 }
 
+/**
+ * This item's path when the list is showing more than one keyring.
+ *
+ * The keyring goes in front, and that is the whole correction. Browsing every
+ * keyring at once while computing each path relative to its *own* keyring put
+ * Leslie's "Banks" and Mika's "Banks" side by side under the same name — and
+ * then merged them, because at that level they are the same name. The data had
+ * never collided; the view invented the collision, which is worse, because the
+ * two passwords looked like they were in one place.
+ *
+ * So across keyrings the first level *is* the keyring. Inside one, it is not,
+ * because a keyring containing a single folder named after itself is a level
+ * nobody wants to walk through.
+ */
+fun folderPathAcrossKeyrings(item: ItemRecord, state: VaultState): List<String> {
+    val keyring = state.keyrings[item.keyring.value]?.name?.value
+    val within = folderPath(item, state)
+    return if (keyring == null) within else listOf(keyring) + within
+}
+
+/** Whether a level is a keyring rather than a folder somebody made. */
+enum class FolderKind { KEYRING, FOLDER }
+
 data class FolderChild(
     val name: String,
     /** The full path to this folder, for descending into it. */
     val path: List<String>,
     /** Everything beneath it, not only what sits directly inside. */
     val count: Int,
+    /**
+     * Carried so the row can be drawn as the keyring it is — the same colour
+     * as its chip — instead of wearing a folder icon and implying it is the
+     * kind of thing you could rename or nest.
+     */
+    val kind: FolderKind = FolderKind.FOLDER,
 )
 
 data class FolderView(val folders: List<FolderChild>, val items: List<ItemRecord>)
@@ -57,12 +86,28 @@ data class FolderView(val folders: List<FolderChild>, val items: List<ItemRecord
  * Folders count recursively, because a folder showing "0" that opens onto
  * three subfolders full of passwords is a folder nobody opens.
  */
-fun browseFolders(items: List<ItemRecord>, state: VaultState, at: List<String>): FolderView {
+fun browseFolders(
+    items: List<ItemRecord>,
+    state: VaultState,
+    at: List<String>,
+    /**
+     * The keyring the list is filtered to, or null when it is showing all of
+     * them. Null is what puts the keyring at the front of every path.
+     */
+    keyringId: String? = null,
+): FolderView {
+    val pathOf: (ItemRecord) -> List<String> =
+        if (keyringId == null) {
+            { folderPathAcrossKeyrings(it, state) }
+        } else {
+            { folderPath(it, state) }
+        }
+
     val here = mutableListOf<ItemRecord>()
     val counts = linkedMapOf<String, Int>()
 
     for (item in items) {
-        val path = folderPath(item, state)
+        val path = pathOf(item)
         if (!path.startsWith(at)) continue
         if (path.size == at.size) {
             here += item
@@ -72,8 +117,12 @@ fun browseFolders(items: List<ItemRecord>, state: VaultState, at: List<String>):
         counts[next] = (counts[next] ?: 0) + 1
     }
 
+    // At the top of an unfiltered list every child is a keyring; one level
+    // down it is a folder inside one.
+    val kind = if (keyringId == null && at.isEmpty()) FolderKind.KEYRING else FolderKind.FOLDER
+
     val folders = counts.entries
-        .map { FolderChild(it.key, at + it.key, it.value) }
+        .map { FolderChild(it.key, at + it.key, it.value, kind) }
         .sortedBy { it.name.lowercase() }
 
     return FolderView(folders, here)

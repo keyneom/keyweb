@@ -43,12 +43,40 @@ export function folderPath(item: ItemRecord, state: VaultState): string[] {
   return segments;
 }
 
+/**
+ * This item's path when the list is showing more than one keyring.
+ *
+ * The keyring goes in front, and that is the whole correction. Browsing every
+ * keyring at once while computing each path relative to its *own* keyring put
+ * Leslie's "Banks" and Mika's "Banks" side by side under the same name — and
+ * then merged them, because at that level they are the same name. The data had
+ * never collided; the view invented the collision, which is worse, because the
+ * two passwords looked like they were in one place.
+ *
+ * So across keyrings the first level *is* the keyring. Inside one, it is not,
+ * because a keyring that contains a single folder named after itself is a
+ * level nobody wants to walk through.
+ */
+export function folderPathAcrossKeyrings(item: ItemRecord, state: VaultState): string[] {
+  const keyring = state.keyrings[item.keyring.value]?.name.value;
+  const within = folderPath(item, state);
+  return keyring === undefined ? within : [keyring, ...within];
+}
+
 export type FolderChild = {
   name: string;
   /** The full path to this folder, for descending into it. */
   path: string[];
   /** Everything beneath it, not only what sits directly inside. */
   count: number;
+  /**
+   * Whether this level is a keyring rather than a folder somebody made.
+   *
+   * Carried so the row can be drawn as the keyring it is — the same colour as
+   * its chip — instead of wearing a folder icon and implying it is the kind of
+   * thing you could rename or nest.
+   */
+  kind: "keyring" | "folder";
 };
 
 /**
@@ -61,12 +89,18 @@ export function browseFolders(
   items: ItemRecord[],
   state: VaultState,
   at: string[],
+  /**
+   * The keyring the list is filtered to, or null when it is showing all of
+   * them. Null is what puts the keyring at the front of every path.
+   */
+  keyringId: string | null = null,
 ): { folders: FolderChild[]; items: ItemRecord[] } {
+  const pathOf = keyringId === null ? folderPathAcrossKeyrings : folderPath;
   const here: ItemRecord[] = [];
   const counts = new Map<string, number>();
 
   for (const item of items) {
-    const path = folderPath(item, state);
+    const path = pathOf(item, state);
     if (!startsWith(path, at)) continue;
     if (path.length === at.length) {
       here.push(item);
@@ -76,8 +110,12 @@ export function browseFolders(
     counts.set(next, (counts.get(next) ?? 0) + 1);
   }
 
+  // At the top of an unfiltered list every child is a keyring; one level down
+  // it is a folder inside one.
+  const kind: FolderChild["kind"] = keyringId === null && at.length === 0 ? "keyring" : "folder";
+
   const folders = [...counts.entries()]
-    .map(([name, count]) => ({ name, path: [...at, name], count }))
+    .map(([name, count]) => ({ name, path: [...at, name], count, kind }))
     .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 
   return { folders, items: here };

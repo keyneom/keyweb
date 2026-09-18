@@ -66,6 +66,7 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.field
 import app.keyweb.vault.CsvOmissions
+import app.keyweb.vault.FolderKind
 import app.keyweb.vault.FolderView
 import app.keyweb.vault.browseFolders
 import app.keyweb.vault.ItemSort
@@ -191,7 +192,7 @@ fun VaultListScreen(
     val view = if (searching) {
         FolderView(emptyList(), shown)
     } else {
-        browseFolders(shown, state, folder)
+        browseFolders(shown, state, folder, ring)
     }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -251,7 +252,10 @@ fun VaultListScreen(
             ) {
                 FilterChip(
                     selected = ring == null,
-                    onClick = { ring = null },
+                    onClick = {
+                        ring = null
+                        folderPath = ""
+                    },
                     colors = keywebChipColors(),
                     label = { Text("All ${items.size}") },
                 )
@@ -259,7 +263,13 @@ fun VaultListScreen(
                     val count = items.count { it.keyring.value == r.id }
                     FilterChip(
                         selected = ring == r.id,
-                        onClick = { ring = if (ring == r.id) null else r.id },
+                        onClick = {
+                            ring = if (ring == r.id) null else r.id
+                            // The path means nothing in another keyring, and
+                            // keeping it would land somebody in a folder that
+                            // is empty because it is somebody else's.
+                            folderPath = ""
+                        },
                         leadingIcon = {
                             Box(
                                 Modifier
@@ -350,15 +360,32 @@ fun VaultListScreen(
                             // Folders first, because a folder is a place and
                             // the things in this one are its contents.
                             items(view.folders, key = { "folder:" + it.path.joinToString("/") }) { child ->
+                                // A keyring is not a folder somebody made, so
+                                // it keeps its own colour and its own word
+                                // rather than wearing a folder icon that
+                                // implies it could be renamed or nested.
+                                val isKeyring = child.kind == FolderKind.KEYRING
+                                val ringId = if (isKeyring) {
+                                    state.keyrings.values
+                                        .firstOrNull { !it.deleted.value && it.name.value == child.name }
+                                        ?.id
+                                } else {
+                                    null
+                                }
                                 VaultRow(
-                                    initials = "\uD83D\uDCC1",
+                                    initials = if (isKeyring) "\u25CF" else "\uD83D\uDCC1",
                                     title = child.name,
-                                    subtitle = "${child.count} password" +
+                                    subtitle = (if (isKeyring) "Keyring · " else "") +
+                                        "${child.count} password" +
                                         if (child.count == 1) "" else "s",
                                     onClick = {
                                         folderPath = child.path.joinToString("\u0000")
                                     },
-                                    accent = statusColors.muted,
+                                    accent = if (ringId != null) {
+                                        ringColor(state, ringId)
+                                    } else {
+                                        statusColors.muted
+                                    },
                                 )
                                 HorizontalDivider(color = statusColors.line)
                             }

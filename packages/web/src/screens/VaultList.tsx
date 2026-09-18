@@ -130,8 +130,8 @@ export function VaultList({
    */
   const searching = query.trim() !== "";
   const view = useMemo(
-    () => (searching ? { folders: [], items: shown } : browseFolders(shown, state, folder)),
-    [searching, shown, state, folder],
+    () => (searching ? { folders: [], items: shown } : browseFolders(shown, state, folder, ring)),
+    [searching, shown, state, folder, ring],
   );
 
   return (
@@ -194,7 +194,10 @@ export function VaultList({
           type="button"
           className="ring"
           aria-pressed={ring === null}
-          onClick={() => setRing(null)}
+          onClick={() => {
+            setRing(null);
+            setFolder([]);
+          }}
         >
           <i style={{ background: "#5b6672" }} />
           All {items.length}
@@ -207,7 +210,13 @@ export function VaultList({
               type="button"
               className="ring"
               aria-pressed={ring === r.id}
-              onClick={() => setRing(r.id === ring ? null : r.id)}
+              onClick={() => {
+                setRing(r.id === ring ? null : r.id);
+                // The path means nothing in another keyring, and keeping it
+                // would land somebody in a folder that is empty because it is
+                // somebody else's.
+                setFolder([]);
+              }}
             >
               <i style={{ background: ringColor(state, r.id) }} />
               {r.name.value} {count}
@@ -230,15 +239,86 @@ export function VaultList({
         syncing={status.syncing}
       />
 
-      {shown.length === 0 ? (
+      {/*
+        Where you are, and the way back up.
+
+        A breadcrumb rather than a back button, because the levels above are
+        each one click away — going from "Leslie / Banks / Cards" to the top
+        should not be three gestures and a guess about how deep you were.
+      */}
+      {!searching && folder.length > 0 && (
+        <nav className="crumbs" aria-label="Folders">
+          <button type="button" className="linkish" onClick={() => setFolder([])}>
+            All
+          </button>
+          {folder.map((name, index) => (
+            <span key={folder.slice(0, index + 1).join("/")}>
+              <span aria-hidden="true"> / </span>
+              <button
+                type="button"
+                className="linkish"
+                onClick={() => setFolder(folder.slice(0, index + 1))}
+              >
+                {name}
+              </button>
+            </span>
+          ))}
+        </nav>
+      )}
+
+      {view.folders.length === 0 && view.items.length === 0 ? (
         <p className="empty">
           {items.length === 0
             ? "No passwords saved yet. Add your first one below."
-            : "Nothing matches that search."}
+            : searching
+              ? "Nothing matches that search."
+              : folder.length > 0
+                ? "This folder is empty."
+                : "Nothing here."}
         </p>
       ) : (
         <div className="list">
-          {shown.map((item) => (
+          {/* Folders first, because a folder is a place and the things at this
+              level are its contents. */}
+          {view.folders.map((child) => {
+            // A keyring is not a folder somebody made, so it keeps its own
+            // colour and its own word rather than wearing a folder icon that
+            // implies it could be renamed or nested.
+            const ringId =
+              child.kind === "keyring"
+                ? Object.values(state.keyrings).find(
+                    (r) => !r.deleted.value && r.name.value === child.name,
+                  )?.id
+                : undefined;
+            return (
+              <button
+                key={child.path.join("/")}
+                type="button"
+                className="row"
+                onClick={() => setFolder(child.path)}
+              >
+                {ringId ? (
+                  <i
+                    className="avatar"
+                    aria-hidden="true"
+                    style={{ background: ringColor(state, ringId) }}
+                  />
+                ) : (
+                  <i className="avatar" aria-hidden="true">
+                    &#128193;
+                  </i>
+                )}
+                <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                  <span style={{ display: "block" }}>{child.name}</span>
+                  <span className="hint">
+                    {child.kind === "keyring" ? "Keyring · " : ""}
+                    {child.count} password{child.count === 1 ? "" : "s"}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+          {view.items.map((item) => (
             <ItemRow
               key={item.id}
               item={item}
