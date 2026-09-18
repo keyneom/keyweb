@@ -115,6 +115,7 @@ export function Settings({
   onAppearance,
   onBack,
   onImport,
+  onLock,
   sharing,
 }: {
   textSize: TextSize;
@@ -123,6 +124,7 @@ export function Settings({
   onAppearance: (value: Appearance) => void;
   onBack: () => void;
   onImport: () => void;
+  onLock: () => void;
   /** Null when this build has no Google account and so cannot share at all. */
   sharing: SharingApi | null;
 }) {
@@ -137,6 +139,26 @@ export function Settings({
 
       <h1 className="screen-title">Settings</h1>
       <p className="screen-sub">These change straight away. You can come back and change them again.</p>
+
+      {/*
+        First, because it is the thing somebody comes here in a hurry to do —
+        stepping away from a shared computer. Locking existed from the
+        beginning and was reachable from nowhere: the only way to lock was to
+        close the tab, which is not something a person does deliberately while
+        someone is waiting to use the machine.
+      */}
+      <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
+        <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
+          Lock Keyweb
+        </legend>
+        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+          Closes your passwords straight away. You'll need your face, fingerprint or PIN to open
+          them again.
+        </p>
+        <button type="button" className="btn sec big" onClick={onLock}>
+          Lock now
+        </button>
+      </fieldset>
 
       <Choice
         label="Text size"

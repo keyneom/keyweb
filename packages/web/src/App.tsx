@@ -362,6 +362,10 @@ export function App() {
           onAppearance={display.setAppearance}
           onBack={() => setRoute({ name: "list" })}
           onImport={() => setRoute({ name: "import" })}
+          onLock={() => {
+            vault.lock();
+            setRoute({ name: "list" });
+          }}
           sharing={vault.sharing}
         />
       )}

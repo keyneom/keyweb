@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -81,6 +82,22 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        /*
+         * No screenshots, no recents thumbnail, no screen recording, and no
+         * casting of this window.
+         *
+         * Set for the whole activity rather than only for the screens showing
+         * a password, because the list already shows which accounts somebody
+         * has and the recents thumbnail is taken by the system at a moment
+         * this app does not choose. A flag that is on sometimes is a flag that
+         * is off at the moment it mattered.
+         *
+         * The cost is real and accepted: screen sharing Keyweb to show
+         * somebody how it works now shows them a black rectangle. That is the
+         * correct trade for a window with passwords in it, and it is what
+         * every other password manager does.
+         */
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         setContent { KeywebApp(viewModel, this) }
         viewModel.openShareLink(intent?.data?.toString())
     }
@@ -492,6 +509,10 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onShowSharingKey = viewModel::showSharingKey,
                         onBackup = { route = Route.Backup },
                         onScanCodes = { route = Route.Scan },
+                        onLock = {
+                            viewModel.lock()
+                            route = Route.List
+                        },
                         onImport = {
                             // Quietly: if Drive access already exists the list
                             // fills in, and if it does not, nothing interrupts.

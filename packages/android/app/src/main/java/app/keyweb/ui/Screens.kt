@@ -1264,6 +1264,7 @@ fun SettingsScreen(
     onBackup: () -> Unit,
     onImport: () -> Unit,
     onScanCodes: () -> Unit = {},
+    onLock: () -> Unit = {},
     /** Null when this build has no Google account and so cannot share at all. */
     sharingKey: String? = null,
     canShare: Boolean = false,
@@ -1342,6 +1343,26 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Codes from another app", onScanCodes)
+
+            /*
+             * First, because it is the thing somebody comes here in a hurry
+             * to do — handing the phone to someone, or putting it down.
+             *
+             * Locking existed from the beginning and was reachable from
+             * nowhere: the only way to lock was to force-stop the app or wait
+             * for the Keystore window to expire, neither of which is something
+             * a person does deliberately.
+             */
+            Spacer(Modifier.height(16.dp))
+            Text("Lock Keyweb", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Closes your passwords straight away. You'll need your face, fingerprint or " +
+                    "PIN to open them again.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton("Lock now", onLock)
 
             Spacer(Modifier.height(24.dp))
             Text("Text size", style = MaterialTheme.typography.labelLarge)
