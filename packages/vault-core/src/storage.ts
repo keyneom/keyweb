@@ -214,6 +214,22 @@ export function replay(base: VaultState, ops: readonly VaultOp[]): VaultState {
 }
 
 /**
+ * A backup is there, and this vault's key does not open it.
+ *
+ * Deliberately not [RemoteUnavailableError] and emphatically not `null`.
+ * "Offline" is close enough for what the engine does next — stop, keep the
+ * work queued, say so — but `null` means "there is no backup", and a sync that
+ * believes that **publishes over it**. That is how a browser replaced a
+ * phone's vault with an empty one.
+ */
+export class BackupUnreadableError extends Error {
+  constructor(message = "This backup was not written by this vault.") {
+    super(message);
+    this.name = "BackupUnreadableError";
+  }
+}
+
+/**
  * The remote could not be reached. Distinct from a conflict: the vault is
  * intact, the user is simply offline, and pending work stays queued.
  */

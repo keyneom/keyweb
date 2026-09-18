@@ -152,6 +152,8 @@ fun BackupStatusLine(
      * that just said something was not backed up yet.
      */
     onSync: (() -> Unit)? = null,
+    /** Overwrite a backup this vault cannot read with this device's copy. */
+    onReplaceBackup: (() -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
@@ -178,6 +180,24 @@ fun BackupStatusLine(
             actionLabel = label("Back up now"),
             onAction = sync,
             actionEnabled = !status.syncing,
+        )
+
+        /*
+         * Before the generic error branch, because "Try again" is exactly the
+         * wrong offer here: the next attempt reads the same unreadable file
+         * and fails the same way. The only thing that helps is replacing it,
+         * and that is destructive enough to be named rather than implied.
+         */
+        status.backupUnreadable -> StatusLine(
+            Tone.RISK,
+            "The backup in Drive isn't this phone's.",
+            (error ?: "This phone's code doesn't open it.") +
+                " Everything on this phone is fine and unchanged. You can put this phone's " +
+                "copy back — which replaces whatever is in Drive now.",
+            modifier,
+            actionLabel = label("Replace the backup"),
+            onAction = onReplaceBackup,
+            actionEnabled = !status.syncing && onReplaceBackup != null,
         )
 
         error != null -> StatusLine(

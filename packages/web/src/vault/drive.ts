@@ -1,6 +1,7 @@
 import { GoogleDriveFileStore } from "@keyneom/sync-kit/stores/google-drive";
 import type { Authorization } from "@keyneom/sync-kit/core";
 import {
+  BackupUnreadableError,
   RemoteUnavailableError,
   type RemoteRevision,
   type RemoteVaultStore,
@@ -105,6 +106,32 @@ export function recoveryIsStale(payload: {
  * So the bare form is now recognised by what it actually is, an envelope, and
  * a wrapper is a wrapper even when the member this browser wants is missing.
  */
+/**
+ * The backup is real and this browser has no key for it.
+ *
+ * Its own error rather than a null or a transport failure, because those are
+ * the two readings that end in an overwrite or a silent empty screen.
+ */
+export class BackupNeedsRecoveryCodeError extends BackupUnreadableError {
+  constructor() {
+    super(
+      "This backup was made on a phone, which can't create a key for this browser. " +
+        "Enter your recovery code once and this browser will make its own.",
+    );
+    this.name = "BackupNeedsRecoveryCodeError";
+  }
+}
+
+/** Can this cipher actually open that envelope? The only honest test is to try. */
+async function opens(cipher: VaultCipher, envelope: unknown): Promise<boolean> {
+  try {
+    await cipher.openState(envelope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parsePayload(content: string): BackupPayload | null {
   const parsed = JSON.parse(content) as BackupPayload | Record<string, unknown>;
   if (!parsed || typeof parsed !== "object") return null;
@@ -250,23 +277,30 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       const payload = parsePayload(content);
       if (!payload) return null;
       /*
-       * A backup with no envelope this key can open is not a broken backup.
+       * A backup with no envelope this key can open is NOT an empty backup.
        *
-       * It is what a vault made entirely on a phone looks like, and the honest
-       * answer is "there is nothing here for me", not a transport failure.
-       * Throwing put the browser into the offline state permanently: it could
-       * never publish, so it could never *add* the passkey envelope that would
-       * have fixed it, and the only way out was to stop using the browser.
+       * This returned null, on the reasoning that null would let the browser
+       * publish and thereby add the passkey envelope it was missing. That was
+       * wrong, and it cost somebody their backup: null means "there is nothing
+       * here", the engine believed it, and the browser published an empty
+       * vault over a phone's real one.
        *
-       * Returning null lets the engine publish, and the write carries the
-       * recovery envelope forward untouched — so the phone keeps its way in
-       * while the browser gains one.
+       * The rule this violated is the same one the whole engine is built on —
+       * never turn "I cannot read this" into "I may overwrite this". So it is
+       * an error now, with its own name, and the screen it reaches asks for
+       * the recovery code. A browser cannot bootstrap itself into a phone's
+       * backup by writing to it; it has to be let in.
        */
-      if (payload.passkey === undefined) return null;
+      if (payload.passkey === undefined) {
+        throw new BackupNeedsRecoveryCodeError();
+      }
       const state = await this.#cipher.openState(payload.passkey);
       return { state, version };
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
+      // Not a transport failure, and not something to retry quietly: it needs
+      // a person and a recovery code.
+      if (cause instanceof BackupNeedsRecoveryCodeError) throw cause;
       throw new RemoteUnavailableError(
         cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
       );
@@ -326,9 +360,24 @@ export class GoogleDriveRemote implements RemoteVaultStore {
   }
 
   async #payload(state: VaultState, carried: unknown): Promise<BackupPayload> {
-    const recovery = this.#recoveryCipher
-      ? await this.#recoveryCipher.sealState(state)
-      : carried;
+    /*
+     * Reseal the recovery copy only with a code that already opens it.
+     *
+     * A browser holding its *own* recovery secret — minted the first time
+     * somebody set Keyweb up in it — would otherwise reseal the recovery
+     * envelope under that secret, silently retiring the code the phone was
+     * using and locking the phone out of its own backup. That is exactly what
+     * happened, and the printed sheet in somebody's drawer stops working with
+     * no error anywhere.
+     *
+     * So the cipher has to prove itself against what is already there. If it
+     * cannot, the envelope is carried forward untouched, which is what a
+     * device that cannot rewrite it is supposed to do.
+     */
+    const mine = this.#recoveryCipher;
+    const canReseal =
+      mine !== null && (carried === undefined || (await opens(mine, carried)));
+    const recovery = mine !== null && canReseal ? await mine.sealState(state) : carried;
     return {
       v: 1,
       passkey: await this.#cipher.sealState(state),
@@ -348,10 +397,15 @@ export class GoogleDriveRemote implements RemoteVaultStore {
    * which `recoveryIsStale` reports so the app can ask for the code rather than
    * let it quietly rot.
    *
-   * A device that *can* reseal skips the extra round trip entirely.
+   * It used to skip this read entirely when this device *could* reseal, on the
+   * reasoning that a device with a recovery cipher has no need to preserve
+   * anything. That reasoning has a hole in it big enough to lose a backup
+   * through: holding *a* recovery code is not the same as holding *this
+   * backup's* recovery code. A browser with its own code from its own first
+   * run took that path and resealed the envelope under a code the phone had
+   * never seen. So the read always happens, and `#payload` decides.
    */
   async #carriedRecovery(fileId: string, authorization: Authorization): Promise<unknown> {
-    if (this.#recoveryCipher) return undefined;
     let existing: string;
     try {
       existing = await this.#store.readText(fileId, authorization);

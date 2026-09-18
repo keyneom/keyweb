@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { itemField } from "@keyweb/vault-core";
-import { GoogleDriveRemote } from "../src/vault/drive";
+import { BackupNeedsRecoveryCodeError, GoogleDriveRemote } from "../src/vault/drive";
 import { createRecoveryCipher, unlockVault } from "../src/vault/crypto";
-import { parseRecoveryCode } from "../src/vault/recovery";
+import {
+  formatRecoveryCode,
+  generateRecoverySecret,
+  parseRecoveryCode,
+} from "../src/vault/recovery";
 import { FakeDrive, fakeAuthenticator } from "./helpers";
 
 /**
@@ -156,5 +160,64 @@ describe("a backup a phone made, opened in a browser", () => {
     );
 
     expect(await remote.fetchSealedState()).not.toBeNull();
+  });
+});
+
+/**
+ * The overwrite, and the two guards that now stop it.
+ *
+ * What happened: a browser read a phone's backup, found no envelope its
+ * passkey could open, and took that for an *empty* backup. It then published
+ * an empty vault — and because that browser had minted its own recovery code
+ * the first time somebody set Keyweb up in it, the write resealed the recovery
+ * envelope under that code too. The phone's own code stopped opening its own
+ * backup, and the phone crashed trying.
+ *
+ * Both halves are pinned here. Neither is a nicety: each on its own would have
+ * been enough to prevent it.
+ */
+describe("a browser must not overwrite a backup it cannot read", () => {
+  it("refuses to call an unreadable backup an empty one", async () => {
+    const drive = driveHoldingThePhonesBackup();
+    const remote = await browser(drive);
+
+    // Not null. Null is "there is nothing here", which the engine acts on by
+    // publishing, and publishing is the thing that destroyed the backup.
+    await expect(remote.read()).rejects.toThrow(BackupNeedsRecoveryCodeError);
+
+    // And nothing was written on the way to finding that out.
+    expect(drive.files.get("file-1")!.content).toBe(fixture.content);
+  });
+
+  it("never reseals the recovery copy with a code that does not open it", async () => {
+    const drive = driveHoldingThePhonesBackup();
+    const before = JSON.parse(fixture.content).recovery;
+
+    // A browser that has its own recovery secret from its own first run — a
+    // different code entirely from the one the phone uses.
+    const { cipher } = await unlockVault(null, {
+      rpId: "localhost",
+      navigator: fakeAuthenticator(9),
+      secureContext: () => true,
+    });
+    const strangersCode = await createRecoveryCipher(
+      parseRecoveryCode(formatRecoveryCode(generateRecoverySecret())),
+      undefined,
+      "keyweb",
+    );
+    const remote = new GoogleDriveRemote({
+      clientId: "test",
+      cipher,
+      recoveryCipher: strangersCode,
+      store: drive.asStore(),
+      authorize: async () => ({ accessToken: "token" }) as never,
+    });
+
+    await remote.write({ items: {}, keyrings: {} }, null);
+
+    const after = JSON.parse(drive.files.get("file-1")!.content).recovery;
+    // Byte for byte. The phone's way into its own backup is not this
+    // browser's to retire.
+    expect(after).toEqual(before);
   });
 });

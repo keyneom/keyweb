@@ -376,6 +376,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onSettings = { route = Route.Settings },
                         onSetUpBackup = { route = Route.Backup },
                         onSync = viewModel::syncNow,
+                        onReplaceBackup = viewModel::replaceBackupFromThisPhone,
                         onDeleteMany = viewModel::deleteItems,
                         onMoveMany = viewModel::moveItems,
                         currentVersion = BuildConfig.VERSION_NAME,

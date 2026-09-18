@@ -18,6 +18,15 @@ data class SyncStatus(
     val lastPublishedAtMs: Long? = null,
     val lastError: String? = null,
     val syncing: Boolean = false,
+    /**
+     * The backup exists and this vault's key does not open it.
+     *
+     * A flag rather than something inferred from [lastError], because the one
+     * action that helps here — overwriting the backup with this device's copy
+     * — is destructive, and offering it because a string matched would be a
+     * bad way to decide that.
+     */
+    val backupUnreadable: Boolean = false,
 )
 
 /**
@@ -621,6 +630,26 @@ class VaultSync(
                     store.read()
                 } catch (error: RemoteUnavailableException) {
                     return offline(error)
+                } catch (error: BackupUnreadableException) {
+                    /*
+                     * Stop. Do not publish.
+                     *
+                     * The one thing that must never happen here is treating a
+                     * backup we cannot read as a backup that is not there:
+                     * that turns "I can't open this" into "I'll overwrite it",
+                     * which is exactly how a browser wiped a phone's backup.
+                     * The local vault is untouched and the pending queue keeps
+                     * its work; somebody is told, and decides.
+                     */
+                    statusValue = statusValue.copy(
+                        lastError = error.message
+                            ?: "This backup was not written by this vault.",
+                        backupUnreadable = true,
+                    )
+                    return SyncOutcome.Offline(
+                        refreshPending(),
+                        error.message ?: "This backup was not written by this vault.",
+                    )
                 }
 
                 // Adopt remote causal time so our next local write sorts after
@@ -635,6 +664,7 @@ class VaultSync(
                     storage.writeClock(clock.snapshot())
                 }
 
+                statusValue = statusValue.copy(backupUnreadable = false)
                 val local = storage.readState(documentId)
                 val base = revision?.state ?: emptyVault()
 

@@ -226,22 +226,26 @@ describe("a backup written by a phone", () => {
   });
 
   /**
-   * The silent half. A browser that cannot reseal the recovery copy must carry
-   * it forward, and it was reading it off a mis-parse that always returned
-   * undefined — so the write dropped it and the phone lost its way in.
+   * This test used to assert that the browser publishes here, adding its own
+   * passkey envelope on the way — and that was the bug, written down as a
+   * requirement. Publishing over a backup you could not read is how a phone's
+   * vault got replaced by an empty one.
+   *
+   * What must happen is that the sync stops and the file is untouched. The
+   * browser gets in by being given the recovery code, not by writing to a
+   * backup it cannot open.
    */
-  it("keeps the recovery envelope when the browser writes", async () => {
+  it("does not publish over a backup it cannot read", async () => {
     const drive = await driveHolding(phoneWritten);
     const { sync } = await makeDevice(drive, "web", 1);
 
     await sync.putKeyring({ keyringId: "personal", name: "Just mine" });
     await sync.sync();
 
-    const after = JSON.parse(drive.files.get("file-1")!.content);
-    expect(after.recovery).toMatchObject({ ciphertext: "sealed-on-the-phone" });
-    // ...and the browser has now added its own way in, so the next visit needs
-    // no code.
-    expect(after.passkey).toBeDefined();
+    // Byte for byte what the phone left there.
+    expect(drive.files.get("file-1")!.content).toBe(phoneWritten);
+    // And the local edit is still queued rather than silently considered done.
+    expect(sync.status().pending).toBeGreaterThan(0);
   });
 
   /** The genuinely old shape still has to be read as what it is. */

@@ -23,7 +23,8 @@ import {
   extractDataset,
   withoutDatasetItems,
 } from "./datasets.js";
-import { RemoteUnavailableError, VersionConflictError } from "./storage.js";
+import { BackupUnreadableError,
+  RemoteUnavailableError, VersionConflictError } from "./storage.js";
 
 export type SyncOutcome =
   | { status: "published"; version: string; pending: number }
@@ -934,6 +935,26 @@ export class VaultSync {
   }
 
   async #offline(error: unknown): Promise<SyncOutcome> {
+    /*
+     * A backup that will not open stops the sync; it never becomes a publish.
+     *
+     * The one thing that must never happen is treating a backup we cannot read
+     * as a backup that is not there — that turns "I can't open this" into
+     * "I'll overwrite it", which is how a browser replaced a phone's vault
+     * with an empty one. Rethrowing it instead, as this did, is barely better:
+     * it escaped the engine and took the app down with it.
+     *
+     * So it lands here like any other reason the remote is unusable. The local
+     * vault is untouched and the pending queue keeps its work.
+     */
+    if (error instanceof BackupUnreadableError) {
+      this.#lastError = error.message;
+      return {
+        status: "offline",
+        pending: await this.#refreshPending(),
+        reason: error.message,
+      };
+    }
     if (!(error instanceof RemoteUnavailableError)) throw error;
     this.#lastError = error.message;
     return {

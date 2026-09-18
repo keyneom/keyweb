@@ -1899,6 +1899,35 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Put this phone's vault back into Drive, over a backup it cannot read.
+     *
+     * Deliberately a button somebody presses, not something the sync does on
+     * its own. The engine now refuses to publish over a backup it could not
+     * open — that refusal is the whole safety property, and automating a way
+     * around it would give it back with extra steps.
+     *
+     * What it writes is this phone's local vault, which is untouched: the
+     * failure was reading the *backup*, not the vault. The passkey envelope,
+     * if the file has one, is carried forward as always, because this device
+     * cannot read it and therefore has no business deciding it is worthless.
+     */
+    fun replaceBackupFromThisPhone() {
+        val engine = sync ?: return
+        viewModelScope.launch {
+            try {
+                val local = engine.state()
+                // No expected version: this is the deliberate overwrite, and
+                // the thing it is overwriting is by definition not ours.
+                remote.write(local, null)
+                showToast("The backup in Drive is this phone's vault again.")
+                syncNow()
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't rewrite the backup.")
+            }
+        }
+    }
+
     fun reportImportProblem(message: String) {
         setImport { it.copy(error = message, busy = false) }
     }

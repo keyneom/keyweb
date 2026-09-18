@@ -1,5 +1,7 @@
 package app.keyweb.data
 
+import app.keyweb.vault.BackupUnreadableException
+import app.keyweb.vault.EnvelopeDecryptException
 import app.keyweb.vault.RemoteRevision
 import app.keyweb.vault.RemoteUnavailableException
 import app.keyweb.vault.RemoteVaultStore
@@ -113,7 +115,23 @@ class DriveVaultRemote(
         val payload = parse(drive.readText(id)) ?: return@reachable null
         val recovery = payload.recovery ?: return@reachable null
         val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
-        val state = cipher.open(envelope)
+        /*
+         * A backup that exists and will not open is not an absent backup.
+         *
+         * Letting this throw killed the app outright; returning null would
+         * have been worse, because the engine would have read "no backup" and
+         * published over whatever is actually in the file. Both were reachable
+         * the moment something else wrote a recovery envelope sealed under a
+         * different code — which is precisely what a browser did.
+         */
+        val state = try {
+            cipher.open(envelope)
+        } catch (cause: EnvelopeDecryptException) {
+            throw BackupUnreadableException(
+                "The backup in Google Drive was written by something else and this phone's " +
+                    "code doesn't open it. Nothing on this phone has changed.",
+            )
+        }
 
         /*
          * Repair a backup written before the envelope carried its own version.

@@ -119,6 +119,20 @@ class RemoteUnavailableException(
     message: String = "The encrypted backup could not be reached.",
 ) : Exception(message)
 
+/**
+ * A backup is there, and this device's key does not open it.
+ *
+ * Deliberately not [RemoteUnavailableException] and emphatically not `null`.
+ * "Offline" makes the engine retry quietly forever; `null` means "there is no
+ * backup", and a sync that believes that **publishes over it** — which is how
+ * a browser that could not read a phone's backup replaced it with an empty
+ * one. Unreadable is its own answer, it stops the sync, and it is somebody's
+ * decision what to do next rather than the engine's.
+ */
+class BackupUnreadableException(
+    message: String = "This backup was not written by this vault.",
+) : Exception(message)
+
 data class RemoteRevision(val state: VaultState, val version: String)
 
 /**
