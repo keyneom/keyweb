@@ -583,9 +583,16 @@ export function useVault(): VaultApi {
         const viaCode = await createRecoveryCipher(secret, sealed);
         const recovered = await viaCode.openState(sealed);
 
-        // Re-establish this device with a new passkey, then seed it with what
-        // the code just opened.
-        const { cipher, lock } = await unlockVault(null);
+        /*
+         * Reuse this browser's passkey when it has one.
+         *
+         * This always passed null, which mints a *new* credential — fine when
+         * the path could only be reached on a first run, and wrong now that
+         * somebody whose browser already has a vault can reach it. A second
+         * credential for the same vault leaves the first one orphaned, and the
+         * envelope it sealed unopenable by the browser that wrote it.
+         */
+        const { cipher, lock } = await unlockVault(await peekSealedState());
         const storage = await IndexedDbVaultStorage.open({ cipher });
         await storage.applyRemote(recovered);
         /*

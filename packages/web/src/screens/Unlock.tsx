@@ -109,16 +109,31 @@ export function Unlock({
         {busy ? "Waiting for you…" : firstRun ? "Set up Keyweb" : "Unlock"}
       </button>
 
-      {firstRun && backupConfigured && (
+      {/*
+        Not `firstRun` any more, and that was the bug.
+
+        The recovery code was reachable on the very first screen and nowhere
+        else — so the one person who needs it, whose browser already has a
+        vault it cannot reconcile with the backup, could never get to it. The
+        app told them to enter their code beside no field to enter it in.
+
+        Somebody who has set this browser up is exactly who needs the way back
+        in, not somebody who has not.
+      */}
+      {backupConfigured && (
         <>
           <p className="unlock-or">or</p>
-          <button type="button" className="btn sec big" onClick={onRestore} disabled={busy}>
-            I already use Keyweb — restore my passwords
-          </button>
-          <p className="unlock-note">
-            Sign in with the same Google account and unlock with the same face, fingerprint or
-            PIN you used before.
-          </p>
+          {firstRun && (
+            <>
+              <button type="button" className="btn sec big" onClick={onRestore} disabled={busy}>
+                I already use Keyweb — restore my passwords
+              </button>
+              <p className="unlock-note">
+                Sign in with the same Google account and unlock with the same face, fingerprint
+                or PIN you used before.
+              </p>
+            </>
+          )}
 
           {showCode ? (
             <div className="code-entry">
@@ -158,7 +173,9 @@ export function Unlock({
               them looking for a problem with their Google sign-in.
             */
             <button type="button" className="linkish" onClick={() => setShowCode(true)}>
-              Use my recovery code instead — or if my vault was made on a phone
+              {firstRun
+                ? "Use my recovery code instead — or if my vault was made on a phone"
+                : "My passwords are missing — open the backup with my recovery code"}
             </button>
           )}
         </>

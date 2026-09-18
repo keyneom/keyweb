@@ -413,25 +413,48 @@ export class GoogleDriveRemote implements RemoteVaultStore {
        * asked for.
        */
       /*
-       * Refuse a copy that is demonstrably behind the other one.
+       * The newest copy this browser can actually open.
        *
-       * Opening it would succeed, and that is the problem: the browser would
-       * report itself synced while showing a vault the phone has since moved
-       * on from — or an empty one. A wrong answer delivered confidently is
-       * worse than an error, and this is the only evidence available without
-       * the key to the other envelope.
+       * Not "the passkey one, always". A phone that cannot reseal the passkey
+       * envelope leaves it frozen, so preferring it means reading a vault the
+       * phone moved on from — and reporting that as synced, which is how two
+       * devices ended up confidently showing different things.
+       *
+       * Once this browser holds the recovery code it can open that copy too,
+       * so the answer stops being an error and becomes the newer data. That is
+       * what makes "enter your code" a fix rather than an acknowledgement.
        */
-      if (passkeyCopyIsStale(payload)) {
-        throw new BackupBehindError();
+      const openable: { at: string | null; open: () => Promise<VaultState> }[] = [];
+      if (payload.passkey !== undefined) {
+        openable.push({
+          at: sealedAt(payload.passkey),
+          open: () => this.#cipher.openState(payload.passkey),
+        });
+      }
+      if (payload.recovery !== undefined && this.#recoveryCipher) {
+        const recoveryCipher = this.#recoveryCipher;
+        openable.push({
+          at: sealedAt(payload.recovery),
+          open: () => recoveryCipher.openState(payload.recovery),
+        });
+      }
+      // Newest first, and a copy with no timestamp sorts last rather than
+      // winning by accident.
+      openable.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+
+      for (const candidate of openable) {
+        try {
+          return { state: await candidate.open(), version };
+        } catch {
+          // Try the next one. A key that does not fit this copy is ordinary.
+        }
       }
 
-      let state: VaultState;
-      try {
-        state = await this.#cipher.openState(payload.passkey);
-      } catch {
-        throw new BackupNeedsRecoveryCodeError();
-      }
-      return { state, version };
+      // Nothing opened. Which message depends on whether the thing this
+      // browser cannot read is merely newer, or the only copy there is.
+      throw passkeyCopyIsStale(payload)
+        ? new BackupBehindError()
+        : new BackupNeedsRecoveryCodeError();
     } catch (cause) {
       if (cause instanceof RemoteUnavailableError) throw cause;
       /*
