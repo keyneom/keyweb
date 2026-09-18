@@ -144,12 +144,7 @@ dependencies {
     // and the link-carried key exchange. A port of this would have to stay
     // byte-compatible with the web's copy forever, and the whole point of the
     // library is that it already is.
-    implementation("com.keyneom:sync-kit-android:0.4.1")
-
-    // Custom Tabs, for handing the Google Picker to a browser. Android has no
-    // native `drive.file` chooser, and the app owns the keyneom.github.io link
-    // so a plain VIEW intent would come straight back to itself.
-    implementation("androidx.browser:browser:1.8.0")
+    implementation("com.keyneom:sync-kit-android:0.4.2")
 
     // Being a Credential Manager provider. Only the provider half is used --
     // Keyweb answers requests, it does not make them -- and the service it

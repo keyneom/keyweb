@@ -144,6 +144,17 @@ object GrantBrowser {
             false
         }
 
+        /**
+         * A plain browser intent, never a Custom Tab.
+         *
+         * The dependency for Custom Tabs was carried for a year with a comment
+         * saying it was for this, and nothing ever called it — which was
+         * lucky, because a Custom Tab is the wrong answer: Google Identity
+         * Services' popup token flow breaks inside one, the popup replaces the
+         * page, and the token never reaches the opener. sync-kit documents
+         * this now, and ships `launchGrantInBrowser` doing the same thing this
+         * does.
+         */
         private fun viewIntent(url: String): Intent =
             Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
     }

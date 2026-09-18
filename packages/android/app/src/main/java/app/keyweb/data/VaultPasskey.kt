@@ -6,6 +6,8 @@ import app.keyweb.vault.KeywebEnvelope
 import app.keyweb.vault.SyncEnvelopeV1
 import app.keyweb.vault.VaultEnvelopeCipher
 import com.keyneom.synckit.core.SyncCodec
+import com.keyneom.synckit.core.SyncKitError
+import com.keyneom.synckit.core.SyncKitErrorCode
 import com.keyneom.synckit.crypto.PasskeyProfile
 import com.keyneom.synckit.crypto.V1CompatibilityProfile
 import com.keyneom.synckit.crypto.V1Compression
@@ -121,10 +123,7 @@ object VaultPasskey {
             val secret = provider.unlock(activity, envelope.toSyncKit())
             VaultEnvelopeCipher.forPasskeySecret(secret, envelope.toMetadata())
         } catch (cause: Exception) {
-            throw Unavailable(
-                "This phone couldn't use the passkey that opens your backup.",
-                cause,
-            )
+            throw Unavailable(explain(cause, "open the passkey that unlocks your backup"), cause)
         }
 
     /** Make a passkey for this vault, for a backup that has none yet. */
@@ -141,8 +140,30 @@ object VaultPasskey {
                 ),
             )
         } catch (cause: Exception) {
-            throw Unavailable("This phone couldn't make a passkey for your backup.", cause)
+            throw Unavailable(explain(cause, "make a passkey for your backup"), cause)
         }
+
+    /**
+     * Say what actually went wrong, when the library knows.
+     *
+     * sync-kit 0.4.2 raises `SyncKitErrorCode.KEY` with a message naming the
+     * asset-link fix, precisely because the platform exception underneath it
+     * cannot tell "this app is not authorised for that domain" from "this
+     * person has no passkey". Before that, both arrived as a bare
+     * `NoCredentialException` — and reading it as the second is the mistake
+     * that had this whole app built around a limitation that did not exist.
+     *
+     * So the library's own words are passed through rather than replaced with
+     * a tidier sentence of ours. It is hedged on purpose at the source, and
+     * flattening that hedge into something confident would repeat the original
+     * error in the opposite direction.
+     */
+    private fun explain(cause: Exception, attempt: String): String {
+        if (cause is SyncKitError && cause.code == SyncKitErrorCode.KEY) {
+            return cause.message ?: "This phone couldn't $attempt."
+        }
+        return "This phone couldn't $attempt."
+    }
 
     /** Drop the cached key, so the next use asks again. */
     fun clear() = provider.clear()

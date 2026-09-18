@@ -286,14 +286,33 @@ Done. `https://keyneom.github.io/.well-known/assetlinks.json` names
 `keyneom.github.io: verified`, so a shared-keyring link opens the app rather
 than the website.
 
-**If the release signing key ever changes, that file has to change on the same
-day.** Android identifies the app by certificate fingerprint, so a re-signed
-build is a different app to it, and every link silently goes back to opening
-the website with no error anywhere. Check with:
+The same file carries `delegate_permission/common.get_login_creds`, which is
+what lets the phone hold the passkey the backup is sealed with. The two
+relations do different jobs and are independent.
+
+**If the signing key ever changes, that file has to change on the same day.**
+Android identifies the app by *certificate fingerprint*, not by package name,
+so a re-signed build is a different app to it: every link silently goes back to
+opening the website and every passkey stops resolving, with no error anywhere.
+Debug, release and Play App Signing are three different certificates — Keyweb's
+debug build sidesteps this by using a different package entirely
+(`app.keyweb.debug`), but **uploading to Play would re-sign with Google's key
+and break both relations until the new fingerprint is added.**
+
+Checking is where this gets its own trap:
 
 ```
 adb shell pm get-app-links app.keyweb
 ```
+
+**That command only answers for `handle_all_urls`.** App Links can report
+`verified` while passkeys are entirely unavailable, because nothing surfaces
+`get_login_creds` from the device side. Reporting a green result from it as
+though it covered both is a mistake this project has already made once. The
+only real check for the passkey half is to use one and see; since sync-kit
+0.4.2 a missing asset link comes back as a `SyncKitErrorCode.KEY` that names
+the fix, instead of a bare "no credential" indistinguishable from the person
+simply not having a passkey.
 
 The keyrings screen still takes a pasted link, and always will. That is not a
 fallback for an error — it is the path that works on a phone where the person
