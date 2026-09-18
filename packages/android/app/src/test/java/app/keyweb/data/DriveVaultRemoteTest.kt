@@ -226,3 +226,61 @@ class DriveVaultRemoteTest {
         )
     }
 }
+
+/**
+ * The exact bytes a phone-only vault puts in Drive, handed to the web suite.
+ *
+ * Written by the real [DriveVaultRemote] rather than assembled by hand, so the
+ * claim it supports — "a vault created on a phone has no passkey envelope in
+ * it, and a browser therefore cannot open it without the recovery code" — is
+ * demonstrated by the shipping writer rather than asserted about it.
+ *
+ * The web's `phone-made-backup.test.ts` opens this file. If Android ever gains
+ * a way to write the passkey envelope, that test fails and says so.
+ */
+class PhoneMadeBackupFixtureTest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @kotlinx.serialization.Serializable
+    private data class Fixture(
+        val note: String,
+        val recoveryCode: String,
+        val password: String,
+        val content: String,
+    )
+
+    @Test
+    fun `emits what a phone-only vault looks like in Drive`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        // Two writes, because the second is the one that exercises the
+        // carry-forward branch — a first write has nothing to preserve, and
+        // the interesting question is what an established phone vault holds.
+        val remote = remoteOn(drive, secret)
+        val first = remote.write(vaultWith("phone-only-password"), null)
+        remote.write(vaultWith("phone-only-password"), first)
+
+        val content = assertNotNull(drive.vaultFile()).content
+
+        // The claim, checked here as well as in the web suite: nothing a
+        // browser's passkey could open is in this file.
+        val payload = json.parseToJsonElement(content).jsonObject
+        assertTrue(!payload.containsKey("passkey"), "a phone wrote a passkey envelope: $content")
+        assertTrue(payload.containsKey("recovery"))
+
+        val fixtures = java.io.File("../../../fixtures")
+        fixtures.mkdirs()
+        java.io.File(fixtures, "drive-phone-only-v1.json").writeText(
+            Json { prettyPrint = true }.encodeToString(
+                Fixture.serializer(),
+                Fixture(
+                    note = "Written by Android's DriveVaultRemote. Do not edit.",
+                    recoveryCode = RecoveryCode.format(secret),
+                    password = "phone-only-password",
+                    content = content,
+                ),
+            ),
+        )
+    }
+}

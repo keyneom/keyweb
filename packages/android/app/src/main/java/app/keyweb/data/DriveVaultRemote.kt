@@ -9,6 +9,7 @@ import app.keyweb.vault.VaultState
 import app.keyweb.vault.VersionConflictException
 import java.io.IOException
 import java.time.Instant
+import app.keyweb.vault.envelopeJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -42,6 +43,23 @@ class DriveVaultRemote(
 ) : RemoteVaultStore {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * The serializer the envelope itself must go out through.
+     *
+     * `schemaVersion` and `algorithm` have defaults on [SyncEnvelopeV1], and
+     * kotlinx.serialization omits defaulted properties unless told not to. The
+     * envelope written here was therefore missing both, and the web's parser
+     * requires them — so every backup a phone wrote was unreadable in a
+     * browser, with the recovery code as well as without it. Android read its
+     * own file fine, because a Kotlin decoder puts the defaults back.
+     *
+     * `envelopeJson` exists for exactly this and says so; this file simply
+     * used its own local `Json` for both parsing and writing. Parsing wants
+     * `ignoreUnknownKeys`, writing wants `encodeDefaults`, and one instance
+     * cannot be both without saying so.
+     */
+    private val wire = envelopeJson
     private var fileId: String? = null
     private var folderId: String? = null
 
@@ -153,7 +171,7 @@ class DriveVaultRemote(
             // Every member of the existing payload survives except the one this
             // device is authoritative for.
             existing?.raw?.forEach { (key, value) -> if (key != "recovery") put(key, value) }
-            put("recovery", json.encodeToJsonElement(SyncEnvelopeV1.serializer(), envelope))
+            put("recovery", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), envelope))
         }
         return next.toString()
     }

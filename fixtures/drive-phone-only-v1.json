@@ -1,0 +1,6 @@
+{
+    "note": "Written by Android's DriveVaultRemote. Do not edit.",
+    "recoveryCode": "K1ER-QSE2-0S7Z-0YCH-ABB4-EH04-N8HW-23M0",
+    "password": "phone-only-password",
+    "content": "{\"v\":1,\"recovery\":{\"schemaVersion\":1,\"algorithm\":\"AES-256-GCM+HKDF-SHA-256\",\"compression\":\"gzip\",\"credentialId\":\"recovery\",\"rpId\":\"keyweb\",\"prfInput\":\"gOHT9oAgI-VpKNeo_zR2e7QTPL-5m7UDIijL1a8dQD0\",\"kdfSalt\":\"7sFyubQwPpnvQVrO_nv4Bsh1vDXyUTfKD6MzuIWaXo8\",\"nonce\":\"3h1XrOZkLvMDCnlp\",\"ciphertext\":\"ak4_41VRJNHQc44YrwxZDIDWa59OyqkmV6KxWvXW3f5fvSNaWMeUWE9Xe34yDKbrUJU2T_tHBinuqnS_4kgykE1MtayihGay2fTaCaFF4e-4E-5KgEEa9lmdgXzMzWrp-TxYRhWMgJhzCu2KnB2t0V00AAwzke1TPFyE15cumtrJi7-hoT3_u0nXBk8nBHuLvegraxb2t-Z_ZS8CcCr2UW2ponZe5C9KsRjHA_QTijoc2a1YtYE4Y8IJb55mT59HQJxZkIZ4E5E0-QE\",\"updatedAt\":\"2026-09-18T02:42:02.766269Z\"}}"
+}

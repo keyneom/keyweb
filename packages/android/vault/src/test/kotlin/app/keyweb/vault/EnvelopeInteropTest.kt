@@ -112,9 +112,23 @@ class EnvelopeInteropTest {
             VaultEnvelopeCipher.forRecoveryCode(secret, envelope).open(envelope).let(::fingerprint),
         )
 
+        /*
+         * Written through `envelopeJson`, the settings the app itself writes
+         * with, rather than a `Json` configured here.
+         *
+         * This test used to configure its own with `encodeDefaults = true`
+         * while `DriveVaultRemote` used one without it — so the fixture had
+         * `schemaVersion` and `algorithm` and the file a real phone uploaded
+         * did not. The interop suite passed for a year against bytes no
+         * shipping code ever produced, and every backup written by a phone was
+         * unreadable in a browser.
+         *
+         * An interop fixture has to come out of the same serializer as the
+         * thing it claims to be interoperable with, or it is testing itself.
+         */
         fixtures.mkdirs()
         File(fixtures, "envelope-android-v1.json").writeText(
-            Json { prettyPrint = true; encodeDefaults = true; explicitNulls = false }
+            Json(envelopeJson) { prettyPrint = true }
                 .encodeToString(
                     EnvelopeFixture.serializer(),
                     EnvelopeFixture(

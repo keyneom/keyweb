@@ -167,7 +167,7 @@ export type PastValue = {
  * came here to read.
  */
 export function pastValues(item: ItemRecord): PastValue[] {
-  return item.history
+  return historyOf(item)
     .filter((entry) => entry.value !== "")
     .map((entry) => ({
       field: entry.field,
@@ -284,7 +284,7 @@ export const BLOB_KIND = "blob";
 
 /** Items that are files rather than passwords. */
 export function isBlobItem(item: ItemRecord): boolean {
-  return item.fields["kind"]?.value === BLOB_KIND;
+  return fieldsOf(item)["kind"]?.value === BLOB_KIND;
 }
 
 /**
@@ -300,7 +300,7 @@ export function attachmentField(blobId: string): ItemField {
 
 /** Every file attached to an item: the blob's id, and the name to show. */
 export function attachmentsOf(item: ItemRecord): { blobId: string; name: string }[] {
-  return Object.entries(item.fields)
+  return Object.entries(fieldsOf(item))
     .filter(([field, value]) => field.startsWith("file:") && value.value !== "")
     .map(([field, value]) => ({ blobId: field.slice("file:".length), name: value.value }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -335,7 +335,37 @@ export function itemsOnKeyrings(state: VaultState): ItemRecord[] {
 }
 
 export function itemField(item: ItemRecord, field: ItemField): string | undefined {
-  return item.fields[field]?.value;
+  return fieldsOf(item)[field]?.value;
+}
+
+/**
+ * An item's fields, whatever the wire left out.
+ *
+ * Kotlin omits a property that still holds its default, so an item arriving
+ * from a phone with no fields has no `fields` key at all, and one that has
+ * never been overwritten has no `history` key. Both are *valid* — the absence
+ * means "empty" and the decoder on that side puts the default back — and both
+ * used to throw here.
+ *
+ * That was not theoretical. `history` is absent for almost every item a phone
+ * has ever written, because most passwords are written once and never edited,
+ * and "What this used to be" reads it on every detail screen. A browser
+ * restoring a phone's vault would have opened the first password it was shown
+ * and rendered nothing at all.
+ *
+ * So these read defensively rather than trusting the shape. The alternative —
+ * making Kotlin emit defaults for the vault payload too — would fix these
+ * three call sites and leave the next one to be found by somebody's white
+ * screen. A reader that tolerates a missing optional is the same rule the wire
+ * format already follows for unknown keys, in the other direction.
+ */
+export function fieldsOf(item: ItemRecord): Record<ItemField, Reg<string>> {
+  return item.fields ?? {};
+}
+
+/** An item's superseded values, whatever the wire left out. */
+export function historyOf(item: ItemRecord): HistoryEntry[] {
+  return item.history ?? [];
 }
 
 /**
@@ -350,10 +380,10 @@ export function fingerprint(state: VaultState): string {
     .map((id) => {
       const item = state.items[id];
       if (!item) return "";
-      const fields = Object.keys(item.fields)
+      const fields = Object.keys(fieldsOf(item))
         .sort()
         .map((name) => {
-          const value = item.fields[name as ItemField];
+          const value = fieldsOf(item)[name as ItemField];
           return value ? `${name}=${value.ts}:${value.value}` : "";
         })
         .join(",");

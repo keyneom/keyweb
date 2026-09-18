@@ -6,13 +6,21 @@ import type {
   Reg,
   VaultState,
 } from "./model.js";
-import { HISTORY_LIMIT, pickReg, reg } from "./model.js";
+import { fieldsOf, historyOf, HISTORY_LIMIT, pickReg, reg } from "./model.js";
 import { HLC_ZERO } from "./hlc.js";
 
-function mergeHistory(a: HistoryEntry[], b: HistoryEntry[]): HistoryEntry[] {
+/**
+ * Superseded values from both sides.
+ *
+ * Tolerates a missing list because Kotlin omits a property still holding its
+ * default: an item a phone wrote that has never been overwritten arrives with
+ * no `history` key at all, and merging one used to produce an item whose
+ * `history` was `undefined` — which then threw wherever anything read it.
+ */
+function mergeHistory(a: HistoryEntry[] | undefined, b: HistoryEntry[] | undefined): HistoryEntry[] {
   const seen = new Set<string>();
   const all: HistoryEntry[] = [];
-  for (const entry of [...a, ...b]) {
+  for (const entry of [...(a ?? []), ...(b ?? [])]) {
     const key = `${entry.field} ${entry.ts}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -23,9 +31,13 @@ function mergeHistory(a: HistoryEntry[], b: HistoryEntry[]): HistoryEntry[] {
 
 function mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
   const fields: Record<ItemField, Reg<string>> = {};
-  const names = new Set([...Object.keys(a.fields), ...Object.keys(b.fields)] as ItemField[]);
+  // Both read defensively: Kotlin omits a property still holding its default,
+  // so an item a phone wrote with no fields arrives with no `fields` key.
+  const aFields = fieldsOf(a);
+  const bFields = fieldsOf(b);
+  const names = new Set([...Object.keys(aFields), ...Object.keys(bFields)] as ItemField[]);
   for (const name of names) {
-    const winner = pickReg(a.fields[name], b.fields[name]);
+    const winner = pickReg(aFields[name], bFields[name]);
     if (winner) fields[name] = winner;
   }
   return {
@@ -63,14 +75,24 @@ function mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord {
  * it already published, or process the same remote revision twice without ever
  * losing or duplicating a change.
  */
+/** The shape every reader expects, from the shape the wire is allowed to send. */
+function normalise(item: ItemRecord): ItemRecord {
+  if (item.fields !== undefined && item.history !== undefined) return item;
+  return { ...item, fields: fieldsOf(item), history: historyOf(item) };
+}
+
 export function mergeVaults(a: VaultState, b: VaultState): VaultState {
   const items: Record<string, ItemRecord> = {};
   for (const id of new Set([...Object.keys(a.items), ...Object.keys(b.items)])) {
     const left = a.items[id];
     const right = b.items[id];
     if (left && right) items[id] = mergeItem(left, right);
-    else if (left) items[id] = left;
-    else if (right) items[id] = right;
+    // Normalised on the way through, not merely tolerated on the way in. An
+    // item that only one side has is copied rather than merged, so without
+    // this the absences a phone's wire format leaves out would travel onward
+    // into the next thing that reads them.
+    else if (left) items[id] = normalise(left);
+    else if (right) items[id] = normalise(right);
   }
   const keyrings: Record<string, KeyringRecord> = {};
   for (const id of new Set([...Object.keys(a.keyrings), ...Object.keys(b.keyrings)])) {
