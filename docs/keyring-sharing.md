@@ -224,7 +224,22 @@ now do that, which is the point of there being a new owner.
   be produced there, and requiring it would lock phones out of sharing
   altogether. It needs the App Link work below first, since an Android passkey
   needs the same `assetlinks.json`.
-- **Link verification on Android.** The app claims its own web address, but
-  Android will not honour that until an `assetlinks.json` naming it is served
-  from the root of `keyneom.github.io` — a file in another repository. Until
-  then a pasted link is the path that works.
+## Link verification on Android
+
+Done. `https://keyneom.github.io/.well-known/assetlinks.json` names
+`app.keyweb` and its signing certificate, and a phone reports
+`keyneom.github.io: verified`, so a shared-keyring link opens the app rather
+than the website.
+
+**If the release signing key ever changes, that file has to change on the same
+day.** Android identifies the app by certificate fingerprint, so a re-signed
+build is a different app to it, and every link silently goes back to opening
+the website with no error anywhere. Check with:
+
+```
+adb shell pm get-app-links app.keyweb
+```
+
+The keyrings screen still takes a pasted link, and always will. That is not a
+fallback for an error — it is the path that works on a phone where the person
+has turned link handling off, and on every other platform.

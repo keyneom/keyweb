@@ -42,9 +42,17 @@
 
               `autoVerify` asks Android to check for an assetlinks.json naming
               this app at the root of keyneom.github.io. That file lives in the
-              repository that serves the domain root, not in this one, so until
-              it is published Android treats these as unverified links: they do
-              not open the app on Android 12 and later unless the person turns
+              repository that serves the domain root, not in this one, and it
+              now names this package and its signing certificate — so these are
+              verified links and open the app directly.
+
+              If the signing key ever changes, that file has to change with it
+              on the same day, or every link silently goes back to opening the
+              website. The fingerprint is the app's, not the key's name, so a
+              re-signed build is a different app as far as Android is
+              concerned. Before it was published, Android treated these as
+              unverified: they did not open the app on Android 12 and later
+              unless the person turned
               it on under "Open by default".
 
               That is why the keyrings screen also takes a pasted link. It is
