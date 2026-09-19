@@ -1,6 +1,7 @@
 package app.keyweb.data
 
 import app.keyweb.vault.BackupBehindException
+import app.keyweb.vault.BackupUnreadableException
 import app.keyweb.vault.Fields
 import app.keyweb.vault.RecoveryCode
 import app.keyweb.vault.VaultEnvelopeCipher
@@ -119,5 +120,32 @@ class BrowserWrittenBackupTest {
             phone(driveHoldingIt(stale.toString())).read()
         }
         assertEquals(true, failure.message?.contains("newer passwords"))
+    }
+}
+
+/**
+ * A file this phone holds no key to at all.
+ *
+ * Separate from the interop cases above because it is not about interop: it is
+ * the rule the whole engine rests on, checked on the side that was still
+ * breaking it. "I cannot read this" must never become "I may overwrite this".
+ */
+class UnreadableIsNotEmptyTest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `a backup with no copy this phone can open is refused, not treated as absent`() = runTest {
+        val drive = FakeDrive()
+        // What a browser leaves when it has no code of its own for the second
+        // copy: a passkey envelope, and nothing else.
+        val browserOnly = """{"v":1,"passkey":{"schemaVersion":1,"algorithm":"AES-256-GCM+HKDF-SHA-256","credentialId":"c","rpId":"keyneom.github.io","prfInput":"AAAA","kdfSalt":"AAAA","nonce":"AAAA","ciphertext":"AAAA","updatedAt":"2026-09-19T00:00:00.000Z"}}"""
+        drive.files["file-1"] = FakeDrive.Entry(browserOnly, mapOf("keyweb" to "vault-v1"))
+
+        val phone = DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(RecoveryCode.generate()))
+
+        assertFailsWith<BackupUnreadableException> { phone.read() }
+        // And the file is untouched: nothing published over it.
+        assertEquals(browserOnly, drive.files["file-1"]!!.content)
     }
 }

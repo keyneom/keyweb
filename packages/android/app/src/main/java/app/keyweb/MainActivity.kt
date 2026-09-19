@@ -388,6 +388,10 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onSetUpBackup = { route = Route.Backup },
                         onSync = viewModel::syncNow,
                         onReplaceBackup = viewModel::replaceBackupFromThisPhone,
+                        onEnterBackupCode = {
+                            viewModel.askForBackupCode()
+                            route = Route.Backup
+                        },
                         backupPhoneOnly = ui.backupPhoneOnly,
                         onAddPasskey = viewModel::addPasskeyToBackup,
                         backupFiles = ui.backupFiles,

@@ -128,6 +128,7 @@ fun VaultListScreen(
     onSetUpBackup: () -> Unit,
     onSync: () -> Unit,
     onReplaceBackup: () -> Unit = {},
+    onEnterBackupCode: () -> Unit = {},
     /** The backup has no passkey copy, so it opens on this phone alone. */
     backupPhoneOnly: Boolean = false,
     onAddPasskey: () -> Unit = {},
@@ -419,6 +420,7 @@ fun VaultListScreen(
                 onSetUpBackup = onSetUpBackup,
                 onSync = onSync,
                 onReplaceBackup = onReplaceBackup,
+                onEnterBackupCode = onEnterBackupCode,
                 phoneOnly = backupPhoneOnly,
                 onAddPasskey = onAddPasskey,
                 backupFiles = backupFiles,

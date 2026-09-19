@@ -199,6 +199,8 @@ fun BackupStatusLine(
     /** Vault files to choose between, when the account holds more than one. */
     backupFiles: List<BackupFileChoice> = emptyList(),
     onChooseBackupFile: ((String) -> Unit)? = null,
+    /** Opens the screen that takes the code protecting the backup on file. */
+    onEnterBackupCode: (() -> Unit)? = null,
 ) {
     val error = status.lastError
     val published = status.lastPublishedAtMs
@@ -303,16 +305,53 @@ fun BackupStatusLine(
             actionEnabled = !status.syncing && onAddPasskey != null,
         )
 
+        /*
+         * Three ways out, and the destructive one last.
+         *
+         * This card used to offer exactly one thing: replace the backup with
+         * this phone's copy. That is the right move only when the file really
+         * is somebody else's — and the far likelier reason it will not open is
+         * that this phone is holding a code or a key that no longer matches
+         * the one protecting it, in which case replacing it throws away
+         * whatever another device has been saving there. Both ways back in
+         * were already built and neither was reachable from here: the code
+         * screen sat behind first-time setup, and the passkey behind a banner
+         * that only appears in a different state.
+         */
         status.backupUnreadable -> StatusLine(
             Tone.RISK,
             "The backup in Drive isn't this phone's.",
             (error ?: "This phone's code doesn't open it.") +
-                " Everything on this phone is fine and unchanged. You can put this phone's " +
-                "copy back — which replaces whatever is in Drive now.",
+                " Everything on this phone is fine and unchanged. If it is the same vault, " +
+                "the code or the key that opens it lets this phone back in.",
             modifier,
-            actionLabel = label("Replace the backup"),
-            onAction = onReplaceBackup,
-            actionEnabled = !status.syncing && onReplaceBackup != null,
+            choices = buildList {
+                add(
+                    StatusChoice(
+                        label = "Enter the code for this backup",
+                        detail = "The recovery code that came with it",
+                        onPick = { onEnterBackupCode?.invoke() },
+                    ),
+                )
+                if (onAddPasskey != null) {
+                    add(
+                        StatusChoice(
+                            label = "Use the same key as my browser",
+                            detail = "Your face, fingerprint or PIN",
+                            onPick = onAddPasskey,
+                        ),
+                    )
+                }
+                if (onReplaceBackup != null) {
+                    add(
+                        StatusChoice(
+                            label = "Replace it with this phone's copy",
+                            detail = "Deletes whatever is in Drive now",
+                            onPick = onReplaceBackup,
+                        ),
+                    )
+                }
+            },
         )
 
         error != null -> StatusLine(

@@ -998,6 +998,27 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Ask for the code that opens the backup that is actually in Drive.
+     *
+     * [useExistingCode] could only ever be reached while *setting up* backup,
+     * on the one screen that asks whether Drive already holds one. But the
+     * person who needs it most is the opposite of a new one: their phone is
+     * set up, and the code it remembers no longer opens what is in the file —
+     * a browser minted its own at some point, or this vault was restored from
+     * a different one. All the app offered them was to overwrite the backup
+     * with this phone's copy, which destroys whatever the other device has
+     * been saving there.
+     *
+     * The same trap existed in the browser, where the recovery field sat
+     * behind a first-run check. This is that fix, on this side.
+     */
+    fun askForBackupCode() {
+        _state.value = _state.value.copy(
+            backup = BackupUiState(stage = BackupStage.NEEDS_CODE),
+        )
+    }
+
+    /**
      * Adopt the code that already protects this backup.
      *
      * Proved by opening the remote envelope with it, not by shape. Accepting an

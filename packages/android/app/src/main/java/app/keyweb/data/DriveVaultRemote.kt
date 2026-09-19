@@ -182,7 +182,26 @@ class DriveVaultRemote(
         }
         if (viaPasskey != null) return@reachable RemoteRevision(viaPasskey, current)
 
-        val recovery = payload.recovery ?: return@reachable null
+        /*
+         * A backup with no copy this phone can open is NOT an absent backup.
+         *
+         * Returning null here said "there is nothing in Drive", and the engine
+         * believes that: the next sync publishes this phone's vault straight
+         * over whatever is in the file. That is the mistake that cost somebody
+         * their backup in the browser, in the same words, and it was still
+         * sitting here — reachable by any file holding a passkey copy and no
+         * recovery copy, which is what a browser writes when it has no code of
+         * its own to seal the second one with.
+         *
+         * Never "I cannot read this" into "I may overwrite this".
+         */
+        val recovery = payload.recovery ?: run {
+            if (payload.passkey == null) return@reachable null
+            throw BackupUnreadableException(
+                "The backup in Google Drive has no copy this phone's code can open. It was " +
+                    "written in a browser. Nothing on this phone has changed.",
+            )
+        }
 
         /*
          * Refuse the recovery copy when the passkey copy is demonstrably newer.
