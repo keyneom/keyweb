@@ -349,17 +349,47 @@ class DriveVaultRemote(
     }
 
     /**
-     * Is [older] sealed before [newer]?
+     * Is [older] sealed before [newer] — by enough to mean a different write?
      *
      * Read off `updatedAt`, which is the one thing comparable without holding
      * either key. Equal is not behind: a device that can seal both writes both
-     * in one pass, from one state, at one moment — which is the normal case
-     * and must not be reported as a problem.
+     * in one pass, from one state, at one moment.
+     *
+     * The window is what makes that true in practice rather than in principle.
+     * Browsers sealed their two copies in two calls until recently, so every
+     * file one of them has ever written carries stamps a millisecond or two
+     * apart — and read strictly, that gap says "the other copy has moved on
+     * without you", which locked this phone out of backups it could read
+     * perfectly well. Those files do not heal themselves: a browser with
+     * nothing to save never writes again.
+     *
+     * Two seconds is safe because of what the state this guards against
+     * actually looks like. A recovery copy is only left behind when a device
+     * rewrites the passkey copy and carries the recovery copy forward
+     * *untouched* — so the stamp it keeps is from whenever it was last
+     * resealed, which is another session, another device, another day. It is
+     * never a fraction of a second old. The gap being tiny is positive
+     * evidence that one device wrote both.
      */
     private fun behind(older: JsonElement, newer: JsonElement): Boolean {
         val a = sealedAt(older) ?: return false
         val b = sealedAt(newer) ?: return false
-        return a < b
+        val apart = runCatching {
+            Instant.parse(b).toEpochMilli() - Instant.parse(a).toEpochMilli()
+        }.getOrElse { return a < b }
+        return apart > SAME_WRITE_WINDOW_MS
+    }
+
+    private companion object {
+        /**
+         * How far apart two copies of one write can be stamped.
+         *
+         * Not a fudge factor for clock skew — both stamps come from the same
+         * device in the same request. It is the gap between two `seal` calls,
+         * which is milliseconds, against the gap that means something, which
+         * is at minimum the interval between two separate sessions.
+         */
+        const val SAME_WRITE_WINDOW_MS = 2_000L
     }
 
     private fun sealedAt(envelope: JsonElement): String? =

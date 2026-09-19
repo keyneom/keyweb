@@ -100,6 +100,37 @@ class BrowserWrittenBackupTest {
      * not offer to overwrite the newer copy, so the refusal now says which
      * kind of refusal it is.
      */
+    /**
+     * The files every browser wrote before the stamps were made to match.
+     *
+     * Those files are still in people's Drive accounts, and a browser with
+     * nothing to save never rewrites one — so the phone has to be able to read
+     * a pair stamped a millisecond apart, or somebody whose vault is simply
+     * correct stays locked out of it here forever.
+     */
+    @Test
+    fun `reads a pair stamped a hair apart, as every older browser wrote them`() = runTest {
+        val payload = json.parseToJsonElement(fixture.content).jsonObject
+        val stamp = payload["passkey"]!!.jsonObject["updatedAt"]!!.jsonPrimitive.content
+        val twoMillisEarlier =
+            java.time.Instant.parse(stamp).minusMillis(2).toString()
+        val skewed = buildJsonObject {
+            put("v", 1)
+            put("passkey", payload["passkey"]!!)
+            put(
+                "recovery",
+                JsonObject(
+                    payload["recovery"]!!.jsonObject.toMutableMap().apply {
+                        put("updatedAt", kotlinx.serialization.json.JsonPrimitive(twoMillisEarlier))
+                    },
+                ),
+            )
+        }
+
+        val revision = assertNotNull(phone(driveHoldingIt(skewed.toString())).read())
+        assertEquals(fixture.password, revision.state.items["bank"]?.field(Fields.PASSWORD))
+    }
+
     @Test
     fun `still refuses a recovery copy that has genuinely fallen behind`() = runTest {
         val payload = json.parseToJsonElement(fixture.content).jsonObject

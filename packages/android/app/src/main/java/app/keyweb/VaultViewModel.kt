@@ -854,7 +854,11 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun passkeyCipherFor(probe: DriveVaultRemote): VaultEnvelopeCipher? {
         val activity = passkeyHost?.get() ?: return null
         val envelope = runCatching { probe.fetchPasskeySealed() }.getOrNull() ?: return null
-        return runCatching { VaultPasskey.unlock(activity, envelope) }.getOrNull()
+        val cipher = runCatching { VaultPasskey.unlock(activity, envelope) }.getOrNull() ?: return null
+        // A key that does not open the copy on the file is not a key to this
+        // backup, whatever the ceremony said. Reporting it as one is how the
+        // phone came to believe it had caught up while reading nothing new.
+        return if (runCatching { cipher.open(envelope) }.isSuccess) cipher else null
     }
 
     /**
@@ -889,20 +893,42 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     VaultPasskey.create(activity)
                 }
+
+                /*
+                 * Prove the key before saying it worked.
+                 *
+                 * The ceremony completing means Credential Manager handed back
+                 * *a* passkey secret, not that it is the one that sealed this
+                 * file. Ask for a credential by id and it can still answer
+                 * with another, and the two derive different keys — so this
+                 * reported "Done. This phone and your browser share one backup
+                 * now", left the same button on screen, and changed nothing
+                 * anybody could see. A claim nobody checked, which is the
+                 * failure this app keeps having in different clothes.
+                 *
+                 * Opening the copy on the file is the check. It costs one
+                 * decrypt of bytes already in hand.
+                 */
+                val opens = onFile == null ||
+                    runCatching { passkey.open(onFile) }.isSuccess
+
                 remote.attach(
                     DriveVaultRemote(
                         client,
                         VaultEnvelopeCipher.forRecoveryCode(secret, existing),
-                        passkeyCipher = passkey,
+                        passkeyCipher = if (opens) passkey else null,
                     ),
                 )
-                _state.value = _state.value.copy(backupPhoneOnly = false)
+                _state.value = _state.value.copy(backupPhoneOnly = !opens)
                 syncNow()
                 showToast(
-                    if (onFile != null) {
-                        "Done. This phone and your browser share one backup now."
-                    } else {
-                        "Done. You can open this backup in a browser now."
+                    when {
+                        !opens ->
+                            "That passkey isn't the one your backup was sealed with, so it " +
+                                "won't open the browser's copy. Your passwords are safe and " +
+                                "nothing changed."
+                        onFile != null -> "Done. This phone and your browser share one backup now."
+                        else -> "Done. You can open this backup in a browser now."
                     },
                 )
             } catch (cause: Exception) {
