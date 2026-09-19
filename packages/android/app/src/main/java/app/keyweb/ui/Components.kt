@@ -282,6 +282,27 @@ fun BackupStatusLine(
             actionEnabled = !status.syncing,
         )
 
+        /*
+         * Newer, not foreign — so the offer is to catch up, never to replace.
+         *
+         * Both states used to render this one line, whose button overwrites
+         * the backup with this phone's copy. Pressed here that would delete
+         * the newer passwords the phone was complaining it could not read,
+         * which is the worst outcome available and was one tap away under a
+         * sentence that did not distinguish the two.
+         */
+        status.backupBehind -> StatusLine(
+            Tone.ATTENTION,
+            "A browser has newer passwords than this phone can read.",
+            (error ?: "") +
+                " Nothing is lost and nothing on this phone has changed. Giving this phone " +
+                "the same key your browser uses lets it read them.",
+            modifier,
+            actionLabel = label("Use the same key"),
+            onAction = onAddPasskey,
+            actionEnabled = !status.syncing && onAddPasskey != null,
+        )
+
         status.backupUnreadable -> StatusLine(
             Tone.RISK,
             "The backup in Drive isn't this phone's.",

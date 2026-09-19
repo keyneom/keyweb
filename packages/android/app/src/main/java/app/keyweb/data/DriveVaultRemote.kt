@@ -1,5 +1,6 @@
 package app.keyweb.data
 
+import app.keyweb.vault.BackupBehindException
 import app.keyweb.vault.BackupUnreadableException
 import app.keyweb.vault.EnvelopeDecryptException
 import app.keyweb.vault.RemoteRevision
@@ -197,7 +198,7 @@ class DriveVaultRemote(
          */
         val passkeyCopy = payload.passkey
         if (passkeyCopy != null && behind(recovery, passkeyCopy)) {
-            throw BackupUnreadableException(
+            throw BackupBehindException(
                 "A browser has newer passwords than this phone can read. Set up the shared " +
                     "key on this phone to catch up.",
             )

@@ -29,7 +29,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * Faithful about the two things that decide whether a backup survives: the file
  * is shared mutable state, and every write moves the revision.
  */
-private class FakeDrive : DriveFiles {
+// Shared with `BrowserWrittenBackupTest`, which reads a browser-written file
+// through the same reader this one writes with.
+internal class FakeDrive : DriveFiles {
     class Entry(var content: String, val appProperties: Map<String, String>) {
         var revision: Int = 1
     }

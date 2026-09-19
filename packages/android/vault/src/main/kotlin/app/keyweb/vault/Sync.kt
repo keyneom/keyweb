@@ -27,6 +27,15 @@ data class SyncStatus(
      * bad way to decide that.
      */
     val backupUnreadable: Boolean = false,
+    /**
+     * Unreadable because it is *newer*, not because it is foreign.
+     *
+     * Kept apart from [backupUnreadable] because the two look identical from
+     * here and want opposite actions: one asks for this device to catch up,
+     * the other offers to overwrite. Offering the overwrite for this one
+     * would destroy the very passwords that could not be read.
+     */
+    val backupBehind: Boolean = false,
 )
 
 /**
@@ -645,6 +654,7 @@ class VaultSync(
                         lastError = error.message
                             ?: "This backup was not written by this vault.",
                         backupUnreadable = true,
+                        backupBehind = error is BackupBehindException,
                     )
                     return SyncOutcome.Offline(
                         refreshPending(),
@@ -664,7 +674,7 @@ class VaultSync(
                     storage.writeClock(clock.snapshot())
                 }
 
-                statusValue = statusValue.copy(backupUnreadable = false)
+                statusValue = statusValue.copy(backupUnreadable = false, backupBehind = false)
                 val local = storage.readState(documentId)
                 val base = revision?.state ?: emptyVault()
 

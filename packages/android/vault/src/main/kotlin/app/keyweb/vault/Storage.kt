@@ -147,6 +147,20 @@ class TooManyBackupsException(count: Int) : BackupUnreadableException(
         "rename the ones you don't want — the newest is usually the one to keep.",
 )
 
+/**
+ * The copy this device can open is older than the copy it cannot.
+ *
+ * Unreadable in the sense that matters — the current vault cannot be got at —
+ * but for the opposite reason from a backup written under somebody else's key,
+ * and with the opposite remedy. Nothing is wrong with the file: this device is
+ * simply missing the key to the newer copy, and the fix is to get that key.
+ *
+ * Its own type because the two were indistinguishable on screen, and the
+ * action offered was "replace the backup" — which would have thrown away the
+ * newer passwords this exists to protect.
+ */
+class BackupBehindException(message: String) : BackupUnreadableException(message)
+
 data class RemoteRevision(val state: VaultState, val version: String)
 
 /**

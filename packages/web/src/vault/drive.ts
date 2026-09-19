@@ -288,6 +288,8 @@ export type DriveRemoteOptions = {
   /** Injectable for tests; defaults to a real Drive-backed store. */
   store?: GoogleDriveFileStore;
   authorize?: () => Promise<Authorization>;
+  /** The clock both copies of a write are stamped from. Injectable for tests. */
+  now?: () => string;
 };
 
 export class GoogleDriveRemote implements RemoteVaultStore {
@@ -295,6 +297,7 @@ export class GoogleDriveRemote implements RemoteVaultStore {
   readonly #cipher: VaultCipher;
   #recoveryCipher: VaultCipher | null;
   readonly #authorize: () => Promise<Authorization>;
+  readonly #now: () => string;
   #fileId: string | null = null;
   #folderId: string | null = null;
 
@@ -305,6 +308,7 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     // The page-wide authorizer, so the backup does not open a second popup
     // after the Picker or the sharing identity already opened one.
     this.#authorize = options.authorize ?? (() => authorizeGoogle(options.clientId));
+    this.#now = options.now ?? (() => new Date().toISOString());
   }
 
   /** Translate transport failures into the calm offline state. */
@@ -570,10 +574,15 @@ export class GoogleDriveRemote implements RemoteVaultStore {
        * so the answer stops being an error and becomes the newer data. That is
        * what makes "enter your code" a fix rather than an acknowledgement.
        */
-      const openable: { at: string | null; open: () => Promise<VaultState> }[] = [];
+      const openable: {
+        at: string | null;
+        isPasskeyCopy: boolean;
+        open: () => Promise<VaultState>;
+      }[] = [];
       if (payload.passkey !== undefined) {
         openable.push({
           at: sealedAt(payload.passkey),
+          isPasskeyCopy: true,
           open: () => this.#cipher.openState(payload.passkey),
         });
       }
@@ -581,6 +590,7 @@ export class GoogleDriveRemote implements RemoteVaultStore {
         const recoveryCipher = this.#recoveryCipher;
         openable.push({
           at: sealedAt(payload.recovery),
+          isPasskeyCopy: false,
           open: () => recoveryCipher.openState(payload.recovery),
         });
       }
@@ -589,11 +599,51 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       openable.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
 
       for (const candidate of openable) {
+        let state: VaultState;
         try {
-          return { state: await candidate.open(), version };
+          state = await candidate.open();
         } catch {
           // Try the next one. A key that does not fit this copy is ordinary.
+          continue;
         }
+
+        /*
+         * Bring two copies that disagree about their time back into line.
+         *
+         * Every file written by a browser before the fix carries stamps a
+         * millisecond or two apart, and a phone reads that gap as this browser
+         * having moved on without it — so it refuses the copy it could have
+         * opened and offers to replace the backup. Writing them together from
+         * now on does not help any of those files, because a browser with
+         * nothing to save never writes again: somebody whose vault is simply
+         * *correct* would stay locked out of it on their phone forever.
+         *
+         * So it is repaired on read, on a file already in hand, the way the
+         * phone repairs an envelope written before it carried its own version.
+         * Only from the passkey copy, and only when this browser can rewrite
+         * the recovery copy as well: that is the one case where what is held
+         * here is known to be the newest and both copies can be made to say
+         * so. Anything less and this would be guessing with somebody's
+         * passwords.
+         */
+        const both = payload.passkey !== undefined && payload.recovery !== undefined;
+        const disagree = sealedAt(payload.passkey) !== sealedAt(payload.recovery);
+        const mine = this.#recoveryCipher;
+        if (
+          candidate.isPasskeyCopy &&
+          both &&
+          disagree &&
+          mine !== null &&
+          (await opens(mine, payload.recovery))
+        ) {
+          try {
+            return { state, version: await this.write(state, version) };
+          } catch {
+            // A repair is a courtesy. Failing it must not fail the read.
+          }
+        }
+
+        return { state, version };
       }
 
       // Nothing opened. Which message depends on whether the thing this
@@ -689,10 +739,30 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     const mine = this.#recoveryCipher;
     const canReseal =
       mine !== null && (carried === undefined || (await opens(mine, carried)));
-    const recovery = mine !== null && canReseal ? await mine.sealState(state) : carried;
+
+    /*
+     * One time for the whole write, not one per envelope.
+     *
+     * Sealing stamps the envelope with the moment of the call, so sealing the
+     * same vault twice in a row wrote two copies a millisecond or two apart.
+     * The phone holds no key to the passkey copy, so those stamps are the only
+     * evidence it has about which copy is current — and a recovery copy older
+     * than the passkey copy is exactly what a browser leaves behind when it
+     * rewrites one and carries the other forward. It could not tell the two
+     * situations apart, so after every write from this browser it declared the
+     * backup unreadable and offered to replace it with its own.
+     *
+     * The phone has always done this correctly: it seals both copies with a
+     * single `at`. This is that, on the side that was getting it wrong.
+     */
+    const at = this.#now();
+    const seal = (cipher: VaultCipher, value: VaultState) =>
+      cipher.sealStateAt ? cipher.sealStateAt(value, at) : cipher.sealState(value);
+
+    const recovery = mine !== null && canReseal ? await seal(mine, state) : carried;
     return {
       v: 1,
-      passkey: await this.#cipher.sealState(state),
+      passkey: await seal(this.#cipher, state),
       ...(recovery === undefined ? {} : { recovery }),
     };
   }

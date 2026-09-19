@@ -1,5 +1,6 @@
 import {
   createV1EnvelopeCrypto,
+  encryptSyncEnvelopeV1,
   createWebCryptoBackend,
   deriveContentKey,
   parseSyncEnvelopeV1,
@@ -111,6 +112,7 @@ export async function unlockVault(
 
   const cipher: VaultCipher = {
     sealState: (state) => stateCrypto.encrypt(state, key, metadata),
+    sealStateAt: (state, updatedAt) => sealAt(state, key, metadata, updatedAt),
     openState: (stored) => stateCrypto.decrypt(asEnvelope(stored), key),
     sealOp: (op) => opCrypto.encrypt(op, key, metadata),
     openOp: (stored) => opCrypto.decrypt(asEnvelope(stored), key),
@@ -163,8 +165,30 @@ export async function createRecoveryCipher(
   );
   return {
     sealState: (state) => stateCrypto.encrypt(state, key, metadata),
+    sealStateAt: (state, updatedAt) => sealAt(state, key, metadata, updatedAt),
     openState: (stored) => stateCrypto.decrypt(asEnvelope(stored), key),
     sealOp: (op) => opCrypto.encrypt(op, key, metadata),
     openOp: (stored) => opCrypto.decrypt(asEnvelope(stored), key),
   };
+}
+
+/**
+ * Seal a vault with the time written in by the caller.
+ *
+ * `createV1EnvelopeCrypto`'s `encrypt` does not forward the clock, so this
+ * reaches for the primitive underneath it, which does. Everything else about
+ * the envelope — profile, codec, backend — is the same, so a copy sealed this
+ * way is indistinguishable from any other except in carrying the moment the
+ * *write* happened rather than the moment this particular envelope was built.
+ */
+function sealAt(
+  state: VaultState,
+  key: CryptoKey,
+  metadata: V1KeyMetadata,
+  updatedAt: string,
+): Promise<SyncEnvelopeV1> {
+  const at = new Date(updatedAt);
+  return encryptSyncEnvelopeV1(state, key, metadata, keywebV1Profile, stateCodec, backend, {
+    now: () => at,
+  });
 }

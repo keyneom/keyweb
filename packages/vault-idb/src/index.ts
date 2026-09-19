@@ -49,6 +49,20 @@ const LOCK_NAME = "keyweb-vault-write";
 /** How the vault is transformed on its way to and from disk. */
 export interface VaultCipher {
   sealState(state: VaultState): Promise<unknown>;
+  /**
+   * Seal at a time the caller chooses, rather than at the time of the call.
+   *
+   * For a writer putting the same vault into two envelopes in one request.
+   * Sealing stamps each envelope with the moment it was sealed, so two calls a
+   * millisecond apart produced two copies of an identical vault with different
+   * times on them — and a device holding the key to only one of them has
+   * nothing to compare but those times. It read the gap as the other copy
+   * having moved on without it.
+   *
+   * Optional because a cipher that does not stamp anything (the plaintext one,
+   * the passthrough probes) has nothing to choose.
+   */
+  sealStateAt?(state: VaultState, updatedAt: string): Promise<unknown>;
   openState(stored: unknown): Promise<VaultState>;
   /** Operations carry passwords too, so the outbox is encrypted as well. */
   sealOp(op: VaultOp): Promise<unknown>;
