@@ -246,23 +246,44 @@ class VaultEnvelopeCipher internal constructor(
         }
 
         /**
-         * The cipher for a passkey-derived backup.
+         * The cipher for a backup sealed under a raw WebAuthn PRF output.
          *
-         * [prfSecret] is the raw PRF output a WebAuthn assertion produces —
-         * what sync-kit's `KeyProvider.unlock` hands back, on either platform.
-         * The HKDF below is the same one the browser runs over the same bytes
-         * with the same salt and the same label, so a phone and a browser
-         * arrive at the same key and one envelope serves both.
+         * [prfSecret] is the assertion's PRF bytes, *before* any derivation —
+         * the HKDF below is what turns them into the content key.
          *
-         * That this was possible on Android all along is the point: sync-kit
-         * ships `AndroidPasskeyKeyProvider`, this app just never called it, and
-         * the second recovery-code-sealed envelope exists only because of that
-         * omission.
+         * This is not what sync-kit's `KeyProvider.unlock` hands back. See
+         * [forDerivedKey], and the comment there, which is the whole story of
+         * why a phone and a browser holding the same passkey could not open
+         * each other's copy.
          */
         fun forPasskeySecret(
             prfSecret: ByteArray,
             metadata: EnvelopeMetadata,
         ): VaultEnvelopeCipher = fromMetadata(prfSecret, metadata)
+
+        /**
+         * The cipher for a key that has already been derived.
+         *
+         * `KeyProvider.unlock` and `KeyProvider.create` do the HKDF themselves
+         * — on both platforms, from the same profile, over the same salt — and
+         * hand back the finished content key. The browser uses those bytes as
+         * the key, exactly as they arrive. This phone ran them through the
+         * HKDF a *second* time.
+         *
+         * So the browser held `HKDF(prf, salt)` and the phone held
+         * `HKDF(HKDF(prf, salt), salt)`, and the passkey copy neither could
+         * open was not a passkey problem at all: not Credential Manager
+         * returning the wrong credential, not Google Password Manager failing
+         * to sync one, not the asset link. One derivation too many, on one
+         * side, which looks identical from the outside to every one of those.
+         *
+         * `PasskeyDerivationTest` pins both halves: that one derivation
+         * matches the browser, and that two do not.
+         */
+        fun forDerivedKey(
+            contentKey: ByteArray,
+            metadata: EnvelopeMetadata,
+        ): VaultEnvelopeCipher = VaultEnvelopeCipher(SecretKeySpec(contentKey, "AES"), metadata)
 
         internal fun fromMetadata(secret: ByteArray, metadata: EnvelopeMetadata): VaultEnvelopeCipher {
             val derived =

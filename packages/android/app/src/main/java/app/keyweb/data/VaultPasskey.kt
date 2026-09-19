@@ -35,11 +35,17 @@ import com.keyneom.synckit.keys.AndroidPasskeyKeyProvider
  *
  * ## What it derives
  *
- * `unlock` hands back the raw PRF output. The HKDF that turns that into a
- * content key lives in [VaultEnvelopeCipher.forPasskeySecret], and is the same
- * derivation over the same salt with the same label that the browser runs. So
- * the two arrive at the same key, and the `passkey` envelope is readable and
- * writable from either side.
+ * `unlock` hands back the content key, already derived: the provider runs the
+ * profile's HKDF over the PRF output and the envelope's salt before returning,
+ * exactly as the browser's provider does. So the bytes are used as the key —
+ * see [VaultEnvelopeCipher.forDerivedKey] — and the two platforms arrive at the
+ * same one, which is what makes the `passkey` envelope readable and writable
+ * from either side.
+ *
+ * Deriving them a second time here was a real bug with a long tail: it looked
+ * exactly like Credential Manager handing back the wrong credential, and sent
+ * the search into asset links and passkey syncing, neither of which was ever
+ * wrong.
  *
  * ## The RP id
  *
@@ -120,8 +126,11 @@ object VaultPasskey {
     /** Open an existing passkey envelope, giving back a cipher for it. */
     suspend fun unlock(activity: Activity, envelope: SyncEnvelopeV1): VaultEnvelopeCipher =
         try {
-            val secret = provider.unlock(activity, envelope.toSyncKit())
-            VaultEnvelopeCipher.forPasskeySecret(secret, envelope.toMetadata())
+            // The provider has already run the HKDF. These bytes ARE the
+            // content key, and putting them through it again is what made this
+            // phone's key differ from the browser's over the same passkey.
+            val contentKey = provider.unlock(activity, envelope.toSyncKit())
+            VaultEnvelopeCipher.forDerivedKey(contentKey, envelope.toMetadata())
         } catch (cause: Exception) {
             throw Unavailable(explain(cause, "open the passkey that unlocks your backup"), cause)
         }
@@ -130,7 +139,8 @@ object VaultPasskey {
     suspend fun create(activity: Activity): VaultEnvelopeCipher =
         try {
             val created = provider.create(activity, "Keyweb vault")
-            VaultEnvelopeCipher.forPasskeySecret(
+            // Derived by the provider, exactly as in `unlock`.
+            VaultEnvelopeCipher.forDerivedKey(
                 created.key,
                 EnvelopeMetadata(
                     credentialId = created.metadata.credentialId,
