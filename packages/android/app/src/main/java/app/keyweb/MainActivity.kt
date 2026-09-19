@@ -43,6 +43,7 @@ import app.keyweb.ui.ScanScreen
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import app.keyweb.vault.liveKeyrings
 import app.keyweb.vault.ItemSort
 import app.keyweb.vault.KeyringSort
 import app.keyweb.ui.ItemEditScreen
@@ -309,7 +310,17 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     return@Box
                 }
 
-                val firstKeyring = ui.vault.keyrings.keys.firstOrNull() ?: "personal"
+                /*
+                 * A keyring that is really there, not merely the first key in
+                 * the map. `firstOrNull()` could be a keyring deleted on
+                 * another device, and `?: "personal"` invented an id for a
+                 * keyring this vault might never have had. Either one became
+                 * the default on the add screen, and a password saved against
+                 * it used to disappear from every screen on both platforms.
+                 * Empty is honest when there is nothing; the save path makes a
+                 * keyring rather than writing to a name nobody chose.
+                 */
+                val firstKeyring = liveKeyrings(ui.vault).firstOrNull()?.id ?: ""
 
                 /**
                  * One definition of "back", used by both the arrow and the
@@ -459,7 +470,21 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         lastRules = ui.lastRules,
                         onBack = ::goBack,
                         onSave = { itemId, keyringId, fields ->
-                            viewModel.saveItem(itemId, keyringId, fields) { route = Route.List }
+                            /*
+                             * To the password, not back to the list.
+                             *
+                             * The list is filtered and folded: it can be
+                             * scoped to one keyring, sitting inside a folder,
+                             * or showing folders at the top rather than
+                             * passwords. Returning to it after a save meant
+                             * the thing somebody had just written was
+                             * routinely not on the screen they were returned
+                             * to, which is indistinguishable from it not
+                             * having been saved.
+                             */
+                            viewModel.saveItem(itemId, keyringId, fields) { saved ->
+                                route = Route.Detail(saved)
+                            }
                         },
                         onSaveRules = viewModel::saveRules,
                         onRulesUsed = viewModel::rememberLastRules,

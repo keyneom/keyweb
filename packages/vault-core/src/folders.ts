@@ -1,4 +1,10 @@
-import { itemField, type ItemRecord, type VaultState } from "./model.js";
+import {
+  itemField,
+  keyringLabel,
+  keyringsOf,
+  type ItemRecord,
+  type VaultState,
+} from "./model.js";
 
 /**
  * The folders inside a keyring.
@@ -38,7 +44,7 @@ export function folderPath(item: ItemRecord, state: VaultState): string[] {
     .split(FOLDER_SEPARATOR)
     .map((part) => part.trim())
     .filter((part) => part !== "");
-  const keyring = state.keyrings[item.keyring.value]?.name.value;
+  const keyring = keyringsOf(state)[item.keyring.value]?.name.value;
   if (keyring !== undefined && segments[0] === keyring) return segments.slice(1);
   return segments;
 }
@@ -58,9 +64,10 @@ export function folderPath(item: ItemRecord, state: VaultState): string[] {
  * level nobody wants to walk through.
  */
 export function folderPathAcrossKeyrings(item: ItemRecord, state: VaultState): string[] {
-  const keyring = state.keyrings[item.keyring.value]?.name.value;
-  const within = folderPath(item, state);
-  return keyring === undefined ? within : [keyring, ...within];
+  // A password whose keyring is gone gets a level of its own rather than
+  // being tipped out at the top among the keyring rows, where it would look
+  // like one more keyring and give no hint that anything wanted fixing.
+  return [keyringLabel(state, item.keyring.value), ...folderPath(item, state)];
 }
 
 export type FolderChild = {

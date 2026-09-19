@@ -136,13 +136,20 @@ class OpsTest {
         assertEquals(true, gone.items["b"]?.deleted?.value)
     }
 
+    /*
+     * Deleting the keyring does not delete the password, and no longer hides
+     * it either. Hiding it made "still in the backup" and "gone" look
+     * identical on screen — and the same filter was what made a password saved
+     * against an unknown keyring id vanish the instant it was written.
+     */
     @Test
-    fun `hides items whose keyring was deleted without destroying them`() {
+    fun `keeps items whose keyring was deleted, and keeps showing them`() {
         var state = build(listOf(put("x", mapOf(Fields.TITLE to "X"))))
         state = applyOp(state, VaultOp.KeyringPut(nextId(), clock.now(), "ring", "Household"))
         assertEquals(1, visibleItems(state).size)
         state = applyOp(state, VaultOp.KeyringDelete(nextId(), clock.now(), "ring"))
-        assertEquals(0, visibleItems(state).size)
+        assertEquals(1, visibleItems(state).size)
+        assertEquals(listOf("x"), itemsWithoutKeyring(state).map { it.id })
         assertNotNull(state.items["x"])
     }
 

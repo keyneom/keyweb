@@ -13,7 +13,7 @@ import {
   fieldsOf,
   fingerprint,
   itemsOf,
-  itemsOnKeyrings,
+  liveItems,
   keyringsOf,
 } from "./model.js";
 import type { VaultOp } from "./ops.js";
@@ -330,7 +330,7 @@ export class VaultSync {
       for (const { blobId } of attachmentsOf(item)) orphaned.add(blobId);
       if (isBlobItem(item)) orphaned.add(item.id);
     }
-    for (const item of itemsOnKeyrings(composed)) {
+    for (const item of liveItems(composed)) {
       if (doomed.has(item.id)) continue;
       for (const { blobId } of attachmentsOf(item)) orphaned.delete(blobId);
     }
@@ -401,7 +401,7 @@ export class VaultSync {
     // Files too: a keyring's attachments are items on it, and leaving them
     // would keep somebody's scanned passport in the vault after they deleted
     // the folder they put it in.
-    const doomed = itemsOnKeyrings(current).filter((item) => item.keyring.value === keyringId);
+    const doomed = liveItems(current).filter((item) => item.keyring.value === keyringId);
     return this.commitAll([
       ...this.#deletionOps(current, doomed.map((item) => item.id)),
       {
@@ -458,7 +458,7 @@ export class VaultSync {
    * that document.
    */
   #itemsOn(composed: VaultState, keyringId: string): ItemRecord[] {
-    return itemsOnKeyrings(composed).filter((item) => item.keyring.value === keyringId);
+    return liveItems(composed).filter((item) => item.keyring.value === keyringId);
   }
 
   /**
@@ -735,7 +735,7 @@ export class VaultSync {
    */
   async removeAttachment(itemId: string, blobId: string): Promise<VaultState> {
     const composed = await this.state();
-    const referenced = itemsOnKeyrings(composed).some(
+    const referenced = liveItems(composed).some(
       (item) =>
         item.id !== itemId && attachmentsOf(item).some((file) => file.blobId === blobId),
     );

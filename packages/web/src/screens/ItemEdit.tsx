@@ -5,6 +5,7 @@ import {
   storedFieldName,
   isSecretField,
   itemField,
+  liveKeyrings,
   PRESETS,
   type ItemField,
   type ItemRecord,
@@ -117,10 +118,21 @@ export function ItemEdit({
     );
   }
 
-  const rings = Object.values(state.keyrings).filter((r) => !r.deleted.value);
+  const rings = liveKeyrings(state);
+  /*
+   * What the dropdown is actually showing.
+   *
+   * A `<select>` whose value matches none of its options displays the first
+   * one and reports nothing wrong. So when the default was a keyring that had
+   * been deleted, or the invented `"personal"`, the screen read "Just mine"
+   * while the save went somewhere else entirely — and the password was never
+   * seen again. Reading the selection back from the options that exist makes
+   * the two agree by construction.
+   */
+  const chosen = rings.some((r) => r.id === keyringId) ? keyringId : (rings[0]?.id ?? "");
   // Kept in the list rather than hidden, so an item that is already in one
   // still shows where it lives — but choosing it says why it cannot be saved.
-  const readOnly = readOnlyKeyrings.has(keyringId);
+  const readOnly = readOnlyKeyrings.has(chosen);
   const canSave = title.trim().length > 0 && password.length > 0 && !saving && !readOnly;
 
   async function save() {
@@ -129,7 +141,7 @@ export function ItemEdit({
     try {
       await onSave({
         ...(item ? { itemId: item.id } : {}),
-        keyringId,
+        keyringId: chosen,
         fields: {
           title: title.trim(),
           username,
@@ -231,7 +243,7 @@ export function ItemEdit({
         <span>Which keyring?</span>
         <div className="box">
           <select
-            value={keyringId}
+            value={chosen}
             onChange={(e) => setKeyringId(e.target.value)}
             style={{ flex: 1, border: 0, background: "none", minHeight: "var(--tap)" }}
           >
@@ -246,7 +258,9 @@ export function ItemEdit({
         <span className={readOnly ? "hint warn" : "hint"}>
           {readOnly
             ? "This keyring was shared with you to look at. Ask the person who shared it if you need to change something, or choose a keyring of your own."
-            : "Everyone on a keyring can see everything on it. Share a keyring, never one password."}
+            : rings.length === 0
+              ? "You have no keyrings yet. Keyweb will make one called Just mine and put this in it."
+              : "Everyone on a keyring can see everything on it. Share a keyring, never one password."}
         </span>
       </label>
 

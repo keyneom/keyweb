@@ -1,10 +1,11 @@
-import { attachmentsOf, isBlobItem, itemField, itemsOnKeyrings, type VaultState } from "./model.js";
+import { attachmentsOf, isBlobItem, itemField, liveItems, type VaultState } from "./model.js";
 import {
   fieldLabel,
   fieldsOf,
   historyOf,
   isSecretField,
   itemsOf,
+  keyringLabel,
   keyringsOf,
   type ItemRecord,
 } from "./model.js";
@@ -94,7 +95,7 @@ export function exportVault(state: VaultState, now: Date = new Date()): VaultExp
     .filter((ring) => !ring.deleted.value)
     .map((ring) => ({ id: ring.id, name: ring.name.value }));
 
-  const items = itemsOnKeyrings(state)
+  const items = liveItems(state)
     .filter((item) => !isBlobItem(item))
     .map((item) => exportItem(item, state))
     .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
@@ -139,7 +140,10 @@ function exportItem(item: ItemRecord, state: VaultState): ExportedItem {
   return {
     id: item.id,
     keyring: item.keyring.value,
-    keyringName: keyringsOf(state)[item.keyring.value]?.name.value ?? "",
+    // Named rather than blank when the keyring is gone, because a CSV row
+    // with an empty group column reads as a mistake in the export. The
+    // password is real and it is in the vault; what it lacks is a keyring.
+    keyringName: keyringLabel(state, item.keyring.value),
     title: of("title"),
     username: of("username"),
     password: of("password"),

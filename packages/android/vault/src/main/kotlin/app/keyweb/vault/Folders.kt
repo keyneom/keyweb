@@ -56,9 +56,10 @@ fun folderPath(item: ItemRecord, state: VaultState): List<String> {
  * nobody wants to walk through.
  */
 fun folderPathAcrossKeyrings(item: ItemRecord, state: VaultState): List<String> {
-    val keyring = state.keyrings[item.keyring.value]?.name?.value
-    val within = folderPath(item, state)
-    return if (keyring == null) within else listOf(keyring) + within
+    // A password whose keyring is gone gets a level of its own rather than
+    // being tipped out at the top among the keyring rows, where it would look
+    // like one more keyring and give no hint that anything wanted fixing.
+    return listOf(keyringLabel(state, item.keyring.value)) + folderPath(item, state)
 }
 
 /** Whether a level is a keyring rather than a folder somebody made. */

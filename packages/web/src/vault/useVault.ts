@@ -10,6 +10,10 @@ import {
   type VaultOp,
   type VaultState,
   VaultSync,
+  itemsOf,
+  keyringLabel,
+  keyringsOf,
+  liveKeyrings,
   visibleItems,
 } from "@keyweb/vault-core";
 import { IndexedDbVaultStorage, peekSealedState, type VaultCipher } from "@keyweb/vault-idb";
@@ -132,11 +136,16 @@ export type VaultApi = {
   chooseBackupFile(fileId: string): Promise<void>;
   lock(): void;
   syncNow(): Promise<void>;
+  /**
+   * Save one password. Throws rather than failing quietly, and reports the
+   * keyring it ended up on, which is not always the one that was asked for —
+   * see the implementation.
+   */
   saveItem(input: {
     itemId?: string;
     keyringId: string;
     fields: Partial<Record<ItemField, string>>;
-  }): Promise<void>;
+  }): Promise<{ itemId: string; keyringId: string; keyringName: string }>;
   deleteItem(itemId: string): Promise<void>;
   /** Write scanned second-factor codes where their plans say they go. */
   addScannedCodes(
@@ -441,7 +450,10 @@ export function useVault(): VaultApi {
       }
       // First run: give people somewhere to put things rather than an empty
       // screen with no obvious next step.
-      if (Object.keys(current.keyrings).length === 0) {
+      // Live ones. Counting records meant a vault whose only keyring had been
+      // deleted started with nowhere to put anything, and every save from then
+      // on aimed at a keyring that was not there.
+      if (liveKeyrings(current).length === 0) {
         current = await sync.putKeyring({ keyringId: "personal", name: "Just mine" });
       }
       setState(current);
@@ -713,12 +725,62 @@ export function useVault(): VaultApi {
     setState(await sync.state());
   }, [adoptShared]);
 
+  /**
+   * Save one password, and be sure it is actually in the vault afterwards.
+   *
+   * Three things here exist because each of them, on its own, was enough to
+   * make a password vanish while the screen said "Saved on this device".
+   *
+   * A locked vault used to return quietly. The caller had no way to tell that
+   * apart from a save, so it showed the success it had already decided on and
+   * went back to a list that would never contain the password. Throwing is the
+   * whole fix: nothing downstream has to remember to check.
+   *
+   * A keyring id that matches no keyring used to be written anyway. The item
+   * was real, synced and backed up, and no screen on either platform would
+   * show it. The list no longer hides such an item, but the better answer is
+   * not to make one, so a save aimed at a keyring that is gone lands in a
+   * keyring that is not — the first one there is, or a new one if this vault
+   * somehow has none — and the caller is told where it went.
+   *
+   * And the result is read back. A save that reports success without the
+   * password being in the state it returns is a bug somewhere further down,
+   * and the person in front of it should hear about it at the moment it
+   * happens rather than the next time they go looking for that password.
+   */
   const saveItem = useCallback<VaultApi["saveItem"]>(
     async (input) => {
       const sync = syncRef.current;
-      if (!sync) return;
-      refresh(await sync.putItem(input));
+      if (!sync) throw new Error("Keyweb is locked. Unlock it and try saving again.");
+
+      const before = await sync.state();
+      const wanted = keyringsOf(before)[input.keyringId];
+      const itemId = input.itemId ?? crypto.randomUUID();
+      let keyringId = input.keyringId;
+      let next: VaultState;
+
+      if (wanted !== undefined && !wanted.deleted.value) {
+        next = await sync.putItem({ ...input, itemId });
+      } else {
+        const ops: VaultOp[] = [];
+        const fallback = liveKeyrings(before)[0];
+        keyringId = fallback?.id ?? crypto.randomUUID();
+        if (!fallback) {
+          const { opId, ts } = sync.stamp();
+          ops.push({ kind: "keyring.put", opId, ts, keyringId, name: "Just mine" });
+        }
+        const { opId, ts } = sync.stamp();
+        ops.push({ kind: "item.put", opId, ts, itemId, keyringId, fields: input.fields });
+        next = await sync.commitAll(ops);
+      }
+
+      refresh(next);
       backgroundSync();
+
+      if (itemsOf(next)[itemId] === undefined) {
+        throw new Error("Keyweb could not save that password. Nothing was changed.");
+      }
+      return { itemId, keyringId, keyringName: keyringLabel(next, keyringId) };
     },
     [refresh, backgroundSync],
   );

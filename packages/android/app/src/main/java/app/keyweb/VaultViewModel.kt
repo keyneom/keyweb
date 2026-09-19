@@ -83,6 +83,8 @@ import app.keyweb.vault.decodeHlc
 import app.keyweb.vault.encodeHlc
 import app.keyweb.vault.kdbx.WrongMasterPassword
 import app.keyweb.vault.emptyVault
+import app.keyweb.vault.keyringLabel
+import app.keyweb.vault.liveKeyrings
 import app.keyweb.vault.visibleItems
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -536,7 +538,10 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             var current = engine.state()
             // First run: give people somewhere to put things rather than an
             // empty screen with no obvious next step.
-            if (current.keyrings.isEmpty()) {
+            // Live ones. Counting records meant a vault whose only keyring had
+            // been deleted started with nowhere to put anything, and every save
+            // from then on aimed at a keyring that was not there.
+            if (liveKeyrings(current).isEmpty()) {
                 current = engine.putKeyring(keyringId = "personal", name = "Just mine")
             }
             publish(current, phase = VaultPhase.READY)
@@ -597,17 +602,69 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(toast = message)
     }
 
+    /**
+     * Save one password, and be sure it is actually in the vault afterwards.
+     *
+     * Each of these guards exists because, on its own, it was enough to make a
+     * password vanish while the screen said "Saved on this phone".
+     *
+     * A keyring id that matches no keyring used to be written anyway. The item
+     * was real, synced and backed up, and no screen on either platform would
+     * show it. The list no longer hides such an item, but the better answer is
+     * not to make one, so a save aimed at a keyring that is gone lands in a
+     * keyring that is not — the first one there is, or a new one if this vault
+     * somehow has none — and the toast says where it went.
+     *
+     * And the result is read back. A save that reports success without the
+     * password being in the state it returns is a bug further down, and the
+     * person in front of it should hear about it at the moment it happens
+     * rather than the next time they go looking for that password.
+     */
     fun saveItem(
         itemId: String?,
         keyringId: String,
         fields: Map<ItemField, String>,
-        onDone: () -> Unit = {},
+        /** Handed the id it was saved under, so the caller can go and show it. */
+        onDone: (String) -> Unit = {},
     ) {
-        val engine = sync ?: return
+        val engine = sync
+        if (engine == null) {
+            _state.value = _state.value.copy(toast = "Keyweb is locked. Unlock it and try again.")
+            return
+        }
         viewModelScope.launch {
-            val next = engine.putItem(itemId = itemId, keyringId = keyringId, fields = fields)
-            publish(next, toast = "Saved on this phone.")
-            onDone()
+            val before = engine.state()
+            val wanted = before.keyrings[keyringId]
+            val id = itemId ?: UUID.randomUUID().toString()
+            var landedOn = keyringId
+            val next = if (wanted != null && !wanted.deleted.value) {
+                engine.putItem(itemId = id, keyringId = keyringId, fields = fields)
+            } else {
+                val ops = mutableListOf<VaultOp>()
+                val fallback = liveKeyrings(before).firstOrNull()
+                landedOn = fallback?.id ?: UUID.randomUUID().toString()
+                if (fallback == null) {
+                    val stamp = engine.stamp()
+                    ops += VaultOp.KeyringPut(stamp.opId, stamp.ts, landedOn, "Just mine")
+                }
+                val stamp = engine.stamp()
+                ops += VaultOp.ItemPut(stamp.opId, stamp.ts, id, landedOn, fields)
+                engine.commitAll(ops)
+            }
+
+            if (next.items[id] == null) {
+                publish(next, toast = "Keyweb could not save that password. Nothing was changed.")
+                return@launch
+            }
+            publish(
+                next,
+                toast = if (landedOn == keyringId) {
+                    "Saved on this phone."
+                } else {
+                    "Saved in ${keyringLabel(next, landedOn)}, because the keyring you chose is no longer there."
+                },
+            )
+            onDone(id)
         }
     }
 

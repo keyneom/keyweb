@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { compareHlc, createClock, decodeHlc, encodeHlc, HLC_ZERO } from "../src/hlc.js";
 import { mergeVaults } from "../src/merge.js";
 import type { VaultState } from "../src/model.js";
-import { emptyVault, fingerprint, itemField, visibleItems } from "../src/model.js";
+import {
+  emptyVault,
+  fingerprint,
+  itemField,
+  itemsWithoutKeyring,
+  visibleItems,
+} from "../src/model.js";
 import type { VaultOp } from "../src/ops.js";
 import { applyOp, applyOps } from "../src/ops.js";
 
@@ -113,7 +119,13 @@ describe("operations", () => {
     expect(gone.items.b!.deleted.value).toBe(true);
   });
 
-  it("hides items whose keyring was deleted without destroying them", () => {
+  /*
+   * Deleting the keyring does not delete the password, and no longer hides it
+   * either. Hiding it made "still in the backup" and "gone" look identical on
+   * screen — and the same filter was what made a password saved against an
+   * unknown keyring id vanish the instant it was written.
+   */
+  it("keeps items whose keyring was deleted, and keeps showing them", () => {
     let state = build([put("x", { title: "X" })]);
     state = applyOp(state, {
       kind: "keyring.put",
@@ -129,7 +141,8 @@ describe("operations", () => {
       ts: clock.now(),
       keyringId: "ring",
     });
-    expect(visibleItems(state)).toHaveLength(0);
+    expect(visibleItems(state)).toHaveLength(1);
+    expect(itemsWithoutKeyring(state).map((item) => item.id)).toEqual(["x"]);
     expect(state.items.x).toBeDefined();
   });
 

@@ -229,7 +229,7 @@ class VaultSync(
             for (file in item.attachments()) orphaned += file.blobId
             if (item.isBlob()) orphaned += item.id
         }
-        for (item in itemsOnKeyrings(composed)) {
+        for (item in liveItems(composed)) {
             if (doomed.contains(item.id)) continue
             for (file in item.attachments()) orphaned -= file.blobId
         }
@@ -301,7 +301,7 @@ class VaultSync(
      */
     suspend fun removeAttachment(itemId: String, blobId: String): VaultState {
         val composed = state()
-        val referenced = itemsOnKeyrings(composed).any { item ->
+        val referenced = liveItems(composed).any { item ->
             item.id != itemId && item.attachments().any { it.blobId == blobId }
         }
         return commitAll(
@@ -365,7 +365,7 @@ class VaultSync(
         // it, and leaving them would keep somebody's scanned passport in the
         // vault after they deleted the folder they put it in.
         val current = state()
-        val doomed = itemsOnKeyrings(current).filter { it.keyring.value == keyringId }
+        val doomed = liveItems(current).filter { it.keyring.value == keyringId }
         return commitAll(
             deletionOps(current, doomed.map { it.id }) +
                 VaultOp.KeyringDelete(newId(), clock.now(), keyringId),
@@ -412,7 +412,7 @@ class VaultSync(
      * holds that document.
      */
     private fun itemsOn(composed: VaultState, keyringId: String): List<ItemRecord> =
-        itemsOnKeyrings(composed).filter { it.keyring.value == keyringId }
+        liveItems(composed).filter { it.keyring.value == keyringId }
 
     /**
      * Move a keyring's passwords into their own document, so it can be shared.

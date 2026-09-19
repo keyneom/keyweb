@@ -307,31 +307,76 @@ export function attachmentsOf(item: ItemRecord): { blobId: string; name: string 
 }
 
 /**
- * Items a person can actually see: not deleted, on a keyring that exists, and
- * not one of the files hanging off another item.
+ * Items a person can actually see: everything live that is not one of the
+ * files hanging off another item.
  *
  * Files are excluded here rather than stored somewhere separate because this
  * is the only question they are the wrong answer to — every other part of the
  * vault should and does treat them as the ordinary items they are.
  */
 export function visibleItems(state: VaultState): ItemRecord[] {
-  return itemsOnKeyrings(state).filter((item) => !isBlobItem(item));
+  return liveItems(state).filter((item) => !isBlobItem(item));
 }
 
 /**
- * Everything live on a keyring that exists, files included.
+ * Every live item, wherever it says it lives. Files included.
  *
- * What moves when a keyring moves. Using `visibleItems` here would leave a
- * password's files behind in the document it came from — present, orphaned,
- * and readable by whoever still has that document.
+ * This used to also require the item's keyring to still exist, and that
+ * requirement was a way to lose a password in total silence. A save whose
+ * keyring id did not match a keyring — a stale default, a keyring deleted on
+ * another device a moment earlier, a keyring record that simply has not
+ * arrived yet, since an item and its keyring are separate registers that merge
+ * independently — was written, published, backed up, synced to the phone, and
+ * then filtered out of every screen on both devices. The app said "Saved" and
+ * was telling the truth. Nothing was ever going to show it again.
+ *
+ * So membership of a keyring is no longer what grants an item the right to be
+ * seen. Being live is. An item whose keyring is missing is shown as needing
+ * one — see `itemsWithoutKeyring` — which is a thing somebody can fix in one
+ * tap, rather than an absence they cannot even observe.
+ *
+ * Deleting a keyring still removes its passwords, because `deleteKeyringWithItems`
+ * tombstones them in the same write; they fail the `deleted` test above and
+ * never reach this. What no longer happens is the reverse — a password that
+ * outlived that write, or never belonged to it, staying in the vault and in
+ * the backup with nothing on any screen to say so.
  */
-export function itemsOnKeyrings(state: VaultState): ItemRecord[] {
-  return Object.values(itemsOf(state))
-    .filter((item) => !item.deleted.value)
-    .filter((item) => {
-      const ring = keyringsOf(state)[item.keyring.value];
-      return ring !== undefined && !ring.deleted.value;
-    });
+export function liveItems(state: VaultState): ItemRecord[] {
+  return Object.values(itemsOf(state)).filter((item) => !item.deleted.value);
+}
+
+/**
+ * Live passwords with no keyring to belong to.
+ *
+ * Kept as its own question so the list can say so out loud and offer to put
+ * them somewhere, instead of showing a row whose keyring label is blank and
+ * leaving somebody to wonder whether that means anything.
+ */
+export function itemsWithoutKeyring(state: VaultState): ItemRecord[] {
+  return visibleItems(state).filter((item) => {
+    const ring = keyringsOf(state)[item.keyring.value];
+    return ring === undefined || ring.deleted.value;
+  });
+}
+
+/** What a password with no keyring is called anywhere it has to be named. */
+export const NO_KEYRING = "Not in a keyring";
+
+/**
+ * The name to show for the keyring an item claims to be on.
+ *
+ * A deleted keyring is treated the same as one that was never there: its name
+ * belongs to something somebody threw away, and labelling a live password with
+ * it would invite them to look for it somewhere that no longer exists.
+ */
+export function keyringLabel(state: VaultState, keyringId: string): string {
+  const ring = keyringsOf(state)[keyringId];
+  return ring === undefined || ring.deleted.value ? NO_KEYRING : ring.name.value;
+}
+
+/** The keyrings somebody can actually put something in. */
+export function liveKeyrings(state: VaultState): KeyringRecord[] {
+  return Object.values(keyringsOf(state)).filter((ring) => !ring.deleted.value);
 }
 
 export function itemField(item: ItemRecord, field: ItemField): string | undefined {

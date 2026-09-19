@@ -320,30 +320,67 @@ fun ItemRecord.attachments(): List<Attachment> =
 data class Attachment(val blobId: String, val name: String)
 
 /**
- * Everything live on a keyring that exists, files included.
+ * Every live item, wherever it says it lives. Files included.
  *
- * What moves when a keyring moves. Using [visibleItems] here would leave a
- * password's files behind in the document it came from — present, orphaned,
- * and readable by whoever still has that document.
+ * This used to also require the item's keyring to still exist, and that
+ * requirement was a way to lose a password in total silence. A save whose
+ * keyring id did not match a keyring — a stale default, a keyring deleted on
+ * another device a moment earlier, a keyring record that simply has not
+ * arrived yet, since an item and its keyring are separate registers that merge
+ * independently — was written, published, backed up, synced to the other
+ * device, and then filtered out of every screen on both. The app said "Saved"
+ * and was telling the truth. Nothing was ever going to show it again.
+ *
+ * So membership of a keyring is no longer what grants an item the right to be
+ * seen. Being live is. An item whose keyring is missing is shown as needing
+ * one — see [itemsWithoutKeyring] — which is a thing somebody can fix in one
+ * tap, rather than an absence they cannot even observe.
  */
-fun itemsOnKeyrings(state: VaultState): List<ItemRecord> =
-    state.items.values
-        .filter { !it.deleted.value }
-        .filter { item ->
-            val ring = state.keyrings[item.keyring.value]
-            ring != null && !ring.deleted.value
-        }
+fun liveItems(state: VaultState): List<ItemRecord> =
+    state.items.values.filter { !it.deleted.value }
 
 /**
- * Items a person can actually see: not deleted, on a keyring that exists, and
- * not one of the files hanging off another item.
+ * Items a person can actually see: everything live that is not one of the
+ * files hanging off another item.
  *
  * Files are excluded here rather than stored somewhere separate because this
  * is the only question they are the wrong answer to — every other part of the
  * vault should and does treat them as the ordinary items they are.
  */
 fun visibleItems(state: VaultState): List<ItemRecord> =
-    itemsOnKeyrings(state).filter { !it.isBlob() }
+    liveItems(state).filter { !it.isBlob() }
+
+/**
+ * Live passwords with no keyring to belong to.
+ *
+ * Kept as its own question so the list can say so out loud and offer to put
+ * them somewhere, instead of showing a row whose keyring label is blank and
+ * leaving somebody to wonder whether that means anything.
+ */
+fun itemsWithoutKeyring(state: VaultState): List<ItemRecord> =
+    visibleItems(state).filter { item ->
+        val ring = state.keyrings[item.keyring.value]
+        ring == null || ring.deleted.value
+    }
+
+/** The keyrings somebody can actually put something in. */
+fun liveKeyrings(state: VaultState): List<KeyringRecord> =
+    state.keyrings.values.filter { !it.deleted.value }
+
+/** What a password with no keyring is called anywhere it has to be named. */
+const val NO_KEYRING: String = "Not in a keyring"
+
+/**
+ * The name to show for the keyring an item claims to be on.
+ *
+ * A deleted keyring is treated the same as one that was never there: its name
+ * belongs to something somebody threw away, and labelling a live password with
+ * it would invite them to look for it somewhere that no longer exists.
+ */
+fun keyringLabel(state: VaultState, keyringId: String): String {
+    val ring = state.keyrings[keyringId]
+    return if (ring == null || ring.deleted.value) NO_KEYRING else ring.name.value
+}
 
 fun ItemRecord.field(field: ItemField): String? = fields[field]?.value
 

@@ -15,7 +15,7 @@ import {
   type KeywebJoinLink,
 } from "./vault/sharing/links";
 import { decodeSharingDatasetFilesV1 } from "@keyneom/sync-kit/sharing";
-import { datasetOf, itemField } from "@keyweb/vault-core";
+import { datasetOf, itemField, liveKeyrings } from "@keyweb/vault-core";
 import type { SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
 import { Import } from "./screens/Import";
 import { Keyrings } from "./screens/Keyrings";
@@ -259,7 +259,18 @@ export function App() {
     );
   }
 
-  const firstKeyring = Object.keys(vault.state.keyrings)[0] ?? "personal";
+  /*
+   * A keyring that is really there, not merely the first key in the map.
+   *
+   * `Object.keys(...)[0]` could be a keyring deleted on another device, and
+   * `?? "personal"` invented an id for a keyring this vault might never have
+   * had. Either one became the default on the add screen — where the dropdown
+   * silently shows its first option when its value matches none of them, so
+   * the keyring somebody read off the screen was not the one their password
+   * was saved to. Empty is honest when there is nothing; the save path makes a
+   * keyring rather than writing to a name nobody chose.
+   */
+  const firstKeyring = liveKeyrings(vault.state)[0]?.id ?? "";
   const current =
     route.name === "detail" || (route.name === "edit" && route.itemId)
       ? (vault.state.items[route.name === "detail" ? route.itemId : route.itemId!] ?? null)
@@ -347,9 +358,37 @@ export function App() {
           readOnlyKeyrings={vault.readOnlyKeyrings}
           onBack={() => setRoute({ name: "list" })}
           onSave={async (input) => {
-            await vault.saveItem(input);
-            setToast("Saved on this device.");
-            setRoute({ name: "list" });
+            /*
+             * The toast now reports what happened rather than what was
+             * attempted. It used to say "Saved on this device" whether or not
+             * anything had been — a locked vault returned quietly and a
+             * password aimed at a missing keyring disappeared — and the screen
+             * went back to a list that did not contain it.
+             */
+            try {
+              const saved = await vault.saveItem(input);
+              setToast(
+                saved.keyringId === input.keyringId
+                  ? "Saved on this device."
+                  : `Saved in ${saved.keyringName}, because the keyring you chose is no longer there.`,
+              );
+              /*
+               * To the password, not back to the list.
+               *
+               * The list is filtered and folded: it can be scoped to one
+               * keyring, sitting inside a folder, or showing folders at the
+               * top rather than passwords. Returning to it after a save meant
+               * the thing somebody had just written was routinely not on the
+               * screen they were returned to, which is indistinguishable from
+               * it not having been saved. Showing the saved password answers
+               * the only question they have at that moment.
+               */
+              setRoute({ name: "detail", itemId: saved.itemId });
+            } catch (cause) {
+              setToast(
+                cause instanceof Error ? cause.message : "That password was not saved.",
+              );
+            }
           }}
         />
       )}

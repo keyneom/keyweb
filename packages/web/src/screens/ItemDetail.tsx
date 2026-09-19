@@ -3,6 +3,8 @@ import {
   attachmentsOf,
   fieldLabel,
   isSecretField,
+  keyringLabel,
+  NO_KEYRING,
   pastValues,
   type PastValue,
   itemField,
@@ -68,7 +70,7 @@ export function ItemDetail({
   const password = itemField(item, "password") ?? "";
   const url = itemField(item, "url") ?? "";
   const note = itemField(item, "note") ?? "";
-  const ring = state.keyrings[item.keyring.value];
+  const ringName = keyringLabel(state, item.keyring.value);
 
   /*
    * Everything else this item carries.
@@ -121,7 +123,9 @@ export function ItemDetail({
       </header>
 
       <h1 className="screen-title">{title}</h1>
-      <p className="screen-sub">{ring ? `On the ${ring.name.value} keyring` : "No keyring"}</p>
+      <p className="screen-sub">
+        {ringName === NO_KEYRING ? NO_KEYRING : `On the ${ringName} keyring`}
+      </p>
 
       {username && (
         <label className="field">

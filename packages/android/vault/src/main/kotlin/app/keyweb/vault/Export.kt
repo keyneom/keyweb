@@ -108,7 +108,7 @@ fun exportVault(state: VaultState, nowIso: String): VaultExport {
         .filter { !it.deleted.value }
         .map { ExportedKeyring(it.id, it.name.value) }
 
-    val items = itemsOnKeyrings(state)
+    val items = liveItems(state)
         .filter { !it.isBlob() }
         .map { exportItem(it, state) }
         .sortedWith(compareBy({ it.title }, { it.id }))
@@ -146,7 +146,10 @@ private fun exportItem(item: ItemRecord, state: VaultState): ExportedItem {
     return ExportedItem(
         id = item.id,
         keyring = item.keyring.value,
-        keyringName = state.keyrings[item.keyring.value]?.name?.value ?: "",
+        // Named rather than blank when the keyring is gone, because a CSV row
+        // with an empty group column reads as a mistake in the export. The
+        // password is real and it is in the vault; what it lacks is a keyring.
+        keyringName = keyringLabel(state, item.keyring.value),
         title = of("title"),
         username = of("username"),
         password = of("password"),

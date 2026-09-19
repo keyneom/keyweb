@@ -1,6 +1,14 @@
 import type { Hlc } from "./hlc.js";
 import type { HistoryEntry, ItemField, Reg, VaultState } from "./model.js";
-import { HISTORY_LIMIT, newItem, newKeyring, pickReg, reg } from "./model.js";
+import {
+  HISTORY_LIMIT,
+  itemsOf,
+  keyringsOf,
+  newItem,
+  newKeyring,
+  pickReg,
+  reg,
+} from "./model.js";
 
 /**
  * Every user edit is an operation before it is a state change. Operations are
@@ -66,31 +74,31 @@ function pushHistory(history: HistoryEntry[], entry: HistoryEntry): HistoryEntry
 export function applyOp(state: VaultState, op: VaultOp): VaultState {
   switch (op.kind) {
     case "keyring.put": {
-      const existing = state.keyrings[op.keyringId] ?? newKeyring(op.keyringId, op.name, op.ts);
+      const existing = keyringsOf(state)[op.keyringId] ?? newKeyring(op.keyringId, op.name, op.ts);
       const next = {
         ...existing,
         name: pickReg(existing.name, reg(op.name, op.ts)) ?? reg(op.name, op.ts),
       };
-      return { ...state, keyrings: { ...state.keyrings, [op.keyringId]: next } };
+      return { ...state, keyrings: { ...keyringsOf(state), [op.keyringId]: next } };
     }
     case "keyring.bind": {
-      const existing = state.keyrings[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
+      const existing = keyringsOf(state)[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
       const next = {
         ...existing,
         dataset: pickReg(existing.dataset, reg(op.datasetId, op.ts)) ?? reg(op.datasetId, op.ts),
       };
-      return { ...state, keyrings: { ...state.keyrings, [op.keyringId]: next } };
+      return { ...state, keyrings: { ...keyringsOf(state), [op.keyringId]: next } };
     }
     case "keyring.delete": {
-      const existing = state.keyrings[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
+      const existing = keyringsOf(state)[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
       const next = {
         ...existing,
         deleted: pickReg(existing.deleted, reg(true, op.ts)) ?? reg(true, op.ts),
       };
-      return { ...state, keyrings: { ...state.keyrings, [op.keyringId]: next } };
+      return { ...state, keyrings: { ...keyringsOf(state), [op.keyringId]: next } };
     }
     case "item.put": {
-      const existing = state.items[op.itemId] ?? newItem(op.itemId, op.keyringId, op.ts);
+      const existing = itemsOf(state)[op.itemId] ?? newItem(op.itemId, op.keyringId, op.ts);
       const fields = { ...existing.fields };
       let history = existing.history;
       for (const [field, value] of Object.entries(op.fields)) {
@@ -114,20 +122,20 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
         fields,
         history,
       };
-      return { ...state, items: { ...state.items, [op.itemId]: next } };
+      return { ...state, items: { ...itemsOf(state), [op.itemId]: next } };
     }
     case "item.delete":
     case "item.restore": {
       const wanted = op.kind === "item.delete";
-      const existing = state.items[op.itemId] ?? newItem(op.itemId, "", op.ts);
+      const existing = itemsOf(state)[op.itemId] ?? newItem(op.itemId, "", op.ts);
       const next = {
         ...existing,
         deleted: pickReg(existing.deleted, reg(wanted, op.ts)) ?? reg(wanted, op.ts),
       };
-      return { ...state, items: { ...state.items, [op.itemId]: next } };
+      return { ...state, items: { ...itemsOf(state), [op.itemId]: next } };
     }
     case "item.purge": {
-      const existing = state.items[op.itemId] ?? newItem(op.itemId, "", op.ts);
+      const existing = itemsOf(state)[op.itemId] ?? newItem(op.itemId, "", op.ts);
       const fields: Record<ItemField, Reg<string>> = {};
       // Only the fields this document actually holds can be blanked. A field
       // written by a newer client and not yet merged here is not in the record
@@ -142,15 +150,15 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
         fields,
         history: [],
       };
-      return { ...state, items: { ...state.items, [op.itemId]: next } };
+      return { ...state, items: { ...itemsOf(state), [op.itemId]: next } };
     }
     case "item.move": {
-      const existing = state.items[op.itemId] ?? newItem(op.itemId, op.keyringId, op.ts);
+      const existing = itemsOf(state)[op.itemId] ?? newItem(op.itemId, op.keyringId, op.ts);
       const next = {
         ...existing,
         keyring: pickReg(existing.keyring, reg(op.keyringId, op.ts)) ?? reg(op.keyringId, op.ts),
       };
-      return { ...state, items: { ...state.items, [op.itemId]: next } };
+      return { ...state, items: { ...itemsOf(state), [op.itemId]: next } };
     }
   }
 }

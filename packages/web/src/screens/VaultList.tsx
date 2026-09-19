@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   browseFolders,
+  keyringLabel,
+  itemsWithoutKeyring,
   ITEM_SORTS,
   itemField,
   sortItems,
@@ -8,7 +10,7 @@ import {
   type ItemSort,
   type VaultState,
 } from "@keyweb/vault-core";
-import { KeyIcon, PlusIcon, SearchIcon } from "../ui/icons";
+import { AlertIcon, KeyIcon, PlusIcon, SearchIcon } from "../ui/icons";
 import { StatusLine } from "../ui/StatusLine";
 import { SortPicker } from "../ui/SortPicker";
 import { useRememberedSort } from "../vault/useRememberedSort";
@@ -107,6 +109,19 @@ export function VaultList({
         .sort((a, b) => a.name.value.localeCompare(b.name.value)),
     [state.keyrings],
   );
+
+  /*
+   * Passwords with no keyring, and the offer to fix it.
+   *
+   * These used to be filtered out of every list on both platforms, so a
+   * password saved against a keyring that had been deleted — or one that had
+   * simply not arrived on this device yet — was in the vault, in the backup
+   * and on the phone, and on no screen anywhere. Now they are in the list like
+   * anything else, and this says out loud that they want a home, because a row
+   * that reads "Not in a keyring" with no way to act on it is only half an
+   * answer.
+   */
+  const homeless = useMemo(() => itemsWithoutKeyring(state), [state]);
 
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -236,6 +251,34 @@ export function VaultList({
           );
         })}
       </div>
+
+      {homeless.length > 0 && !selecting && (
+        <p className="status" data-tone="attn">
+          <AlertIcon />
+          <span>
+            <b>
+              {homeless.length} password{homeless.length === 1 ? " is" : "s are"} not in a
+              keyring.
+            </b>
+            <em>
+              {homeless.length === 1 ? "It is" : "They are"} safe and backed up — the keyring{" "}
+              {homeless.length === 1 ? "it was" : "they were"} saved to is gone. Put{" "}
+              {homeless.length === 1 ? "it" : "them"} somewhere you will find{" "}
+              {homeless.length === 1 ? "it" : "them"} again.
+            </em>
+            <button
+              type="button"
+              className="btn sec"
+              onClick={() => {
+                setSelected(new Set(homeless.map((item) => item.id)));
+                setMoving(true);
+              }}
+            >
+              Put {homeless.length === 1 ? "it" : "them"} in a keyring
+            </button>
+          </span>
+        </p>
+      )}
 
       {/*
         Under the filters rather than beside the search box: filtering narrows
@@ -441,7 +484,10 @@ function ItemRow({
   onStartSelecting: () => void;
 }) {
   const title = itemField(item, "title") ?? "Untitled";
-  const ringRecord = state.keyrings[item.keyring.value];
+  // Named through `keyringLabel`, so a keyring that was deleted reads the
+  // same as one that was never there rather than sending somebody looking for
+  // a keyring that is gone.
+  const ringName = keyringLabel(state, item.keyring.value);
   const username = itemField(item, "username");
   const { handlers, swallowClick } = useLongPress(onStartSelecting);
 
@@ -464,7 +510,7 @@ function ItemRow({
       <span className="rowtext">
         <b>{title}</b>
         <span>
-          {ringRecord ? ringRecord.name.value : "No keyring"}
+          {ringName}
           {username ? ` · ${username}` : ""}
         </span>
       </span>

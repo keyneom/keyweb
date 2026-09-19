@@ -76,6 +76,10 @@ import app.keyweb.vault.KeyringSort
 import app.keyweb.vault.PastValue
 import app.keyweb.vault.fieldLabel
 import app.keyweb.vault.folderPath
+import app.keyweb.vault.NO_KEYRING
+import app.keyweb.vault.itemsWithoutKeyring
+import app.keyweb.vault.keyringLabel
+import app.keyweb.vault.liveKeyrings
 import app.keyweb.vault.pastValues
 import app.keyweb.vault.sortItems
 import app.keyweb.vault.sortKeyrings
@@ -304,6 +308,61 @@ fun VaultListScreen(
                 }
             }
 
+            /*
+             * Passwords with no keyring, and the offer to fix it.
+             *
+             * These used to be filtered out of every list on both platforms,
+             * so a password saved against a keyring that had been deleted — or
+             * one that had simply not arrived on this device yet — was in the
+             * vault, in the backup and on the other device, and on no screen
+             * anywhere. Now they are in the list like anything else, and this
+             * says out loud that they want a home, because a row that reads
+             * "Not in a keyring" with no way to act on it is only half an
+             * answer.
+             */
+            val homeless = itemsWithoutKeyring(state)
+            if (homeless.isNotEmpty() && !selecting) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = statusColors.attention.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            if (homeless.size == 1) {
+                                "1 password is not in a keyring."
+                            } else {
+                                "${homeless.size} passwords are not in a keyring."
+                            },
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            if (homeless.size == 1) {
+                                "It is safe and backed up — the keyring it was saved to is " +
+                                    "gone. Put it somewhere you will find it again."
+                            } else {
+                                "They are safe and backed up — the keyring they were saved " +
+                                    "to is gone. Put them somewhere you will find them again."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = statusColors.muted,
+                        )
+                        TextButton(onClick = {
+                            selected = homeless.map { it.id }.toSet()
+                            moving = true
+                        }) {
+                            Text(
+                                if (homeless.size == 1) {
+                                    "Put it in a keyring"
+                                } else {
+                                    "Put them in a keyring"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
             // Under the filters rather than beside the search box: filtering
             // narrows what is in the list and ordering decides where in it to
             // look, and reading them in that order matches doing them in it.
@@ -445,8 +504,11 @@ fun VaultListScreen(
                             }
                             items(view.items, key = { it.id }) { item ->
                                 val title = item.field(Fields.TITLE) ?: "Untitled"
-                                val ringName = state.keyrings[item.keyring.value]?.name?.value
-                                    ?: "No keyring"
+                                // Named through `keyringLabel`, so a keyring
+                                // that was deleted reads the same as one that
+                                // was never there rather than sending somebody
+                                // looking for a keyring that is gone.
+                                val ringName = keyringLabel(state, item.keyring.value)
                                 val user = item.field(Fields.USERNAME)
                                 val chosen = selected?.contains(item.id)
                                 VaultRow(
@@ -530,7 +592,7 @@ fun ItemDetailScreen(
     var revealed by remember { mutableStateOf(false) }
     val statusColors = LocalKeywebStatus.current
     val title = item.field(Fields.TITLE) ?: "Untitled"
-    val ringName = state.keyrings[item.keyring.value]?.name?.value
+    val ringName = keyringLabel(state, item.keyring.value)
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
@@ -540,7 +602,7 @@ fun ItemDetailScreen(
             }
             Text(title, style = MaterialTheme.typography.titleLarge)
             Text(
-                ringName?.let { "On the $it keyring" } ?: "No keyring",
+                if (ringName == NO_KEYRING) NO_KEYRING else "On the $ringName keyring",
                 color = statusColors.muted,
                 modifier = Modifier.padding(bottom = 12.dp),
             )
@@ -1000,7 +1062,18 @@ fun ItemEditScreen(
     }
     val statusColors = LocalKeywebStatus.current
 
-    val rings = state.keyrings.values.filter { !it.deleted.value }
+    val rings = liveKeyrings(state)
+    /*
+     * What the chips are actually showing.
+     *
+     * A selection that matches no chip leaves every chip unselected and
+     * reports nothing wrong — so when the default was a keyring that had been
+     * deleted, or the invented "personal", the screen showed no keyring while
+     * the save went to one that did not exist, and the password was never seen
+     * again. Reading the selection back from the chips that exist makes the
+     * two agree by construction.
+     */
+    val chosen = if (rings.any { it.id == keyringId }) keyringId else rings.firstOrNull()?.id ?: ""
     val canSave = title.isNotBlank() && password.isNotEmpty()
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -1058,7 +1131,7 @@ fun ItemEditScreen(
             ) {
                 rings.forEach { r ->
                     FilterChip(
-                        selected = keyringId == r.id,
+                        selected = chosen == r.id,
                         onClick = { keyringId = r.id },
                         colors = keywebChipColors(),
                         label = {
@@ -1075,11 +1148,14 @@ fun ItemEditScreen(
             }
             // Shown rather than hidden, so an item that is already in one still
             // shows where it lives — but choosing it says why it cannot be saved.
-            val readOnly = readOnlyKeyrings.contains(keyringId)
+            val readOnly = readOnlyKeyrings.contains(chosen)
             Text(
                 if (readOnly) {
                     "This keyring was shared with you to look at. Ask the person who shared " +
                         "it if you need to change something, or choose a keyring of your own."
+                } else if (rings.isEmpty()) {
+                    "You have no keyrings yet. Keyweb will make one called Just mine and " +
+                        "put this in it."
                 } else {
                     "Everyone on a keyring can see everything on it. You share a keyring, " +
                         "never one password."
@@ -1190,7 +1266,7 @@ fun ItemEditScreen(
                 onClick = {
                     onSave(
                         item?.id,
-                        keyringId,
+                        chosen,
                         mapOf(
                             Fields.TITLE to title.trim(),
                             Fields.USERNAME to username,
