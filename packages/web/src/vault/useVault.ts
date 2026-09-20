@@ -569,11 +569,10 @@ export function useVault(): VaultApi {
         /*
          * A backup with no browser key in it is not the same as no backup.
          *
-         * A vault made entirely on a phone has only the recovery envelope,
-         * because Keyweb's Android app does not derive the passkey key.
-         * Telling that
-         * person "there's no backup in that account" is false and sends them
-         * looking for the wrong problem, so the two cases are separated here
+         * A vault made on a phone that has no passkey for the backup holds
+         * only the recovery envelope. Telling that person "there's no backup
+         * in that account" is false and sends them looking for the wrong
+         * problem, so the two cases are separated here
          * even though it costs a second round trip on a path nobody takes
          * twice.
          */

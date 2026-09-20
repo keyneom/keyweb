@@ -94,14 +94,7 @@ class DriveVaultRemote(
     private fun parse(content: String): Payload? {
         if (content.isBlank()) return null
         return try {
-            val element = json.parseToJsonElement(content).jsonObject
-            if (element.containsKey("passkey") || element.containsKey("recovery")) {
-                Payload(element)
-            } else {
-                // A backup written before the recovery copy existed is a bare
-                // envelope rather than a wrapper.
-                Payload(buildJsonObject { put("passkey", element) })
-            }
+            Payload(json.parseToJsonElement(content).jsonObject)
         } catch (cause: Exception) {
             null
         }
@@ -242,29 +235,6 @@ class DriveVaultRemote(
             )
         }
 
-        /*
-         * Repair a backup written before the envelope carried its own version.
-         *
-         * Builds up to 0.2.0-beta.8 dropped `schemaVersion` and `algorithm`,
-         * because both hold defaults and the serializer used here omitted
-         * those. This phone reads such a file perfectly — a Kotlin decoder
-         * puts the defaults back — so nothing here would ever have noticed,
-         * and a browser could not open the file at all.
-         *
-         * Repaired on read rather than left for the next edit, because the
-         * engine skips a write when nothing has changed: a person whose vault
-         * is simply *correct* would never publish again, and their backup
-         * would stay unreadable in a browser forever. Rewriting it here costs
-         * one upload, once, on a file that is already in hand.
-         *
-         * Idempotent by construction: the rewrite goes out through `wire`,
-         * which emits both fields, so a repaired file never matches again.
-         */
-        if (recovery.jsonObject["schemaVersion"] == null) {
-            runCatching { drive.write(id, sealed(state, payload)) }
-            return@reachable RemoteRevision(state, version(id))
-        }
-
         RemoteRevision(state, current)
     }
 
@@ -349,47 +319,17 @@ class DriveVaultRemote(
     }
 
     /**
-     * Is [older] sealed before [newer] — by enough to mean a different write?
+     * Is [older] sealed before [newer]?
      *
      * Read off `updatedAt`, which is the one thing comparable without holding
-     * either key. Equal is not behind: a device that can seal both writes both
-     * in one pass, from one state, at one moment.
-     *
-     * The window is what makes that true in practice rather than in principle.
-     * Browsers sealed their two copies in two calls until recently, so every
-     * file one of them has ever written carries stamps a millisecond or two
-     * apart — and read strictly, that gap says "the other copy has moved on
-     * without you", which locked this phone out of backups it could read
-     * perfectly well. Those files do not heal themselves: a browser with
-     * nothing to save never writes again.
-     *
-     * Two seconds is safe because of what the state this guards against
-     * actually looks like. A recovery copy is only left behind when a device
-     * rewrites the passkey copy and carries the recovery copy forward
-     * *untouched* — so the stamp it keeps is from whenever it was last
-     * resealed, which is another session, another device, another day. It is
-     * never a fraction of a second old. The gap being tiny is positive
-     * evidence that one device wrote both.
+     * either key. Equal is not behind, and equal is the normal case: a device
+     * that can seal both copies writes both in one pass, from one state, at
+     * one moment — which both platforms now do.
      */
     private fun behind(older: JsonElement, newer: JsonElement): Boolean {
         val a = sealedAt(older) ?: return false
         val b = sealedAt(newer) ?: return false
-        val apart = runCatching {
-            Instant.parse(b).toEpochMilli() - Instant.parse(a).toEpochMilli()
-        }.getOrElse { return a < b }
-        return apart > SAME_WRITE_WINDOW_MS
-    }
-
-    private companion object {
-        /**
-         * How far apart two copies of one write can be stamped.
-         *
-         * Not a fudge factor for clock skew — both stamps come from the same
-         * device in the same request. It is the gap between two `seal` calls,
-         * which is milliseconds, against the gap that means something, which
-         * is at minimum the interval between two separate sessions.
-         */
-        const val SAME_WRITE_WINDOW_MS = 2_000L
+        return a < b
     }
 
     private fun sealedAt(envelope: JsonElement): String? =

@@ -36,6 +36,8 @@ export function VaultList({
   items,
   status,
   backupConfigured,
+  recoveryNeedsCode,
+  onAdoptCode,
   onOpen,
   onAdd,
   onManageKeyrings,
@@ -48,6 +50,9 @@ export function VaultList({
   items: ItemRecord[];
   status: SyncStatus;
   backupConfigured: boolean;
+  /** This backup has a recovery code and this browser is not holding it. */
+  recoveryNeedsCode: boolean;
+  onAdoptCode: (code: string) => Promise<void>;
   onOpen: (itemId: string) => void;
   onAdd: () => void;
   onManageKeyrings: () => void;
@@ -321,6 +326,22 @@ export function VaultList({
         onSync={onSync}
         syncing={status.syncing}
       />
+
+      {/*
+        This browser cannot keep the recovery copy current, and nothing said so.
+        
+        It happens when a browser joins a backup somebody else's device set up:
+        it holds the passkey but not the printed code, so every save it makes
+        rewrites the passkey copy and carries the recovery copy forward
+        untouched. The other device — the one that reads through that copy —
+        falls further behind with every save, and the first sign of it is two
+        devices disagreeing about what is in the vault.
+
+        The engine has always detected this and offered `adoptRecoveryCode` to
+        end it. Nothing on any screen ever called it, which made it exactly as
+        useful as not detecting it at all.
+      */}
+      {recoveryNeedsCode && !selecting && <AdoptCode onAdopt={onAdoptCode} />}
 
       {/*
         Where you are, and the way back up.
@@ -613,6 +634,68 @@ function SelectionActions({
       <button type="button" className="btn danger" disabled={busy} onClick={onAskDelete}>
         Delete
       </button>
+    </div>
+  );
+}
+
+/**
+ * Take the code this backup is already protected by.
+ *
+ * Deliberately the same shape as the unlock screen's field, down to the note
+ * about look-alike characters, because it is the same code being read off the
+ * same piece of paper.
+ */
+function AdoptCode({ onAdopt }: { onAdopt: (code: string) => Promise<void> }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="status" data-tone="attn">
+      <AlertIcon />
+      <span>
+        <b>This browser can't keep your recovery copy up to date.</b>
+        <em>
+          Your passwords are safe here. But your backup keeps a second copy that your
+          recovery code opens — the copy your other devices may be reading — and this
+          browser can't refresh it without that code. Type it once and it will keep up on
+          its own.
+        </em>
+        {error && <em data-tone="risk">{error}</em>}
+        <label className="field">
+          <span>Your recovery code</span>
+          <div className="box">
+            <input
+              className="mono"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F-P2TM-6BKX"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </label>
+        <button
+          type="button"
+          className="btn sec"
+          disabled={busy || code.trim().length === 0}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              await onAdopt(code);
+            } catch (cause) {
+              setError(
+                cause instanceof Error ? cause.message : "That code didn't open this backup.",
+              );
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Checking…" : "Use this code"}
+        </button>
+      </span>
     </div>
   );
 }

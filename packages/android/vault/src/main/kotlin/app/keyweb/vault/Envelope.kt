@@ -148,9 +148,9 @@ fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): B
 /**
  * Seals and opens vault state under one derived key.
  *
- * Create it with [forRecoveryCode] for the printed-code path, the only key
- * material both platforms can derive: the web's other key comes from a passkey
- * PRF, which Android cannot reproduce.
+ * Create it with [forRecoveryCode] for the printed-code path, or with
+ * [forDerivedKey] for the passkey path — both platforms derive that one from
+ * the same WebAuthn PRF, through their own `KeyProvider`.
  */
 class VaultEnvelopeCipher internal constructor(
     private val key: SecretKeySpec,

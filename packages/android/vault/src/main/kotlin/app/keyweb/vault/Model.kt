@@ -132,18 +132,20 @@ fun fieldLabel(field: ItemField): String =
     field.removePrefix("secret:").removePrefix("custom:")
 
 /**
- * Fields an earlier import left under a name this one no longer uses.
+ * Fields this import is writing under a different name from the one they are
+ * already stored under.
  *
- * Re-importing the same file is meant to update what changed rather than make
- * a second copy, and it does — as long as both imports agree on what a field
- * is called. An earlier build did not: it stored *every* custom field as
- * `secret:<name>`, protected or not, so an account number arrived masked and
- * under a key today's import would never write. Left alone, re-importing shows
- * every one of those fields twice — once masked under the old key, once
- * correctly — and the person cannot tell which is which.
+ * Re-importing the same file updates what changed rather than making a second
+ * copy, and that holds as long as both imports agree on what a field is
+ * called. They do not always: a field's key follows whether KeePass marks it
+ * protected, so un-protecting a security answer moves it from `secret:Answer`
+ * to `Answer`, and the old key would otherwise sit beside the new one holding
+ * a stale value with no way for anybody to tell which is which. (An early
+ * build stored every custom field as `secret:<name>` regardless, which is how
+ * this was found.)
  *
  * So a field on the item whose label matches one this import is writing, under
- * a different key, is the same field wearing an old name, and is blanked. Only
+ * a different key, is the same field wearing another name, and is blanked. Only
  * the key dies: the value it held is kept in the item's history like any other
  * superseded write, so this is undoable rather than a deletion.
  *

@@ -15,19 +15,18 @@ import {
 import { FakeDrive, fakeAuthenticator } from "./helpers";
 
 /**
- * Can a browser open a backup that a phone made?
+ * Can a browser open a backup made by a phone with no passkey?
  *
  * Not an argument, a demonstration. `fixtures/drive-phone-only-v1.json` is
  * written by Android's real `DriveVaultRemote` — the shipping writer, not a
  * hand-built approximation — and this suite runs the browser's real restore
  * paths against those exact bytes.
  *
- * The answer is: not with a passkey, and yes with the recovery code. Which
- * makes the code the *first* visit in a browser for anybody whose vault began
- * on a phone, rather than a last resort for when something has gone wrong.
- *
- * If Android ever gains a way to write the passkey envelope, the first test
- * here fails and says so.
+ * A phone with a passkey writes both copies now, so this is no longer what an
+ * ordinary phone-made file looks like. It is what one looks like when the
+ * passkey ceremony was declined or Credential Manager had nothing to give,
+ * which stays a real state and is the one where the recovery code is the only
+ * way into that file from a browser.
  */
 
 const fixture = JSON.parse(
@@ -61,13 +60,8 @@ async function browser(drive: FakeDrive, sealed: unknown | null = null) {
 
 describe("a backup a phone made, opened in a browser", () => {
   /**
-   * The claim, at its root. Keyweb's Android app does not write a passkey
-   * envelope — it writes the recovery one and carries a browser's forward when
-   * one exists — so a vault that began on a phone has never had one.
-   *
-   * Note what this does *not* say. The platform is perfectly capable:
-   * sync-kit-android ships `AndroidPasskeyKeyProvider` and easy-bc uses it.
-   * This suite pins what Keyweb does today, not what Android permits.
+   * What the fixture is: a file written without a passkey, so it holds one
+   * copy and the printed code is the only key to it.
    */
   it("has nothing in it that a passkey could open", () => {
     const payload = JSON.parse(fixture.content) as Record<string, unknown>;

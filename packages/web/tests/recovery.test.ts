@@ -7,7 +7,7 @@ import {
   InvalidRecoveryCode,
   parseRecoveryCode,
 } from "../src/vault/recovery";
-import { GoogleDriveRemote, recoveryIsStale } from "../src/vault/drive";
+import { GoogleDriveRemote } from "../src/vault/drive";
 import { FakeDrive, fakeAuthenticator } from "./helpers";
 
 describe("recovery code", () => {
@@ -217,12 +217,14 @@ describe("a device that does not hold the recovery code", () => {
     await sync.putItem({ itemId: "new", keyringId: "ring", fields: { password: "from-device-b" } });
     await sync.sync();
 
-    // The carried-forward copy no longer holds the newest edit. Saying so is
-    // what lets the app ask for the code instead of letting it rot silently.
+    // The carried-forward copy no longer holds the newest edit, and says so in
+    // the only way a device without the key can read: its stamp is older than
+    // the copy that was rewritten. That gap is what lets the other side ask
+    // for the code instead of opening a vault that has been left behind.
     const payload = JSON.parse(drive.vaultFile()!.content) as {
-      passkey: unknown;
-      recovery?: unknown;
+      passkey: { updatedAt: string };
+      recovery: { updatedAt: string };
     };
-    expect(recoveryIsStale(payload)).toBe(true);
+    expect(payload.recovery.updatedAt < payload.passkey.updatedAt).toBe(true);
   });
 });

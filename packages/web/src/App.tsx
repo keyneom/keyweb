@@ -284,6 +284,8 @@ export function App() {
           items={vault.items}
           status={vault.status}
           backupConfigured={vault.backupConfigured}
+          recoveryNeedsCode={vault.recoveryNeedsCode}
+          onAdoptCode={vault.adoptRecoveryCode}
           onOpen={(itemId) => setRoute({ name: "detail", itemId })}
           onAdd={() => setRoute({ name: "edit", itemId: null })}
           onManageKeyrings={() => setRoute({ name: "keyrings" })}

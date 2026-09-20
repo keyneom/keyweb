@@ -90,31 +90,6 @@ describe("a browser writing both copies at once", () => {
  * was correct — but in two timestamps a millisecond apart, which no hand-built
  * approximation would ever have reproduced.
  */
-describe("a file written before the two copies were stamped together", () => {
-  it("is put right the next time this browser reads it", async () => {
-    const secret = generateRecoverySecret();
-    const drive = new FakeDrive();
-    const { sync, remote } = await browser(drive, secret);
-    await sync.putKeyring({ keyringId: "ring", name: "Household" });
-    await sync.sync();
-
-    // Put the file back the way every browser before the fix wrote it: the
-    // recovery copy stamped a moment before the passkey copy.
-    const file = drive.vaultFile()!;
-    const payload = JSON.parse(file.content);
-    const earlier = new Date(Date.parse(payload.passkey.updatedAt) - 2).toISOString();
-    payload.recovery.updatedAt = earlier;
-    file.content = JSON.stringify(payload);
-
-    // A read, with nothing to save — which is the case that would otherwise
-    // never write again, and so never heal.
-    expect(await remote.read()).not.toBeNull();
-
-    const healed = JSON.parse(drive.vaultFile()!.content);
-    expect(healed.recovery.updatedAt).toBe(healed.passkey.updatedAt);
-  });
-});
-
 describe("what a browser leaves in Drive", () => {
   it("is written out for the phone's suite to read back", async () => {
     const secret = generateRecoverySecret();

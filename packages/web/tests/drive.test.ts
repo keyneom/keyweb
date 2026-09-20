@@ -247,25 +247,6 @@ describe("a backup written by a phone", () => {
     // And the local edit is still queued rather than silently considered done.
     expect(sync.status().pending).toBeGreaterThan(0);
   });
-
-  /** The genuinely old shape still has to be read as what it is. */
-  it("still reads a bare envelope from before the wrapper existed", async () => {
-    const bare = JSON.stringify({
-      schemaVersion: 1,
-      algorithm: "AES-GCM-256",
-      compression: "gzip",
-      credentialId: "cred",
-      rpId: "localhost",
-      prfInput: "x",
-      kdfSalt: "y",
-      nonce: "z",
-      ciphertext: "sealed-long-ago",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    const drive = await driveHolding(bare);
-    const { remote } = await makeDevice(drive, "web", 1);
-    expect(await remote.fetchSealedState()).toMatchObject({ ciphertext: "sealed-long-ago" });
-  });
 });
 
 /**

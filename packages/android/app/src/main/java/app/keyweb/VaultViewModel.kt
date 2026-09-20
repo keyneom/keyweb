@@ -767,10 +767,11 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Encrypted backup ------------------------------------------------
     //
-    // Android works through the *recovery* envelope. The web app's other
-    // envelope is keyed by a WebAuthn PRF the phone cannot reproduce, so this
-    // device carries that one forward untouched and is authoritative only for
-    // the copy the printed code opens. See DriveVaultRemote.
+    // The file holds the vault sealed twice: under the passkey both platforms
+    // derive from one credential, and under the printed recovery code. This
+    // device writes both when it has the passkey, and only the recovery copy
+    // when it does not — carrying the other forward untouched. See
+    // DriveVaultRemote.
 
     /** The recovery secret, sealed by the Keystore, alongside the vault. */
     private suspend fun storedSecret(): ByteArray? {

@@ -50,15 +50,13 @@ export { KEYWEB_SCOPES } from "./googleAuth";
 type BackupPayload = {
   v: 1;
   /**
-   * Optional, because a vault created on a phone has never had one.
+   * Optional, because a device can have no passkey to seal one with.
    *
-   * Keyweb's Android app does not derive the passkey key — not because it
- * cannot (sync-kit-android ships `AndroidPasskeyKeyProvider`, and easy-bc
- * uses it) but because this app was built believing it could not —
-   * it writes the recovery envelope and carries any passkey envelope forward
-   * untouched. So a backup made entirely on a phone is `{ v, recovery }`, and
-   * code that assumes this member is present is code that has only ever been
-   * run against a backup a browser made.
+   * Both platforms derive this key now, from one passkey, so the ordinary file
+   * has both members. But a phone whose passkey ceremony was declined or is
+   * unavailable still writes `{ v, recovery }` and carries any passkey
+   * envelope forward untouched — so code that assumes this member is present
+   * is code that has only ever run against a file some browser made.
    */
   passkey?: unknown;
   recovery?: unknown;
@@ -76,17 +74,6 @@ function sealedAt(envelope: unknown): string | null {
   if (!envelope || typeof envelope !== "object") return null;
   const value = (envelope as { updatedAt?: unknown }).updatedAt;
   return typeof value === "string" ? value : null;
-}
-
-/** True when the recovery copy is older than the vault it is supposed to restore. */
-export function recoveryIsStale(payload: {
-  passkey: unknown;
-  recovery?: unknown;
-}): boolean {
-  const primary = sealedAt(payload.passkey);
-  const recovery = sealedAt(payload.recovery);
-  if (primary === null || recovery === null) return false;
-  return recovery < primary;
 }
 
 /**
@@ -114,26 +101,6 @@ export function passkeyCopyIsStale(payload: { passkey?: unknown; recovery?: unkn
   return primary < recovery;
 }
 
-/**
- * Recognising the wrapper, and the bare envelope that predates it.
- *
- * This used to decide by asking whether a `passkey` member was present, and
- * treat its absence as "this must be the old bare-envelope format". That was
- * wrong in the one case nobody had run: a vault created on a phone. Android
- * does not derive the passkey key, so it writes `{ v, recovery }` with no
- * passkey member at all — and the old test read that whole wrapper as if it
- * *were* a bare envelope. Two things followed, both silent:
- *
- *  - restoring in a browser handed the wrapper to the envelope parser, which
- *    rejected it as "not a supported v1 encrypted snapshot" — an error about
- *    file versions for what is really "this backup has no browser key yet";
- *  - and `#carriedRecovery` read `.recovery` off that mis-parse, got
- *    `undefined`, and wrote the backup back *without* the recovery envelope —
- *    deleting the only thing the phone can open.
- *
- * So the bare form is now recognised by what it actually is, an envelope, and
- * a wrapper is a wrapper even when the member this browser wants is missing.
- */
 /**
  * The backup is real and this browser has no key for it.
  *
@@ -201,23 +168,9 @@ async function opens(cipher: VaultCipher, envelope: unknown): Promise<boolean> {
 function parsePayload(content: string): BackupPayload | null {
   const parsed = JSON.parse(content) as BackupPayload | Record<string, unknown>;
   if (!parsed || typeof parsed !== "object") return null;
-  if (looksLikeEnvelope(parsed)) {
-    // A backup written before the recovery copy existed is a bare envelope.
-    return { v: 1, passkey: parsed };
-  }
   return parsed as BackupPayload;
 }
 
-/**
- * Enough of an envelope to tell it from the wrapper that holds two of them.
- *
- * Deliberately not a full validation: the question here is only "which of the
- * two shapes is this", and the real parser rejects a malformed envelope with a
- * better message than anything this function could invent.
- */
-function looksLikeEnvelope(value: object): boolean {
-  return (value as { schemaVersion?: unknown }).schemaVersion === 1;
-}
 
 /**
  * What is in a Google account, as far as can be told without a key.
@@ -574,15 +527,10 @@ export class GoogleDriveRemote implements RemoteVaultStore {
        * so the answer stops being an error and becomes the newer data. That is
        * what makes "enter your code" a fix rather than an acknowledgement.
        */
-      const openable: {
-        at: string | null;
-        isPasskeyCopy: boolean;
-        open: () => Promise<VaultState>;
-      }[] = [];
+      const openable: { at: string | null; open: () => Promise<VaultState> }[] = [];
       if (payload.passkey !== undefined) {
         openable.push({
           at: sealedAt(payload.passkey),
-          isPasskeyCopy: true,
           open: () => this.#cipher.openState(payload.passkey),
         });
       }
@@ -590,7 +538,6 @@ export class GoogleDriveRemote implements RemoteVaultStore {
         const recoveryCipher = this.#recoveryCipher;
         openable.push({
           at: sealedAt(payload.recovery),
-          isPasskeyCopy: false,
           open: () => recoveryCipher.openState(payload.recovery),
         });
       }
@@ -599,51 +546,11 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       openable.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
 
       for (const candidate of openable) {
-        let state: VaultState;
         try {
-          state = await candidate.open();
+          return { state: await candidate.open(), version };
         } catch {
           // Try the next one. A key that does not fit this copy is ordinary.
-          continue;
         }
-
-        /*
-         * Bring two copies that disagree about their time back into line.
-         *
-         * Every file written by a browser before the fix carries stamps a
-         * millisecond or two apart, and a phone reads that gap as this browser
-         * having moved on without it — so it refuses the copy it could have
-         * opened and offers to replace the backup. Writing them together from
-         * now on does not help any of those files, because a browser with
-         * nothing to save never writes again: somebody whose vault is simply
-         * *correct* would stay locked out of it on their phone forever.
-         *
-         * So it is repaired on read, on a file already in hand, the way the
-         * phone repairs an envelope written before it carried its own version.
-         * Only from the passkey copy, and only when this browser can rewrite
-         * the recovery copy as well: that is the one case where what is held
-         * here is known to be the newest and both copies can be made to say
-         * so. Anything less and this would be guessing with somebody's
-         * passwords.
-         */
-        const both = payload.passkey !== undefined && payload.recovery !== undefined;
-        const disagree = sealedAt(payload.passkey) !== sealedAt(payload.recovery);
-        const mine = this.#recoveryCipher;
-        if (
-          candidate.isPasskeyCopy &&
-          both &&
-          disagree &&
-          mine !== null &&
-          (await opens(mine, payload.recovery))
-        ) {
-          try {
-            return { state, version: await this.write(state, version) };
-          } catch {
-            // A repair is a courtesy. Failing it must not fail the read.
-          }
-        }
-
-        return { state, version };
       }
 
       // Nothing opened. Which message depends on whether the thing this
