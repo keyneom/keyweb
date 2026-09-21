@@ -122,6 +122,21 @@ type JoinedDataset = { datasetId: string; label: string; role: ShareRole };
  */
 export type ReadOnlyKeyrings = ReadonlySet<string>;
 
+/**
+ * The invitation an exchange id belongs to, whichever keyring's row holds it.
+ *
+ * Outstanding invitations are stored per keyring, because a person looking at
+ * one keyring wants to see what is outstanding on *it* — but an exchange is
+ * one conversation with one person, and any row of it carries the invitation
+ * a reply has to be matched against.
+ */
+function inviteFor(
+  pending: Record<string, PendingInvite>,
+  exchangeId: string,
+): PendingInvite | undefined {
+  return Object.values(pending).find((invite) => invite.invitation.exchangeId === exchangeId);
+}
+
 export class KeywebSharing {
   readonly #sync: VaultSync;
   readonly #controller: SharingController;
@@ -164,35 +179,68 @@ export class KeywebSharing {
     email: string;
     role: ShareRole;
   }): Promise<{ link: string; exchangeId: string }> {
+    return this.shareKeyrings({ ...input, keyringIds: [input.keyringId] });
+  }
+
+  /**
+   * Invite somebody to several keyrings at once, on one link.
+   *
+   * One invitation carrying several grants, which is what the format has
+   * always described — `requestedGrants` and `files` are both lists, and the
+   * joining side already loops over them. Sharing three keyrings meant sending
+   * three links, each with its own exchange to accept and its own reply to
+   * paste back, for what is one decision about one person.
+   */
+  async shareKeyrings(input: {
+    keyringIds: string[];
+    email: string;
+    role: ShareRole;
+  }): Promise<{ link: string; exchangeId: string }> {
+    if (input.keyringIds.length === 0) throw new Error("Pick a keyring to share.");
+
     // Before anything else and before any browser hand-off.
     await this.#identity.getOrCreate();
 
     const state = await this.#sync.state();
-    const keyring = state.keyrings[input.keyringId];
-    if (!keyring || keyring.deleted.value) throw new Error("That keyring doesn't exist.");
-    const label = keyring.name.value;
+    const labels = input.keyringIds.map((keyringId) => {
+      const keyring = state.keyrings[keyringId];
+      if (!keyring || keyring.deleted.value) throw new Error("That keyring doesn't exist.");
+      return keyring.name.value;
+    });
 
-    const datasetId = await this.#ensureDataset(input.keyringId);
+    const grants: { datasetId: string; role: ShareRole }[] = [];
+    for (const keyringId of input.keyringIds) {
+      grants.push({ datasetId: await this.#ensureDataset(keyringId), role: input.role });
+    }
 
     const invited = await this.#controller.inviteParticipantForLink({
       emailAddress: input.email,
-      requestedGrants: [{ datasetId, role: input.role }],
+      requestedGrants: grants,
     });
 
-    await this.#rememberInvite({
-      invitation: invited.invitation,
-      email: input.email,
-      keyringId: input.keyringId,
-      label,
-      createdAt: new Date().toISOString(),
-    });
+    const createdAt = new Date().toISOString();
+    for (const [index, keyringId] of input.keyringIds.entries()) {
+      await this.#rememberInvite({
+        invitation: invited.invitation,
+        email: input.email,
+        keyringId,
+        label: labels[index]!,
+        createdAt,
+      });
+    }
 
+    /*
+     * The label says what the invitation is about before anything is joined —
+     * one name for one keyring, a count for several, because naming one of
+     * three would misdescribe the other two. Display only: each keyring takes
+     * its real name from its own signed document once it is adopted.
+     */
     return {
       link: buildJoinLink({
         invitation: invited.invitation,
         files: invited.files,
         ownerEmail: null,
-        label,
+        label: labels.length === 1 ? labels[0]! : `${labels.length} keyrings`,
       }),
       exchangeId: invited.invitation.exchangeId,
     };
@@ -288,7 +336,7 @@ export class KeywebSharing {
     keyId: string;
     fingerprint: string;
   }> {
-    const invite = (await this.#pending())[response.exchangeId];
+    const invite = inviteFor(await this.#pending(), response.exchangeId);
     if (!invite) {
       throw new Error(
         "That reply doesn't match an invitation from this device. Ask them to use the newest link you sent.",
@@ -319,7 +367,7 @@ export class KeywebSharing {
     await this.#identity.getOrCreate();
 
     const pending = await this.#pending();
-    const invite = pending[response.exchangeId];
+    const invite = inviteFor(pending, response.exchangeId);
     if (!invite) {
       throw new Error(
         "That reply doesn't match an invitation from this device. Ask them to use the newest link you sent.",
@@ -339,7 +387,11 @@ export class KeywebSharing {
     }
 
     await this.#rememberMemberEmail(response.keyId, invite.email);
-    delete pending[response.exchangeId];
+    // The whole invitation is finished, not one keyring's row of it: the
+    // reply carries the key for every file the exchange covered.
+    for (const [key, entry] of Object.entries(pending)) {
+      if (entry.invitation.exchangeId === response.exchangeId) delete pending[key];
+    }
     await this.#store.writeMeta(PENDING_KEY, pending);
 
     return {
@@ -552,7 +604,11 @@ export class KeywebSharing {
   /** Give up on an invitation. The link stops being accepted from then on. */
   async cancelInvite(exchangeId: string): Promise<void> {
     const pending = await this.#pending();
-    delete pending[exchangeId];
+    for (const [key, invite] of Object.entries(pending)) {
+      // Every keyring the invitation covered, not just the row that was
+      // tapped: one link, one exchange, one thing to give up on.
+      if (invite.invitation.exchangeId === exchangeId) delete pending[key];
+    }
     await this.#store.writeMeta(PENDING_KEY, pending);
   }
 
@@ -563,9 +619,18 @@ export class KeywebSharing {
     return (stored as Record<string, PendingInvite> | undefined) ?? {};
   }
 
+  /**
+   * Keyed by the exchange *and* the keyring it is about.
+   *
+   * One invitation can cover several keyrings, and they all share its exchange
+   * id — so keying on that alone meant each keyring's record overwrote the
+   * last, and only the final one had anything outstanding to show or cancel.
+   * Cancelling still works on the exchange, because that is the thing the
+   * other person holds a link to: giving up on it gives up on all of it.
+   */
   async #rememberInvite(invite: PendingInvite): Promise<void> {
     const pending = await this.#pending();
-    pending[invite.invitation.exchangeId] = invite;
+    pending[`${invite.invitation.exchangeId}:${invite.keyringId}`] = invite;
     await this.#store.writeMeta(PENDING_KEY, pending);
   }
 

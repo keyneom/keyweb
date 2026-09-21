@@ -7,6 +7,7 @@ import { Grant } from "./screens/Grant";
 import { AcceptShare } from "./screens/AcceptShare";
 import { JoinShare } from "./screens/JoinShare";
 import { ShareKeyring } from "./screens/ShareKeyring";
+import { ShareMany } from "./screens/ShareMany";
 import {
   parseJoinLink,
   parseOwnershipLink,
@@ -43,6 +44,8 @@ export function App() {
   const display = useDisplaySettings();
   const generator = useGeneratorRules();
   const [route, setRoute] = useState<Route>({ name: "list" });
+  /** Keyrings picked to share together, while that is being arranged. */
+  const [sharingMany, setSharingMany] = useState<string[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   /**
    * A file being looked at, by the id of the item holding its bytes.
@@ -407,12 +410,40 @@ export function App() {
           />
         )}
 
+      {/*
+        Over the keyrings rather than instead of them: what is behind the sheet
+        is the list of what is being shared, which is what somebody wants in
+        view while they decide who to send it to.
+      */}
+      {sharingMany !== null && vault.sharing && (
+        <ShareMany
+          names={sharingMany.map(
+            (id) => vault.state.keyrings[id]?.name.value ?? "A keyring",
+          )}
+          onInvite={async (email, role) => {
+            const sharing = vault.sharing!;
+            const { link } = await sharing.shareKeyrings({
+              keyringIds: sharingMany,
+              email,
+              role,
+            });
+            return link;
+          }}
+          onCopy={async (link) => {
+            await navigator.clipboard.writeText(link);
+            setToast("The link is on your clipboard. Send it to them.");
+          }}
+          onClose={() => setSharingMany(null)}
+        />
+      )}
+
       {route.name === "keyrings" && (
         <Keyrings
           state={vault.state}
           items={vault.items}
           canShare={vault.sharing !== null}
           onShare={(keyringId) => setRoute({ name: "share", keyringId })}
+          onShareMany={setSharingMany}
           onBack={() => setRoute({ name: "list" })}
           onAdd={async (name) => {
             await vault.addKeyring(name);

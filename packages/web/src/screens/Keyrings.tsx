@@ -20,6 +20,7 @@ export function Keyrings({
   onDelete,
   canShare,
   onShare,
+  onShareMany,
 }: {
   state: VaultState;
   items: ItemRecord[];
@@ -29,11 +30,21 @@ export function Keyrings({
   /** False when this build has no Google account and so no way to share. */
   canShare: boolean;
   onShare: (keyringId: string) => void;
+  /** Invite somebody to everything ticked, on one link. */
+  onShareMany: (keyringIds: string[]) => void;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   /** The keyring being deleted, held until the count has been acknowledged. */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /*
+   * Keyrings ticked to share together.
+   *
+   * A checkbox rather than the list screen's hold-to-select, because this is a
+   * page of rows with buttons on them where holding means nothing, and because
+   * on a computer there is nothing to hold.
+   */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [sort, setSort] = useRememberedSort<KeyringSort>("keyring-sort", "name-az");
   const counts: Record<string, number> = {};
   for (const item of items) counts[item.keyring.value] = (counts[item.keyring.value] ?? 0) + 1;
@@ -99,6 +110,22 @@ export function Keyrings({
                   {count} password{count === 1 ? "" : "s"} · {shared ? "shared" : "only you"}
                 </span>
               </span>
+              {canShare && rings.length > 1 && (
+                <input
+                  type="checkbox"
+                  checked={picked.has(r.id)}
+                  onChange={(event) => {
+                    setPicked((current) => {
+                      const next = new Set(current);
+                      if (event.target.checked) next.add(r.id);
+                      else next.delete(r.id);
+                      return next;
+                    });
+                  }}
+                  aria-label={`Include ${r.name.value} when sharing several`}
+                  style={{ width: "1.25rem", height: "1.25rem" }}
+                />
+              )}
               {canShare && (
                 <button
                   type="button"
@@ -131,6 +158,29 @@ export function Keyrings({
           );
         })}
       </div>
+
+      {picked.size > 0 && (
+        <p className="status" data-tone="calm">
+          <span>
+            <b>
+              {picked.size} keyring{picked.size === 1 ? "" : "s"} selected
+            </b>
+            <em>One invitation, one link, and one reply to open — however many you pick.</em>
+            <span style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="btn pri"
+                onClick={() => onShareMany([...picked])}
+              >
+                Share {picked.size === 1 ? "it" : `these ${picked.size}`}
+              </button>
+              <button type="button" className="btn sec" onClick={() => setPicked(new Set())}>
+                Clear
+              </button>
+            </span>
+          </span>
+        </p>
+      )}
 
       {confirming !== null && (
         <div className="confirm">

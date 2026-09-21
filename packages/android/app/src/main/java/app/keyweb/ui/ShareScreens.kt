@@ -577,3 +577,112 @@ fun describeRole(role: SharingRole): String = when (role) {
     SharingRole.WRITER -> "Can add and change"
     else -> "Can look, can't change"
 }
+
+/**
+ * Inviting one person to several keyrings, on one link.
+ *
+ * A sheet rather than a screen, because there is one question here — who, and
+ * what may they do — and the answer produces one thing to send. Everything
+ * else about a keyring (who is on it, what is outstanding, handing it over)
+ * belongs to that keyring's own screen and stays there.
+ *
+ * The roles come from the same list the single-keyring form uses, so a role
+ * cannot exist in one place and be missing from the other. One role covers
+ * every keyring in the invitation: two people's worth of different answers on
+ * one link is a second question, and nobody has asked for it.
+ */
+@Composable
+fun MultiShareSheet(
+    names: List<String>,
+    busy: Boolean,
+    link: String?,
+    error: String?,
+    onInvite: (String, SharingRole) -> Unit,
+    onCopy: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalKeywebStatus.current
+    var email by remember { mutableStateOf("") }
+    var role by remember { mutableStateOf(SharingRole.VIEWER) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (names.size == 1) {
+                    "Share ${names.first()}"
+                } else {
+                    "Share ${names.size} keyrings"
+                },
+            )
+        },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    names.joinToString(", "),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                Text(
+                    "They see every password in " +
+                        (if (names.size == 1) "it" else "these") +
+                        ", and any you add later. One link covers all of them.",
+                    color = colors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+
+                error?.let {
+                    Text(
+                        it,
+                        color = colors.risk,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                }
+
+                if (link != null) {
+                    Text("Send them this link", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "They open it, choose each keyring in Google's file chooser, and send " +
+                            "you a reply link back. Google grants one file at a time, so there " +
+                            "will be one chooser per keyring — but only one reply to open.",
+                        color = colors.muted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    PrimaryButton("Copy the link", { onCopy(link) })
+                } else {
+                    EditField("Share with", email, { email = it }, "their.name@gmail.com")
+                    Text(
+                        "It has to be the Google account they use, because that is how Google " +
+                            "lets them at the files.",
+                        color = colors.muted,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                    SHARE_ROLES.forEach { choice ->
+                        RoleChoice(choice.label, choice.detail, selected = role == choice.role) {
+                            role = choice.role
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (link == null) {
+                TextButton(
+                    onClick = { onInvite(email.trim(), role) },
+                    enabled = email.isNotBlank() && !busy,
+                ) {
+                    Text(if (busy) "Getting it ready…" else "Make a link")
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Done") }
+            }
+        },
+        dismissButton = {
+            if (link == null) TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}

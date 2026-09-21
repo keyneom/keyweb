@@ -111,30 +111,70 @@ class KeywebSharing(
         keyringId: String,
         email: String,
         role: SharingRole,
+    ): String = shareKeyrings(listOf(keyringId), email, role)
+
+    /**
+     * Invite somebody to several keyrings at once, on one link.
+     *
+     * One invitation carrying several grants, which is what the format has
+     * always described — `requestedGrants` and `files` are lists, and the
+     * joining side already loops over them. Sharing three keyrings meant
+     * sending three links, each with its own exchange to accept and its own
+     * reply to paste back, for what is one decision about one person.
+     *
+     * Each keyring keeps its own pending invite, so the screen for any one of
+     * them shows the invitation that is outstanding on it and can cancel it
+     * without touching the others.
+     */
+    suspend fun shareKeyrings(
+        keyringIds: List<String>,
+        email: String,
+        role: SharingRole,
     ): String {
+        require(keyringIds.isNotEmpty()) { "Pick a keyring to share." }
+
         // Before anything else and before any browser hand-off.
         identity.getOrCreate()
 
-        val keyring = sync.state().keyrings[keyringId]
-        require(keyring != null && !keyring.deleted.value) { "That keyring doesn't exist." }
-        val label = keyring.name.value
+        val state = sync.state()
+        val labels = keyringIds.map { keyringId ->
+            val keyring = state.keyrings[keyringId]
+            require(keyring != null && !keyring.deleted.value) { "That keyring doesn't exist." }
+            keyring.name.value
+        }
 
-        val datasetId = ensureDataset(keyringId)
+        val grants = keyringIds.map { SharingDatasetGrantV1(ensureDataset(it), role) }
         val invited = controller.inviteParticipantForLink(
             emailAddress = email,
-            requestedGrants = listOf(SharingDatasetGrantV1(datasetId, role)),
+            requestedGrants = grants,
         )
 
-        rememberInvite(
-            PendingInvite(
-                invitation = invited.invitation,
-                email = email,
-                keyringId = keyringId,
-                label = label,
-                createdAt = java.time.Instant.now().toString(),
-            ),
-        )
+        val now = java.time.Instant.now().toString()
+        keyringIds.forEachIndexed { index, keyringId ->
+            rememberInvite(
+                PendingInvite(
+                    invitation = invited.invitation,
+                    email = email,
+                    keyringId = keyringId,
+                    label = labels[index],
+                    createdAt = now,
+                ),
+            )
+        }
 
+        /*
+         * The label is what the invitation says it is *about*, before anything
+         * is joined — one name when there is one keyring, a count when there
+         * are several, because naming one of three would misdescribe the other
+         * two. It is display only: each keyring takes its real name from its
+         * own document once it is adopted, which is signed and cannot be
+         * renamed by a link.
+         */
+        val label = if (labels.size == 1) {
+            labels.first()
+        } else {
+            "${labels.size} keyrings"
+        }
         return ShareLinks.buildJoin(invited.invitation, invited.files, label)
     }
 
@@ -214,7 +254,7 @@ class KeywebSharing(
      * content key is already wrapped to whoever presented it.
      */
     suspend fun previewResponse(response: SharingPublicKeyResponseV1): AcceptedShare {
-        val invite = pending()[response.exchangeId]
+        val invite = pending().inviteFor(response.exchangeId)
             ?: error(
                 "That reply doesn't match an invitation from this device. " +
                     "Ask them to use the newest link you sent.",
@@ -239,7 +279,7 @@ class KeywebSharing(
         identity.getOrCreate()
 
         val pending = pending().toMutableMap()
-        val invite = pending[response.exchangeId]
+        val invite = pending.inviteFor(response.exchangeId)
             ?: error(
                 "That reply doesn't match an invitation from this device. " +
                     "Ask them to use the newest link you sent.",
@@ -256,7 +296,10 @@ class KeywebSharing(
         }
 
         rememberMemberEmail(response.keyId, invite.email)
-        pending.remove(response.exchangeId)
+        // The whole invitation is finished, not one keyring's row of it: the
+        // reply carries the key for every file the exchange covered.
+        pending.keys.filter { pending[it]?.invitation?.exchangeId == response.exchangeId }
+            .forEach { pending.remove(it) }
         writeMeta(PENDING_KEY, json.encodeToString(PendingInvites, pending))
 
         return AcceptedShare(
@@ -456,8 +499,9 @@ class KeywebSharing(
 
     /** Give up on an invitation. The link stops being accepted from then on. */
     suspend fun cancelInvite(exchangeId: String) {
-        val pending = pending().toMutableMap()
-        pending.remove(exchangeId)
+        // Every keyring the invitation covered, not just the row that was
+        // tapped: one link, one exchange, one thing to give up on.
+        val pending = pending().filterValues { it.invitation.exchangeId != exchangeId }
         writeMeta(PENDING_KEY, json.encodeToString(PendingInvites, pending))
     }
 
@@ -468,9 +512,28 @@ class KeywebSharing(
             runCatching { json.decodeFromString(PendingInvites, it) }.getOrNull()
         } ?: emptyMap()
 
+    /**
+     * Keyed by the exchange *and* the keyring it is about.
+     *
+     * One invitation can cover several keyrings, and they all share its
+     * exchange id — so keying on that alone meant each keyring's record
+     * overwrote the last, and only the final one had anything outstanding to
+     * show or cancel.
+     */
+    /**
+     * The invitation an exchange id belongs to, whichever keyring's row holds it.
+     *
+     * Outstanding invitations are stored per keyring, because somebody looking
+     * at one keyring wants to see what is outstanding on *it* — but an exchange
+     * is one conversation with one person, and any row of it carries the
+     * invitation a reply has to be matched against.
+     */
+    private fun Map<String, PendingInvite>.inviteFor(exchangeId: String): PendingInvite? =
+        values.firstOrNull { it.invitation.exchangeId == exchangeId }
+
     private suspend fun rememberInvite(invite: PendingInvite) {
         val pending = pending().toMutableMap()
-        pending[invite.invitation.exchangeId] = invite
+        pending["${invite.invitation.exchangeId}:${invite.keyringId}"] = invite
         writeMeta(PENDING_KEY, json.encodeToString(PendingInvites, pending))
     }
 

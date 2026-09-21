@@ -1335,6 +1335,8 @@ fun KeyringsScreen(
     /** False when this build has no Google account and so cannot share at all. */
     canShare: Boolean = false,
     onShare: (String) -> Unit = {},
+    /** Invite somebody to everything that is selected, on one link. */
+    onShareMany: (List<String>) -> Unit = {},
     onPasteLink: (String) -> Unit = {},
     /** The ordering last chosen, remembered across launches. */
     savedSort: String = KeyringSort.NAME_AZ.id,
@@ -1342,6 +1344,16 @@ fun KeyringsScreen(
 ) {
     var pastedLink by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    /*
+     * Keyrings picked to share together.
+     *
+     * Entered by holding a row, the same gesture that selects passwords in the
+     * list, because it is the same idea: the thing being selected is the thing
+     * already under your finger. Null is not selecting at all, which differs
+     * from selecting nothing — an empty selection keeps the bar on screen so
+     * unticking the last row does not throw you out mid-task.
+     */
+    var selected by remember { mutableStateOf<Set<String>?>(null) }
     var sort by rememberSaveable { mutableStateOf(savedSort) }
     /** The keyring being deleted, held until the count has been acknowledged. */
     var confirming by remember { mutableStateOf<String?>(null) }
@@ -1389,6 +1401,8 @@ fun KeyringsScreen(
                         // can know without asking Drive, so it says the part it
                         // is sure of and the sharing screen says the rest.
                         val shared = datasetOf(r) != null
+                        val selecting = selected != null
+                        val ticked = selected?.contains(r.id) == true
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.weight(1f)) {
                                 VaultRow(
@@ -1396,26 +1410,60 @@ fun KeyringsScreen(
                                     title = r.name.value,
                                     subtitle = "$count password${if (count == 1) "" else "s"} · " +
                                         if (shared) "shared" else "only you",
-                                    onClick = {},
+                                    onClick = {
+                                        if (selecting) {
+                                            selected = selected.orEmpty().let { current ->
+                                                if (ticked) current - r.id else current + r.id
+                                            }
+                                        }
+                                    },
+                                    onLongClick = if (canShare && rings.size > 1) {
+                                        { selected = setOf(r.id) }
+                                    } else {
+                                        null
+                                    },
+                                    selected = if (selecting) ticked else null,
                                     accent = ringColor(state, r.id),
                                 )
                             }
-                            if (canShare) {
-                                TextButton(onClick = { onShare(r.id) }) {
-                                    Text(if (shared) "Sharing" else "Share")
+                            if (!selecting) {
+                                if (canShare) {
+                                    TextButton(onClick = { onShare(r.id) }) {
+                                        Text(if (shared) "Sharing" else "Share")
+                                    }
                                 }
-                            }
-                            // Never the last one: every password lives in a
-                            // keyring, so a vault with none has nowhere to put
-                            // the next one.
-                            if (rings.size > 1) {
-                                TextButton(onClick = { confirming = r.id }) {
-                                    Text("Delete", color = statusColors.risk)
+                                // Never the last one: every password lives in a
+                                // keyring, so a vault with none has nowhere to
+                                // put the next one.
+                                if (rings.size > 1) {
+                                    TextButton(onClick = { confirming = r.id }) {
+                                        Text("Delete", color = statusColors.risk)
+                                    }
                                 }
                             }
                         }
                         HorizontalDivider(color = statusColors.line)
                     }
+                }
+            }
+
+            selected?.let { chosen ->
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    TextButton(onClick = { selected = null }) { Text("Done") }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${chosen.size} selected",
+                        color = statusColors.muted,
+                    )
+                    PrimaryButton(
+                        text = if (chosen.size == 1) "Share it" else "Share these ${chosen.size}",
+                        onClick = { onShareMany(chosen.toList()) },
+                        enabled = chosen.isNotEmpty(),
+                    )
                 }
             }
 

@@ -48,6 +48,7 @@ import app.keyweb.vault.ItemSort
 import app.keyweb.vault.KeyringSort
 import app.keyweb.ui.ItemEditScreen
 import app.keyweb.ui.AcceptShareScreen
+import app.keyweb.ui.MultiShareSheet
 import app.keyweb.ui.FileViewerScreen
 import app.keyweb.vault.field
 import app.keyweb.ui.JoinShareScreen
@@ -382,6 +383,23 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     return@Box
                 }
 
+                /*
+                 * Over the screen rather than in place of it: the keyrings are
+                 * behind it, which is what somebody wants to see while they
+                 * decide who to send them to.
+                 */
+                ui.multiShare?.let { pending ->
+                    MultiShareSheet(
+                        names = pending.names,
+                        busy = pending.busy,
+                        link = pending.link,
+                        error = pending.error,
+                        onInvite = viewModel::submitMultiShare,
+                        onCopy = { copy(it, "The link") },
+                        onDismiss = viewModel::cancelMultiShare,
+                    )
+                }
+
                 when (val current = route) {
                     is Route.List -> VaultListScreen(
                         state = ui.vault,
@@ -514,6 +532,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             prefs.edit().putString("keyring-sort", it).apply()
                         },
                         canShare = viewModel.canShare,
+                        onShareMany = viewModel::beginMultiShare,
                         onShare = {
                             viewModel.openSharing(it)
                             route = Route.Share(it)

@@ -134,15 +134,21 @@ class FakeController {
     emailAddress: string;
     requestedGrants: { datasetId: string; role: string }[];
   }) {
-    const grant = input.requestedGrants[0]!;
-    this.invites.push({ emailAddress: input.emailAddress, ...grant });
+    // One file per grant, as the real controller returns: an invitation to
+    // three keyrings names three files, and a fake that answered with only the
+    // first would have let a broken multi-keyring share pass.
+    for (const grant of input.requestedGrants) {
+      this.invites.push({ emailAddress: input.emailAddress, ...grant });
+    }
     const invitation = await anInvitation({
       exchangeId: `exchange-${this.invites.length}`,
       grants: input.requestedGrants,
     });
-    const files: SharingDatasetFileV1[] = [
-      { datasetId: grant.datasetId, fileId: `file-${grant.datasetId}`, role: grant.role as never },
-    ];
+    const files: SharingDatasetFileV1[] = input.requestedGrants.map((grant) => ({
+      datasetId: grant.datasetId,
+      fileId: `file-${grant.datasetId}`,
+      role: grant.role as never,
+    }));
     return { invitation, files };
   }
 
@@ -207,6 +213,73 @@ async function withHousehold() {
   await parts.sync.putItem({ itemId: "bank", keyringId: "personal", fields: { title: "Bank" } });
   return parts;
 }
+
+/**
+ * Several keyrings, one invitation.
+ *
+ * The format has always described this — `requestedGrants` and `files` are
+ * lists, and the joining side loops over them — but the app only ever sent
+ * one grant, so sharing three keyrings with one person meant three links,
+ * three exchanges to accept and three replies to paste back, for what is one
+ * decision about one person.
+ */
+describe("sharing several keyrings at once", () => {
+  it("puts every one of them on a single link", async () => {
+    const { sync, controller, sharing } = await withHousehold();
+    const { link } = await sharing.shareKeyrings({
+      keyringIds: ["house", "personal"],
+      email: "rachel@example.com",
+      role: "writer",
+    });
+
+    const state = await sync.state();
+    const houseDataset = datasetOf(state.keyrings["house"]);
+    const personalDataset = datasetOf(state.keyrings["personal"]);
+    expect(houseDataset).toBeTruthy();
+    expect(personalDataset).toBeTruthy();
+    // Each keyring in its own file, as when shared one at a time.
+    expect([...controller.created].sort()).toEqual(
+      [houseDataset, personalDataset].sort(),
+    );
+
+    const parsed = parseJoinLink(new URL(link).searchParams);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.files.map((file) => file.datasetId).sort()).toEqual(
+      [houseDataset, personalDataset].sort(),
+    );
+    // One exchange, so the person joining replies once.
+    expect(parsed!.invitation.requestedGrants).toHaveLength(2);
+  });
+
+  it("is outstanding on each keyring, so either can be cancelled alone", async () => {
+    const { sharing } = await withHousehold();
+    await sharing.shareKeyrings({
+      keyringIds: ["house", "personal"],
+      email: "rachel@example.com",
+      role: "viewer",
+    });
+
+    const house = await sharing.pendingInvites("house");
+    const personal = await sharing.pendingInvites("personal");
+    expect(house).toHaveLength(1);
+    expect(personal).toHaveLength(1);
+    expect(house[0]!.label).toBe("Household");
+    expect(personal[0]!.label).toBe("Just mine");
+  });
+
+  it("refuses a keyring that is not there rather than sharing the rest", async () => {
+    const { sharing, controller } = await withHousehold();
+    await expect(
+      sharing.shareKeyrings({
+        keyringIds: ["house", "ghost"],
+        email: "a@example.com",
+        role: "viewer",
+      }),
+    ).rejects.toThrow();
+    // And nothing was moved into a file on the way to finding that out.
+    expect(controller.created).toEqual([]);
+  });
+});
 
 describe("sharing a keyring", () => {
   it("moves it into its own file and makes a link", async () => {

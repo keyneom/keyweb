@@ -247,6 +247,8 @@ data class VaultUiState(
     /** What the generator opens with: whatever was used last. */
     val lastRules: PasswordRules = PasswordRules(),
     val share: ShareUiState = ShareUiState(),
+    /** Inviting somebody to several keyrings at once. Null when not doing that. */
+    val multiShare: MultiShareUiState? = null,
     /** This person's own sharing key, once they have asked to see it. */
     val sharingKey: String? = null,
     /**
@@ -271,6 +273,23 @@ data class VaultUiState(
 )
 
 /** Where a share flow has got to, from either end of it. */
+/**
+ * One invitation covering several keyrings.
+ *
+ * Held apart from [ShareUiState], which is about one keyring and everything
+ * known about it — members, who owns it, what is outstanding. This is a single
+ * question asked once ("who, and what may they do") and a link to send, and
+ * folding it into the other would make every screen that reads a keyring's
+ * members have an opinion about which keyrings are selected.
+ */
+data class MultiShareUiState(
+    val keyringIds: List<String>,
+    val names: List<String>,
+    val busy: Boolean = false,
+    val link: String? = null,
+    val error: String? = null,
+)
+
 enum class ShareStage {
     /** Nothing in progress; the sharing screens show what already is. */
     IDLE,
@@ -1430,6 +1449,49 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 setShare { it.copy(link = link) }
             } catch (cause: Exception) {
                 setShare { it.copy(busy = false, error = describeShare(cause)) }
+            }
+        }
+    }
+
+    /** Ask who to invite to the keyrings that are selected. */
+    fun beginMultiShare(keyringIds: List<String>) {
+        val state = _state.value.vault
+        val chosen = keyringIds.filter { id ->
+            state.keyrings[id]?.takeIf { !it.deleted.value } != null
+        }
+        if (chosen.isEmpty()) return
+        _state.value = _state.value.copy(
+            multiShare = MultiShareUiState(
+                keyringIds = chosen,
+                names = chosen.mapNotNull { state.keyrings[it]?.name?.value },
+            ),
+        )
+    }
+
+    fun cancelMultiShare() {
+        _state.value = _state.value.copy(multiShare = null)
+    }
+
+    /** One invitation, one link, every keyring that was selected. */
+    fun submitMultiShare(email: String, role: SharingRole) {
+        val pending = _state.value.multiShare ?: return
+        val engine = sharing ?: return
+        _state.value = _state.value.copy(
+            multiShare = pending.copy(busy = true, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val link = engine.shareKeyrings(pending.keyringIds, email, role)
+                _state.value = _state.value.copy(
+                    multiShare = pending.copy(busy = false, link = link),
+                )
+            } catch (cause: GoogleAuthorizer.ConsentRequired) {
+                _state.value = _state.value.copy(multiShare = pending.copy(busy = false))
+                needsConsent(cause.intentSender) { submitMultiShare(email, role) }
+            } catch (cause: Exception) {
+                _state.value = _state.value.copy(
+                    multiShare = pending.copy(busy = false, error = describeShare(cause)),
+                )
             }
         }
     }

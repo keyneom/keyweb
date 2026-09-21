@@ -182,6 +182,12 @@ export type SharingApi = {
     email: string;
     role: ShareRole;
   }): Promise<{ link: string; exchangeId: string }>;
+  /** One invitation, one link, every keyring named. */
+  shareKeyrings(input: {
+    keyringIds: string[];
+    email: string;
+    role: ShareRole;
+  }): Promise<{ link: string; exchangeId: string }>;
   joinFromLink(input: {
     invitation: SharingInvitationV1;
     files: SharingDatasetFileV1[];
@@ -1110,6 +1116,11 @@ function sharingApi(
     myFingerprint: () => engine.myFingerprint(),
     async shareKeyring(input) {
       const result = await engine.shareKeyring(input);
+      await refresh();
+      return result;
+    },
+    async shareKeyrings(input) {
+      const result = await engine.shareKeyrings(input);
       await refresh();
       return result;
     },
