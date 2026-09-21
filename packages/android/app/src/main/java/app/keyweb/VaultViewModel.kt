@@ -19,6 +19,7 @@ import app.keyweb.data.VaultUnlock
 import app.keyweb.data.GrantBrowser
 import app.keyweb.data.needsAuthentication
 import app.keyweb.sharing.AcceptedShare
+import app.keyweb.sharing.KEYWEB_LANDING_URL
 import app.keyweb.sharing.KeywebSharing
 import app.keyweb.sharing.KeywebSharingIdentity
 import app.keyweb.sharing.KeywebSharingIdentityStore
@@ -350,6 +351,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * A consent screen Google wants shown. The Activity collects it and
      * launches it, because a ViewModel must not hold one.
      */
+    /** What to run once Google's consent screen comes back. See [needsConsent]. */
+    private var afterConsent: (() -> Unit)? = null
+
     private val _consent = MutableStateFlow<IntentSender?>(null)
     val consent: StateFlow<IntentSender?> = _consent.asStateFlow()
 
@@ -1009,7 +1013,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 )
             } catch (cause: GoogleAuthorizer.ConsentRequired) {
                 // Not an error: Google simply has not been asked yet.
-                _consent.value = cause.intentSender
+                needsConsent(cause.intentSender) { setUpBackup() }
             } catch (cause: Exception) {
                 _state.value = _state.value.copy(
                     backup = BackupUiState(stage = BackupStage.OFF, error = describeBackup(cause)),
@@ -1018,10 +1022,35 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The consent screen came back. Whatever it returned, try again. */
+    /**
+     * Raise Google's consent screen, and remember what it was for.
+     *
+     * The screen is an `IntentSender` only an Activity can launch, so the flow
+     * that needed it cannot simply wait — it has to stop, hand the sender up,
+     * and be started again afterwards. Which flow that is has to be recorded
+     * here, because by the time consent comes back there is nothing left to
+     * say who asked.
+     */
+    private fun needsConsent(sender: IntentSender, retry: () -> Unit) {
+        afterConsent = retry
+        _consent.value = sender
+    }
+
+    /**
+     * The consent screen came back. Resume whatever raised it.
+     *
+     * This used to call `setUpBackup()` unconditionally, whatever had asked —
+     * so somebody joining a shared keyring approved Google's screen and the
+     * app went off and resumed *backup setup* instead. The join screen stayed
+     * exactly as it was, with the same Continue button and the same sentence
+     * about needing permission, and pressing it again did the same thing. From
+     * the outside: a modal that flashes and changes nothing, forever.
+     */
     fun consentHandled() {
         _consent.value = null
-        setUpBackup()
+        val resume = afterConsent
+        afterConsent = null
+        if (resume != null) resume() else setUpBackup()
     }
 
     /**
@@ -1538,6 +1567,27 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             }
             return true
         }
+
+        /*
+         * A link that came here and meant nothing must say so.
+         *
+         * Returning false let the app open on the password list with no sign
+         * that anything had been handed to it — the same screen as tapping the
+         * icon. Somebody who has just tapped an invitation reads that as the
+         * app ignoring them, and has no way to tell a truncated link from a
+         * link for something else entirely.
+         *
+         * Only for links that were aimed at Keyweb and carry something: the
+         * bare landing address is an ordinary way to open the app, and saying
+         * "that link had nothing in it" to somebody who tapped a plain link
+         * would be noise.
+         */
+        if (url.contains("?") && url.startsWith(KEYWEB_LANDING_URL)) {
+            showToast(
+                "That link didn't have an invitation in it. If it was sent to you in pieces, " +
+                    "copy the whole thing and paste it here.",
+            )
+        }
         return false
     }
 
@@ -1576,6 +1626,19 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         },
                     )
                 }
+            } catch (cause: GoogleAuthorizer.ConsentRequired) {
+                /*
+                 * Consent is a step in this flow, not a failure of it.
+                 *
+                 * Caught by the generic handler below, it became the sentence
+                 * "Keyweb needs your permission to use Google Drive" printed
+                 * on the join screen — true, and with nothing behind it. The
+                 * screen that would grant the permission was never launched,
+                 * so the only thing left to do was press Continue again and
+                 * read the same sentence.
+                 */
+                setShare { it.copy(busy = false) }
+                needsConsent(cause.intentSender) { beginShareGrant(activity) }
             } catch (cause: Exception) {
                 setShare { it.copy(busy = false, error = describeShare(cause)) }
             }
@@ -1603,6 +1666,11 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     grantAccess = {},
                 )
                 setShare { it.copy(stage = ShareStage.REPLY_READY, link = link, busy = false) }
+            } catch (cause: GoogleAuthorizer.ConsentRequired) {
+                // The same step as in `beginShareGrant`, reached from the other
+                // half of the join. Asking is the answer; saying so is not.
+                setShare { it.copy(busy = false) }
+                needsConsent(cause.intentSender) { finishShareJoin() }
             } catch (cause: Exception) {
                 setShare {
                     it.copy(
@@ -1688,7 +1756,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 // local-file option below needs no Google account at all. The
                 // prompt belongs to the button that asks for Drive.
                 if (interactive) {
-                    _consent.value = cause.intentSender
+                    needsConsent(cause.intentSender) { refreshImportFiles(interactive = true) }
                 }
                 setImport { it.copy(busy = false) }
             } catch (cause: Exception) {

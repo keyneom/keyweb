@@ -106,10 +106,17 @@ class MainActivity : FragmentActivity() {
     /**
      * A link arriving while the app is already open.
      *
-     * `singleTask` would be wrong here — it would tear down and rebuild the
-     * whole screen for a link — so the activity stays as it is and the intent
-     * is handed straight to the view model. Returning from the browser after a
-     * file grant comes back this way too.
+     * This is where `singleTask` in the manifest earns its place. Without it
+     * the activity is `standard`, so tapping a link while Keyweb is running
+     * builds a *second* copy of the whole app on top of the first: a second
+     * view model, locked, asking for a fingerprint again, with the screen
+     * somebody was already looking at stranded underneath. The link did get
+     * read — by an instance nobody could tell apart from the one they had —
+     * and it looked exactly like being ignored.
+     *
+     * With one instance, the intent arrives here and goes straight to the view
+     * model that is already unlocked. Returning from the browser after a file
+     * grant comes back this way too.
      */
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
