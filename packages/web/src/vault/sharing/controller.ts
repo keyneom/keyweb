@@ -144,9 +144,31 @@ export class SharedKeyringRemote implements RemoteVaultStore {
   }
 }
 
+/**
+ * Is this "we have never established what this dataset is"?
+ *
+ * Two different answers mean it. `not-found` is the file: nothing in the
+ * registry and nothing in the folder listing. `state` with this message is the
+ * registry alone — sync-kit knows the file but has no pinned owner key for it,
+ * and will not read something whose signature it cannot check.
+ *
+ * The pin is per device and is established by adopting, so every device of
+ * yours *except* the one that shared the keyring meets this the first time it
+ * sees that dataset. Only `not-found` was recognised, so that ordinary state
+ * came out of the sync as "backup had a problem" with sync-kit's sentence
+ * about verified invitations attached — on a keyring the person had shared
+ * from their own phone and simply could not open on their laptop.
+ *
+ * Matched on the message as well as the code because `state` covers more than
+ * this condition, and adopting past all of them would turn "this file is
+ * wrong" into "read it anyway", which is the opposite of what a pin is for.
+ */
 function isMissing(cause: unknown): boolean {
   const code = (cause as { code?: unknown } | null)?.code;
-  return code === "not-found";
+  if (code === "not-found") return true;
+  if (code !== "state") return false;
+  const message = cause instanceof Error ? cause.message : "";
+  return message.includes("no pinned owner key");
 }
 
 function unavailable(cause: unknown): RemoteUnavailableError {

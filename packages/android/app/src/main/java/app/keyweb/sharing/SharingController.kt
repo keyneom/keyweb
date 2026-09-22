@@ -226,8 +226,29 @@ class SharedKeyringRemote(
     }
 }
 
-internal fun isMissing(cause: Throwable): Boolean =
-    cause is SyncKitError && cause.code == SyncKitErrorCode.NOT_FOUND
+/**
+ * Is this "we have never established what this dataset is"?
+ *
+ * Two different answers mean it. `NOT_FOUND` is the file: nothing in the
+ * registry and nothing in the folder listing. `STATE` with this message is the
+ * registry alone — sync-kit knows the file but has no pinned owner key for it,
+ * and will not read something it cannot check a signature against.
+ *
+ * The pin is per device and is established by adopting, so a second device of
+ * the same person meets this on every keyring the first one shared. Only
+ * `NOT_FOUND` was recognised, so that ordinary state surfaced as a backup
+ * problem with sync-kit's sentence attached.
+ *
+ * Matched on the message as well as the code because `STATE` covers more than
+ * this condition, and adopting past all of them would hide the ones worth
+ * showing.
+ */
+internal fun isMissing(cause: Throwable): Boolean {
+    if (cause !is SyncKitError) return false
+    if (cause.code == SyncKitErrorCode.NOT_FOUND) return true
+    return cause.code == SyncKitErrorCode.STATE &&
+        cause.message?.contains("no pinned owner key") == true
+}
 
 private fun unavailable(cause: Throwable): RemoteUnavailableException =
     cause as? RemoteUnavailableException
