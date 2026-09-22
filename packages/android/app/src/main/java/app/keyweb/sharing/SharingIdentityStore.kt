@@ -58,6 +58,14 @@ private const val KEY_BYTES = 32
  * involved — but the record format requires them, and naming the path makes a
  * stored record self-describing rather than merely valid.
  */
+/**
+ * Where the recovery lock on the identity is kept, beside the passkey one.
+ *
+ * Its own app id so the two records sit side by side in app-data and neither
+ * overwrites the other.
+ */
+const val RECOVERY_APP_ID = "keyweb-recovery"
+
 /** What a record wrapped by the printed code calls itself. */
 private const val LEGACY_CREDENTIAL_ID = "recovery"
 private const val RP_ID = "keyweb"
@@ -170,6 +178,7 @@ class KeywebSharingIdentity(
             cached?.let { return@withLock it }
             val identity = loadUnlocked(create)
             cached = identity
+            ensureRecoveryLock(identity)
             identity
         }
     }
@@ -216,6 +225,66 @@ class KeywebSharingIdentity(
         val created = passkey.create(appId)
         store.save(created.record)
         return created.identity
+    }
+
+    /**
+     * A second lock on the same identity, opened by the printed recovery code.
+     *
+     * Every keyring now lives in its own file, with its key wrapped to its
+     * participants — and you are a participant on every one of yours. So the
+     * recovery code does not need to be a reader of each file, and there is no
+     * second copy of anything to keep current: it only needs to be able to
+     * make you *you* again on a device that has lost the passkey. It does that
+     * by unwrapping this record, which holds the very keypair the passkey
+     * record does.
+     *
+     * Written by a device that holds both — which is the phone that minted
+     * the code — and never regenerated: the keypair is what everyone you have
+     * shared with has pinned. Best effort, like the migration above, because
+     * failing to write the spare key must not stop you using the real one.
+     */
+    private suspend fun ensureRecoveryLock(identity: SharingIdentity) {
+        runCatching {
+            if (store.load(RECOVERY_APP_ID) != null) return
+            val code = secret()
+            val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
+            val metadata = V1KeyMetadata(
+                credentialId = LEGACY_CREDENTIAL_ID,
+                rpId = RP_ID,
+                prfInput = ByteArray(SALT_BYTES).also(random::nextBytes),
+                kdfSalt = salt,
+            )
+            val locked = ProtectedSharingIdentityCrypto.create(
+                RECOVERY_APP_ID,
+                metadata,
+                wrapping(code, salt),
+                identity,
+            )
+            store.save(locked.record)
+        }
+    }
+
+    /**
+     * Become yourself again from the printed code alone.
+     *
+     * For a device with no passkey that works — a new phone, a reset, a lost
+     * account passkey. The recovery record gives back the same keypair, and
+     * a fresh passkey is wrapped around it so this device never needs the code
+     * again. Nothing is regenerated, so every file you are on still opens.
+     */
+    suspend fun recoverWith(code: ByteArray): SharingIdentity = gate.withLock {
+        val stored = store.load(RECOVERY_APP_ID) ?: throw SharingIdentityMissing()
+        val record = ProtectedSharingIdentityCrypto.parse(stored)
+        val identity = ProtectedSharingIdentityCrypto.unlock(
+            record,
+            wrapping(code, base64UrlToBytes(record.kdfSalt)),
+        )
+        runCatching {
+            val rewrapped = passkey.wrap(appId, identity)
+            store.save(rewrapped.record)
+        }
+        cached = identity
+        identity
     }
 
     private fun wrapping(secret: ByteArray, salt: ByteArray): ByteArray =
