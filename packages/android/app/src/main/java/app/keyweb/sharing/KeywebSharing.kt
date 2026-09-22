@@ -44,6 +44,17 @@ private const val MEMBER_EMAILS_KEY = "sharing:member-emails"
 private const val ROLES_KEY = "sharing:roles"
 
 /**
+ * Datasets someone other than this person holds the key to.
+ *
+ * Needed because every keyring has a file now, so "has a file" stopped meaning
+ * "is shared". Added when an invitation is accepted, removed when sharing is
+ * stopped; a keyring somebody else owns is shared by definition.
+ */
+private const val SHARED_KEY = "sharing:shared"
+
+private val SharedDatasetIds = ListSerializer(String.serializer())
+
+/**
  * Named once rather than spelled out at each call site: the type arguments
  * cannot be inferred from a `json.encodeToString` alone, and getting one wrong
  * would write a shape the reader silently fails to decode.
@@ -204,6 +215,27 @@ class KeywebSharing(
      * second one and quietly split the keyring in two, with the first person's
      * copy frozen at whatever it held.
      */
+    /**
+     * Give every keyring its own file.
+     *
+     * One file per keyring, encrypted once with its own content key, that key
+     * wrapped to every participant — which from the start is you, on every
+     * device you own, and later whoever you share it with. The shape a shared
+     * keyring always had, for every keyring.
+     *
+     * What it replaces kept every unshared keyring in one file sealed twice,
+     * once per key, so a device holding only one key could refresh one copy
+     * and leave the other stale. There is no second copy here to go stale.
+     *
+     * Idempotent: a keyring that already has a file is left alone, and one
+     * that could not be moved is simply tried again next time.
+     */
+    suspend fun ensureOwnFiles(): List<String> {
+        val unbound = sync.state().keyrings.values
+            .filter { !it.deleted.value && datasetOf(it) == null }
+        return unbound.map { ensureDataset(it.id) }
+    }
+
     private suspend fun ensureDataset(keyringId: String): String {
         val existing = datasetOf(sync.state().keyrings[keyringId])
         if (existing != null) {
@@ -314,6 +346,7 @@ class KeywebSharing(
         }
 
         rememberMemberEmail(response.keyId, invite.email)
+        rememberShared(invite.invitation.requestedGrants.map { it.datasetId })
         // The whole invitation is finished, not one keyring's row of it: the
         // reply carries the key for every file the exchange covered.
         pending.keys.filter { pending[it]?.invitation?.exchangeId == response.exchangeId }
@@ -467,6 +500,42 @@ class KeywebSharing(
      * it is consulted every time a screen renders an edit button. Wrong only in
      * the safe direction in between.
      */
+    /**
+     * Keyrings someone else can read, rather than keyrings that have a file.
+     *
+     * Every keyring has a file now, so "bound to a dataset" would call every
+     * keyring shared — the one thing a person must never be told about a
+     * keyring nobody else can see.
+     */
+    suspend fun sharedKeyrings(state: VaultState): Set<String> {
+        val roles = roles()
+        val withOthers = sharedDatasets().toSet()
+        return state.keyrings.values
+            .filter { !it.deleted.value }
+            .mapNotNull { ring ->
+                val datasetId = datasetOf(ring) ?: return@mapNotNull null
+                val role = roles[datasetId]
+                ring.id.takeIf {
+                    (role != null && role != SharingRole.OWNER) || datasetId in withOthers
+                }
+            }
+            .toSet()
+    }
+
+    /** Nobody else holds this keyring's key any more. */
+    suspend fun forgetShared(datasetId: String) {
+        writeMeta(SHARED_KEY, json.encodeToString(SharedDatasetIds, sharedDatasets().filter { it != datasetId }))
+    }
+
+    private suspend fun sharedDatasets(): List<String> =
+        readMeta(SHARED_KEY)?.let {
+            runCatching { json.decodeFromString(SharedDatasetIds, it) }.getOrNull()
+        } ?: emptyList()
+
+    private suspend fun rememberShared(datasetIds: List<String>) {
+        writeMeta(SHARED_KEY, json.encodeToString(SharedDatasetIds, (sharedDatasets() + datasetIds).distinct()))
+    }
+
     suspend fun readOnlyKeyrings(state: VaultState): Set<String> {
         val roles = roles()
         return state.keyrings.values

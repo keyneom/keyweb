@@ -102,6 +102,14 @@ const PENDING_KEY = "sharing:pending-invites";
 const JOINED_KEY = "sharing:joined-datasets";
 const MEMBER_EMAILS_KEY = "sharing:member-emails";
 const ROLES_KEY = "sharing:roles";
+/**
+ * Datasets someone other than this person holds the key to.
+ *
+ * Needed because every keyring has a file now, so "has a file" stopped meaning
+ * "is shared". Added when an invitation is accepted, removed when sharing is
+ * stopped, and a keyring somebody else owns is shared by definition.
+ */
+const SHARED_KEY = "sharing:shared";
 
 /** A dataset this device asked to join, before it can read it. */
 type JoinedDataset = { datasetId: string; label: string; role: ShareRole };
@@ -275,6 +283,36 @@ export class KeywebSharing {
    * unconditionally would make a second one and quietly split the keyring in
    * two, with the first person's copy frozen at whatever it held.
    */
+  /**
+   * Give every keyring its own file.
+   *
+   * One file per keyring, each encrypted once with its own content key and
+   * that key wrapped to every participant — which from the start is you, on
+   * every device you own, and later whoever you share it with. It is the shape
+   * a shared keyring always had; what changes is that a keyring no longer has
+   * to be shared to get it.
+   *
+   * The alternative it replaces kept every unshared keyring in one file sealed
+   * twice, once per key, which is why a device holding only one of those keys
+   * could write one copy and leave the other to go stale. There is no second
+   * copy here to go stale: a device writes the file, and the key is wrapped to
+   * everyone who may read it.
+   *
+   * Idempotent. A keyring that already has a file is left alone, and one that
+   * could not be moved this time is simply tried again on the next run.
+   */
+  async ensureOwnFiles(): Promise<string[]> {
+    const state = await this.#sync.state();
+    const unbound = Object.values(state.keyrings).filter(
+      (ring) => !ring.deleted.value && !datasetOf(ring),
+    );
+    const made: string[] = [];
+    for (const ring of unbound) {
+      made.push(await this.#ensureDataset(ring.id));
+    }
+    return made;
+  }
+
   async #ensureDataset(keyringId: string): Promise<string> {
     const state = await this.#sync.state();
     const existing = datasetOf(state.keyrings[keyringId]);
@@ -408,6 +446,7 @@ export class KeywebSharing {
     }
 
     await this.#rememberMemberEmail(response.keyId, invite.email);
+    await this.#rememberShared(invite.invitation.requestedGrants.map((grant) => grant.datasetId));
     // The whole invitation is finished, not one keyring's row of it: the
     // reply carries the key for every file the exchange covered.
     for (const [key, entry] of Object.entries(pending)) {
@@ -559,6 +598,49 @@ export class KeywebSharing {
    * Answered from what was last learned rather than by asking Drive, because
    * it is consulted every time a screen renders an edit button.
    */
+  /**
+   * Keyrings someone else can read, rather than keyrings that have a file.
+   *
+   * Every keyring has a file now, so the old test — "is it bound to a
+   * dataset" — would call every keyring shared, which is the one thing a
+   * person must never be told about a keyring nobody else can see.
+   */
+  async sharedKeyrings(state: VaultState): Promise<ReadonlySet<string>> {
+    const roles = await this.#roles();
+    const withOthers = new Set(await this.#sharedDatasets());
+    const shared = new Set<string>();
+    for (const keyring of Object.values(state.keyrings)) {
+      if (keyring.deleted.value) continue;
+      const datasetId = datasetOf(keyring);
+      if (!datasetId) continue;
+      const role = roles[datasetId];
+      // Someone else's keyring is shared with you by definition.
+      if ((role && role !== "owner") || withOthers.has(datasetId)) shared.add(keyring.id);
+    }
+    return shared;
+  }
+
+  /** Nobody else holds this keyring's key any more. */
+  async forgetShared(datasetId: string | null): Promise<void> {
+    if (!datasetId) return;
+    const current = await this.#sharedDatasets();
+    await this.#store.writeMeta(
+      SHARED_KEY,
+      current.filter((id) => id !== datasetId),
+    );
+  }
+
+  async #sharedDatasets(): Promise<string[]> {
+    const stored = await this.#store.readMeta(SHARED_KEY);
+    return Array.isArray(stored) ? (stored as string[]) : [];
+  }
+
+  async #rememberShared(datasetIds: string[]): Promise<void> {
+    const current = new Set(await this.#sharedDatasets());
+    for (const id of datasetIds) current.add(id);
+    await this.#store.writeMeta(SHARED_KEY, [...current]);
+  }
+
   async readOnlyKeyrings(state: VaultState): Promise<ReadOnlyKeyrings> {
     const roles = await this.#roles();
     const readOnly = new Set<string>();

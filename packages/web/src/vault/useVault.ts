@@ -99,6 +99,8 @@ export type VaultApi = {
    * saving, and never arrive.
    */
   readOnlyKeyrings: ReadonlySet<string>;
+  /** Keyrings someone else can read. Not the same as having a file: they all do. */
+  sharedKeyrings: ReadonlySet<string>;
   unlock(options?: { quiet?: boolean }): Promise<void>;
   /** Open a vault that already exists in Drive, onto a device that has none. */
   restore(): Promise<void>;
@@ -268,6 +270,9 @@ export function useVault(): VaultApi {
     syncing: false,
   });
 
+  const [sharedKeyrings, setSharedKeyrings] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [readOnlyKeyrings, setReadOnlyKeyrings] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
@@ -312,6 +317,7 @@ export function useVault(): VaultApi {
     if (engine) {
       try {
         setReadOnlyKeyrings(await engine.readOnlyKeyrings(next));
+        setSharedKeyrings(await engine.sharedKeyrings(next));
       } catch {
         // Leave the last answer rather than guessing a more permissive one.
       }
@@ -344,7 +350,9 @@ export function useVault(): VaultApi {
       // showing. It will be ready on some later sync.
     }
     try {
-      setReadOnlyKeyrings(await engine.readOnlyKeyrings(await sync.state()));
+      const current = await sync.state();
+      setReadOnlyKeyrings(await engine.readOnlyKeyrings(current));
+      setSharedKeyrings(await engine.sharedKeyrings(current));
     } catch {
       // Not knowing must not make an editable keyring look read-only.
     }
@@ -357,7 +365,17 @@ export function useVault(): VaultApi {
     if (!sync || !BACKUP_CONFIGURED) return;
     void sync.sync().then(
       async () => {
-        if (await adoptShared()) setState(await sync.state());
+        let changed = await adoptShared();
+        // Every keyring into a file of its own, after the sync rather than
+        // before it, so a keyring another device already moved is seen as
+        // moved rather than moved a second time. Quiet on failure: it is
+        // idempotent and simply runs again on the next sync.
+        try {
+          if ((await sharingRef.current?.ensureOwnFiles())?.length) changed = true;
+        } catch {
+          // Offline, or the sharing key is not unlocked yet.
+        }
+        if (changed) setState(await sync.state());
         setStatus({ ...sync.status() });
       },
       () => setStatus({ ...sync.status() }),
@@ -1155,6 +1173,7 @@ export function useVault(): VaultApi {
     attachFile,
     removeAttachment,
     readOnlyKeyrings,
+    sharedKeyrings,
     sharing,
     blockedJoins,
     adoptBlockedJoin,
@@ -1233,7 +1252,10 @@ function sharingApi(
           }
         }
       }
-      await sync.unbindKeyring(keyringId);
+      // The keyring keeps its own file. Every keyring has one now, shared or
+      // not, so "private again" means nobody else holds its key — which the
+      // revocations above just made true — not that it moves anywhere.
+      await engine.forgetShared(datasetId);
       await refresh();
     },
     async leave(keyringId) {

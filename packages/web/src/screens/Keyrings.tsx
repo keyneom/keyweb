@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  datasetOf,
   KEYRING_SORTS,
   sortKeyrings,
   type ItemRecord,
@@ -21,6 +20,7 @@ export function Keyrings({
   canShare,
   onShare,
   onShareMany,
+  sharedKeyrings,
 }: {
   state: VaultState;
   items: ItemRecord[];
@@ -32,6 +32,11 @@ export function Keyrings({
   onShare: (keyringId: string) => void;
   /** Invite somebody to everything ticked, on one link. */
   onShareMany: (keyringIds: string[]) => void;
+  /**
+   * Keyrings someone else can read. Asked for rather than inferred from the
+   * keyring having a file, because every keyring has one.
+   */
+  sharedKeyrings: ReadonlySet<string>;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,7 +99,7 @@ export function Keyrings({
           // you is not something this list can know without asking Drive and
           // your passkey, so it says the part it is sure of and the sharing
           // screen says the rest.
-          const shared = datasetOf(r) !== null;
+          const shared = sharedKeyrings.has(r.id);
           return (
             <div key={r.id} className="row" style={{ cursor: "default" }}>
               <span

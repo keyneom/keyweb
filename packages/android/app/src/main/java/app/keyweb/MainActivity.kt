@@ -604,6 +604,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         },
                         canShare = viewModel.canShare,
                         onShareMany = viewModel::beginMultiShare,
+                        sharedKeyrings = ui.sharedKeyrings,
                         onShare = {
                             viewModel.openSharing(it)
                             route = Route.Share(it)

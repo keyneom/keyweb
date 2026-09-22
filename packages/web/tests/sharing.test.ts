@@ -215,6 +215,79 @@ async function withHousehold() {
 }
 
 /**
+ * Every keyring in a file of its own, whether or not it is shared.
+ *
+ * The shape a shared keyring always had — encrypted once, the content key
+ * wrapped to every participant — for every keyring. What it replaces kept all
+ * the unshared ones in one file sealed twice, so a device holding only one of
+ * the two keys could refresh one copy and leave the other stale.
+ */
+describe("giving every keyring its own file", () => {
+  it("moves each unshared keyring into a file of its own", async () => {
+    const { sync, controller, sharing, storage } = await withHousehold();
+    const made = await sharing.ensureOwnFiles();
+
+    expect(made).toHaveLength(2);
+    const state = await sync.state();
+    const house = datasetOf(state.keyrings["house"]);
+    const personal = datasetOf(state.keyrings["personal"]);
+    expect(house).toBeTruthy();
+    expect(personal).toBeTruthy();
+    expect(house).not.toBe(personal);
+    expect([...controller.created].sort()).toEqual([house, personal].sort());
+
+    // The passwords live in their keyring's file now, not in the vault.
+    const vault = await storage.readState("");
+    expect(Object.values(vault.items).filter((item) => !item.deleted.value)).toEqual([]);
+    expect(controller.datasets.get(house!)!.items["wifi"]).toBeDefined();
+    expect(controller.datasets.get(personal!)!.items["bank"]).toBeDefined();
+  });
+
+  it("still shows every password afterwards", async () => {
+    const { sync, sharing } = await withHousehold();
+    await sharing.ensureOwnFiles();
+    const state = await sync.state();
+    expect(itemField(state.items["wifi"]!, "password")).toBe("hunter2");
+    expect(itemField(state.items["bank"]!, "title")).toBe("Bank");
+  });
+
+  it("does not call a keyring shared just because it has a file", async () => {
+    const { sync, sharing } = await withHousehold();
+    await sharing.ensureOwnFiles();
+    // Every keyring has a file now. None of them has anybody else on it.
+    expect([...(await sharing.sharedKeyrings(await sync.state()))]).toEqual([]);
+  });
+
+  it("calls it shared once somebody else holds the key, and private once they don't", async () => {
+    const { sync, sharing } = await withHousehold();
+    await sharing.ensureOwnFiles();
+    const { link } = await sharing.shareKeyring({
+      keyringId: "house",
+      email: "rachel@example.com",
+      role: "viewer",
+    });
+    expect(link).toBeTruthy();
+    const exchangeId = (await sharing.pendingInvites("house"))[0]!.invitation.exchangeId;
+    await sharing.acceptResponse(await aResponse(exchangeId));
+
+    const afterJoin = await sharing.sharedKeyrings(await sync.state());
+    expect([...afterJoin]).toEqual(["house"]);
+
+    await sharing.forgetShared(datasetOf((await sync.state()).keyrings["house"]));
+    expect([...(await sharing.sharedKeyrings(await sync.state()))]).toEqual([]);
+  });
+
+  it("leaves a keyring that already has a file alone", async () => {
+    const { controller, sharing } = await withHousehold();
+    await sharing.ensureOwnFiles();
+    const firstRun = [...controller.created];
+
+    expect(await sharing.ensureOwnFiles()).toEqual([]);
+    expect(controller.created).toEqual(firstRun);
+  });
+});
+
+/**
  * Several keyrings, one invitation.
  *
  * The format has always described this — `requestedGrants` and `files` are

@@ -463,6 +463,7 @@ export function App() {
           canShare={vault.sharing !== null}
           onShare={(keyringId) => setRoute({ name: "share", keyringId })}
           onShareMany={setSharingMany}
+          sharedKeyrings={vault.sharedKeyrings}
           onBack={() => setRoute({ name: "list" })}
           onAdd={async (name) => {
             await vault.addKeyring(name);

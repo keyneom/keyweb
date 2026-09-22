@@ -1363,6 +1363,11 @@ fun KeyringsScreen(
     onShare: (String) -> Unit = {},
     /** Invite somebody to everything that is selected, on one link. */
     onShareMany: (List<String>) -> Unit = {},
+    /**
+     * Keyrings someone else can read. Asked for rather than inferred from the
+     * keyring having a file, because every keyring has one.
+     */
+    sharedKeyrings: Set<String> = emptySet(),
     onPasteLink: (String) -> Unit = {},
     /** The ordering last chosen, remembered across launches. */
     savedSort: String = KeyringSort.NAME_AZ.id,
@@ -1426,7 +1431,7 @@ fun KeyringsScreen(
                         // somebody shared it with you is not something this list
                         // can know without asking Drive, so it says the part it
                         // is sure of and the sharing screen says the rest.
-                        val shared = datasetOf(r) != null
+                        val shared = r.id in sharedKeyrings
                         val selecting = selected != null
                         val ticked = selected?.contains(r.id) == true
                         Row(verticalAlignment = Alignment.CenterVertically) {

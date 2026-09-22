@@ -264,6 +264,8 @@ data class VaultUiState(
      * file — which would look exactly like saving, and never arrive.
      */
     val readOnlyKeyrings: Set<String> = emptySet(),
+    /** Keyrings someone else can read. Not "has a file": every keyring has one. */
+    val sharedKeyrings: Set<String> = emptySet(),
     /**
      * The backup has no passkey copy this phone can open.
      *
@@ -1263,6 +1265,11 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             engine.sync()
             adoptSharedKeyrings()
+            // Every keyring into a file of its own, after the sync so one
+            // another device already moved is seen as moved. Quiet on
+            // failure: idempotent, and it simply runs again next sync.
+            runCatching { sharing?.ensureOwnFiles() }
+            refreshReadOnly()
             publish(engine.state())
         }
     }
@@ -1306,6 +1313,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
         val vault = sync?.state() ?: return
         runCatching { engine.readOnlyKeyrings(vault) }.getOrNull()?.let {
             _state.value = _state.value.copy(readOnlyKeyrings = it)
+        }
+        runCatching { engine.sharedKeyrings(vault) }.getOrNull()?.let {
+            _state.value = _state.value.copy(sharedKeyrings = it)
         }
     }
 
@@ -1661,9 +1671,13 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                 }
-                val next = engine.unbindKeyring(keyringId)
+                // The keyring keeps its own file. Every keyring has one now,
+                // shared or not, so "private again" means nobody else holds
+                // its key — which the revocations above just made true — not
+                // that it moves anywhere.
+                datasetId?.let { sharingEngine?.forgetShared(it) }
                 setShare { ShareUiState() }
-                publish(next, toast = "$name is private again.")
+                publish(engine.state(), toast = "$name is private again.")
             } catch (cause: Exception) {
                 showToast(cause.message ?: "Keyweb couldn't stop sharing that keyring.")
             }
