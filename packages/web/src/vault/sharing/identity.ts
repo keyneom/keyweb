@@ -83,6 +83,19 @@ const backend = createWebCryptoBackend();
  */
 const RECOVERY_CREDENTIAL = { credentialId: "recovery", rpId: "keyweb" };
 
+/**
+ * What this app needs of an identity, rather than which class provides it.
+ *
+ * sync-kit's `PasskeyProtectedSharingIdentityProvider` is what actually
+ * provides it now; the class below predates that and is kept for the migration
+ * path. Depending on the shape rather than the class is what let the two swap
+ * without the controller or the operations knowing.
+ */
+export type SharingIdentityLike = {
+  getOrCreate(): Promise<WebCryptoSharingIdentity>;
+  clear(): void;
+};
+
 export class SharingIdentityMissing extends Error {
   constructor(message = "This device has no sharing key yet.") {
     super(message);

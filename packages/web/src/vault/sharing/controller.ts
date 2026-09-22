@@ -14,7 +14,7 @@ import {
   type VaultState,
 } from "@keyweb/vault-core";
 import { authorizeGoogle } from "../googleAuth";
-import type { SharingIdentity } from "./identity";
+import type { SharingIdentityLike } from "./identity";
 
 /**
  * A shared keyring's Drive file, and the operations that change who can read it.
@@ -54,7 +54,7 @@ const codec = {
 
 export type SharingController = SharedBackupController<VaultState>;
 
-export function createKeywebSharingController(identity: SharingIdentity): SharingController {
+export function createKeywebSharingController(identity: SharingIdentityLike): SharingController {
   const authorizationProvider = {
     authorize: (): Promise<Authorization> => authorizeGoogle(),
     // The page-wide token is shared with the backup and the Picker, so this

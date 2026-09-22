@@ -37,7 +37,7 @@ import {
   KeywebSharing,
   type BlockedJoin,
   SharedKeyringRemote,
-  type SharingIdentity,
+  type SharingIdentityLike,
   type Member,
   type PendingInvite,
   type ShareRole,
@@ -280,7 +280,7 @@ export function useVault(): VaultApi {
   const cipherRef = useRef<VaultCipher | null>(null);
   const remoteRef = useRef<GoogleDriveRemote | null>(null);
   const sharingRef = useRef<KeywebSharing | null>(null);
-  const identityRef = useRef<SharingIdentity | null>(null);
+  const identityRef = useRef<SharingIdentityLike | null>(null);
   const [sharing, setSharing] = useState<SharingApi | null>(null);
   const [blockedJoins, setBlockedJoins] = useState<BlockedJoin[]>([]);
 
@@ -430,59 +430,14 @@ export function useVault(): VaultApi {
       /*
        * One identity per person, on every device they own.
        *
-       * The seed this is derived from used to be the printed recovery code and
-       * nothing but it, on the reasoning that the code was "the one secret both
-       * platforms genuinely hold" — true only while the phone had no passkey.
-       * It has one now, and derives the same key from it as this browser does.
-       *
-       * So the seed travels in the backup, sealed under both keys, and this
-       * asks in the order of what a device is likeliest to have: the copy it
-       * already keeps, then the one in the file, then a fresh one it publishes
-       * for the others. A browser that has never been handed the printed code
-       * gets the same identity as the phone that minted it, which is what
-       * makes a keyring shared from one of them openable on the other.
+       * Wrapped with the passkey and kept in the Google account's app-data
+       * folder, which is what makes it follow the account rather than the
+       * device. sync-kit ships both halves and easy-bc has used them from the
+       * start; Keyweb had the folder and wrapped with the printed recovery
+       * code instead, so a browser that had never been handed that code could
+       * read every password and still not touch a shared keyring.
        */
-      const identity = BACKUP_CONFIGURED
-        ? createSharingIdentity(async () => {
-            const stored = await storage.readMeta("recovery-secret");
-            if (stored) {
-              const secret = Uint8Array.from(
-                (await cipher.openOp(stored)) as unknown as number[],
-              );
-              remoteRef.current?.rememberSharingSeed(secret);
-              return secret;
-            }
-
-            const fromBackup = await remoteRef.current?.sharingSeed().catch(() => null);
-            if (fromBackup) {
-              // Kept, so the next unlock costs no round trip.
-              await storage.writeMeta(
-                "recovery-secret",
-                await cipher.sealOp([...fromBackup] as never),
-              );
-              return fromBackup;
-            }
-
-            /*
-             * Deliberately not minting one here.
-             *
-             * A seed is only the same identity if every device arrives at the
-             * same bytes, and an identity that already exists is wrapped with
-             * the seed that made it. Inventing a fresh one on the device that
-             * happens to be missing it would unwrap nothing, and would leave
-             * this person as two participants who cannot open the keyrings the
-             * other shared.
-             *
-             * So the honest answer is that this device has not been given it
-             * yet — which the other device fixes by writing once, since it
-             * publishes the seed with every save.
-             */
-            throw new Error(
-              "This browser hasn't been given the key your other device uses for sharing. " +
-                "Open Keyweb on that device once, or enter your recovery code in Settings.",
-            );
-          })
-        : null;
+      const identity = BACKUP_CONFIGURED ? createSharingIdentity() : null;
       identityRef.current = identity;
       const controller = identity ? createKeywebSharingController(identity) : null;
       const datasetRemotes = new Map<string, SharedKeyringRemote>();

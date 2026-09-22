@@ -64,13 +64,20 @@ class SharingIdentityInteropTest {
         }
     }
 
+    /**
+     * No activity, so no passkey sheet: the legacy record still opens through
+     * the printed code, and the migration to a passkey-wrapped record simply
+     * waits. Sharing is never taken away in order to tidy up.
+     */
+    private fun noPasskey() = SharingPasskey { null }
+
     @Test
     fun `opens the identity the browser wrapped, and is the same person`() = runTest {
         val fixture = fixture()
         val secret = java.util.Base64.getDecoder().decode(fixture.secretBase64)
         val store = MemoryStore(fixture.record)
 
-        val identity = KeywebSharingIdentity(store = store, secret = { secret }).get()
+        val identity = KeywebSharingIdentity(store = store, passkey = noPasskey(), secret = { secret }).get()
 
         assertEquals(fixture.keyId, identity.publicKey.keyId)
         // Loading must never write: a save here would mean the phone decided
@@ -90,7 +97,7 @@ class SharingIdentityInteropTest {
         val wrong = ByteArray(20) { 9 }
         var threw = false
         try {
-            KeywebSharingIdentity(store = store, secret = { wrong }).get()
+            KeywebSharingIdentity(store = store, passkey = noPasskey(), secret = { wrong }).get()
         } catch (cause: Exception) {
             threw = true
         }
@@ -119,7 +126,7 @@ class SharingIdentityInteropTest {
 
         var threw = false
         try {
-            KeywebSharingIdentity(store = store, secret = { ByteArray(20) }).getOrCreate()
+            KeywebSharingIdentity(store = store, passkey = noPasskey(), secret = { ByteArray(20) }).getOrCreate()
         } catch (cause: Exception) {
             threw = true
         }
@@ -145,7 +152,7 @@ class SharingIdentityInteropTest {
         )
 
         val secret = java.util.Base64.getDecoder().decode(fixture.secretBase64)
-        val identity = KeywebSharingIdentity(store = store, secret = { secret }).get()
+        val identity = KeywebSharingIdentity(store = store, passkey = noPasskey(), secret = { secret }).get()
         assertEquals(fixture.keyId, identity.publicKey.keyId)
     }
 

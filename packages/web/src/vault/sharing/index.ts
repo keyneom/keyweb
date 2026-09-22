@@ -1,7 +1,16 @@
 import { DriveAppDataProtectedSharingIdentityStore } from "@keyneom/sync-kit/sharing/appdata-identity-store";
-import { IndexedDbProtectedSharingIdentityStore } from "@keyneom/sync-kit/sharing/web-passkey";
+import {
+  IndexedDbProtectedSharingIdentityStore,
+  PasskeyProtectedSharingIdentityProvider,
+} from "@keyneom/sync-kit/sharing/web-passkey";
+import { createWebPasskeyProvider } from "@keyneom/sync-kit/keys/web-passkey";
 import { authorizeGoogle } from "../googleAuth";
-import { KeywebSharingIdentityStore, SharingIdentity } from "./identity";
+import { keywebRpId } from "../profile";
+import {
+  KEYWEB_SHARING_APP_ID,
+  KeywebSharingIdentityStore,
+  keywebSharingProfile,
+} from "./identity";
 
 export * from "./identity";
 
@@ -10,17 +19,26 @@ export * from "./identity";
  *
  * Authoritative copy in the Google account's hidden app-data folder, cached
  * copy in this browser — see `identity.ts` for why that order and not the
- * other one.
+ * other one — and wrapped with the passkey, which is the part that was wrong.
+ *
+ * It was wrapped with the printed recovery code instead, on the reasoning that
+ * the phone had no passkey. It has one, and sync-kit ships this provider and
+ * this store precisely so one account carries one identity to all its devices;
+ * easy-bc has used both from the start. Keyweb had the store and not the key.
  */
-export function createSharingIdentity(secret: () => Promise<Uint8Array>): SharingIdentity {
-  return new SharingIdentity({
+export function createSharingIdentity(): PasskeyProtectedSharingIdentityProvider {
+  return new PasskeyProtectedSharingIdentityProvider({
+    appId: KEYWEB_SHARING_APP_ID,
+    // The same passkey that opens the vault, through the sharing profile whose
+    // HKDF label both platforms share — so the phone and this browser derive
+    // one identity rather than one each.
+    passkeyProvider: createWebPasskeyProvider(keywebSharingProfile, { rpId: keywebRpId() }),
     store: new KeywebSharingIdentityStore({
       remote: new DriveAppDataProtectedSharingIdentityStore({
         authorization: () => authorizeGoogle(),
       }),
       local: new IndexedDbProtectedSharingIdentityStore({ databaseName: "keyweb-sharing" }),
     }),
-    secret,
   });
 }
 

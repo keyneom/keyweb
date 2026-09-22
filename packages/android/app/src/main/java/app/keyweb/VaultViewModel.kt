@@ -23,6 +23,7 @@ import app.keyweb.sharing.KEYWEB_LANDING_URL
 import app.keyweb.sharing.KeywebSharing
 import app.keyweb.sharing.KeywebSharingIdentity
 import app.keyweb.sharing.KeywebSharingIdentityStore
+import app.keyweb.sharing.SharingPasskey
 import app.keyweb.sharing.Member
 import app.keyweb.sharing.PendingInvite
 import app.keyweb.sharing.PrefsSharingIdentityStore
@@ -524,9 +525,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         Authorization(authorizer.accessToken(), null)
                     },
                 ),
+                // The same passkey that opens the vault, so this phone and a
+                // browser signed into the same account are one participant.
+                passkey = SharingPasskey { passkeyHost?.get() },
+                // Only for a record wrapped before the passkey was used: the
+                // migration needs it, nothing else does.
                 secret = {
                     storedSecret() ?: error(
-                        "This phone needs your recovery code before it can share a keyring. " +
+                        "This phone needs your recovery code to move your sharing key over. " +
                             "Set up backup first.",
                     )
                 },

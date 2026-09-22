@@ -9,7 +9,7 @@ import type { SharingDatasetFileV1 } from "@keyneom/sync-kit/sharing";
 import { datasetOf, VAULT_DOCUMENT, type VaultState, type VaultSync } from "@keyweb/vault-core";
 import type { SharingController } from "./controller";
 import { buildJoinLink, buildOwnershipLink, buildResponseLink } from "./links";
-import type { SharingIdentity } from "./identity";
+import type { SharingIdentityLike } from "./identity";
 
 /**
  * Sharing a keyring, joining one, and deciding who stays.
@@ -161,13 +161,13 @@ export class KeywebSharing {
   }
   readonly #sync: VaultSync;
   readonly #controller: SharingController;
-  readonly #identity: SharingIdentity;
+  readonly #identity: SharingIdentityLike;
   readonly #store: ShareStore;
 
   constructor(options: {
     sync: VaultSync;
     controller: SharingController;
-    identity: SharingIdentity;
+    identity: SharingIdentityLike;
     store: ShareStore;
   }) {
     this.#sync = options.sync;

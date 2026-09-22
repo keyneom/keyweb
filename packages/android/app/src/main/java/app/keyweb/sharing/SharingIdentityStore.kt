@@ -58,7 +58,8 @@ private const val KEY_BYTES = 32
  * involved — but the record format requires them, and naming the path makes a
  * stored record self-describing rather than merely valid.
  */
-private const val CREDENTIAL_ID = "recovery"
+/** What a record wrapped by the printed code calls itself. */
+private const val LEGACY_CREDENTIAL_ID = "recovery"
 private const val RP_ID = "keyweb"
 
 class SharingIdentityMissing(
@@ -120,9 +121,19 @@ class KeywebSharingIdentityStore(
 class KeywebSharingIdentity(
     private val store: ProtectedSharingIdentityStore,
     /**
-     * The vault's recovery secret. Throwing here — because this device has
-     * never been given the printed code — is the honest answer, and far better
-     * than making a second identity.
+     * The key this identity is wrapped with, derived from the passkey.
+     *
+     * The same passkey that opens the vault, through the sharing profile whose
+     * HKDF label the web shares — so this phone and a browser derive one
+     * identity rather than one each. That is the whole point of keeping the
+     * record in the account's app-data folder, and it was undone by wrapping
+     * with the printed recovery code, which only the device that minted it
+     * ever had.
+     */
+    private val passkey: SharingPasskey,
+    /**
+     * The vault's recovery secret, for a record wrapped before the passkey was
+     * used. Migrating it needs this; nothing else does.
      */
     private val secret: suspend () -> ByteArray,
     private val appId: String = KEYWEB_SHARING_APP_ID,
@@ -165,36 +176,44 @@ class KeywebSharingIdentity(
 
     private suspend fun loadUnlocked(create: Boolean): SharingIdentity {
         val stored = store.load(appId)
-        val key = secret()
 
         if (stored != null) {
             // Parsed rather than trusted: the record comes back from Drive, and
             // a malformed one must fail as a bad record rather than as a crypto
             // error somewhere further in.
             val record = ProtectedSharingIdentityCrypto.parse(stored)
-            return ProtectedSharingIdentityCrypto.unlock(
-                record,
-                wrapping(key, base64UrlToBytes(record.kdfSalt)),
-            )
+
+            /*
+             * A record from before the passkey wrapped it.
+             *
+             * Re-wrapped in place, never regenerated: the keypair inside is
+             * what every person this vault has shared with has pinned, and a
+             * fresh one would leave them trusting a key nobody holds. Only a
+             * device that has the printed code can do this, which is the
+             * device that minted it — after which every other device of theirs
+             * opens the record with its passkey and needs no code at all.
+             */
+            if (record.credentialId == LEGACY_CREDENTIAL_ID) {
+                val identity = ProtectedSharingIdentityCrypto.unlock(
+                    record,
+                    wrapping(secret(), base64UrlToBytes(record.kdfSalt)),
+                )
+                // Best effort, and usable either way: a phone that cannot raise
+                // the passkey sheet right now still shares through the old
+                // wrapping, and migrates the next time it can. Failing the load
+                // over the migration would take sharing away to tidy up.
+                return runCatching {
+                    val rewrapped = passkey.wrap(appId, identity)
+                    store.save(rewrapped.record)
+                    rewrapped.identity
+                }.getOrDefault(identity)
+            }
+
+            return ProtectedSharingIdentityCrypto.unlock(record, passkey.keyFor(record))
         }
         if (!create) throw SharingIdentityMissing()
 
-        // A fresh salt, stored beside the wrapped keys, so the same secret
-        // derives the same wrapping key on every device without any of them
-        // having to agree on anything else.
-        val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
-        val metadata = V1KeyMetadata(
-            credentialId = CREDENTIAL_ID,
-            rpId = RP_ID,
-            prfInput = ByteArray(SALT_BYTES).also(random::nextBytes),
-            kdfSalt = salt,
-        )
-        val created = ProtectedSharingIdentityCrypto.create(
-            appId,
-            metadata,
-            wrapping(key, salt),
-            null,
-        )
+        val created = passkey.create(appId)
         store.save(created.record)
         return created.identity
     }
