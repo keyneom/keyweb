@@ -9,6 +9,7 @@ import {
 } from "@keyweb/vault-core";
 import { BackIcon } from "../ui/icons";
 import type { Appearance, TextSize } from "../vault/useDisplaySettings";
+import { LOCK_AFTER_CHOICES, type LockAfter } from "../vault/idleLock";
 import type { SharingApi } from "../vault/useVault";
 
 /**
@@ -121,6 +122,8 @@ export function Settings({
   appearance,
   onTextSize,
   onAppearance,
+  lockAfter,
+  onLockAfter,
   onBack,
   onImport,
   onScanCodes,
@@ -142,6 +145,8 @@ export function Settings({
   onImport: () => void;
   onScanCodes: () => void;
   onLock: () => void;
+  lockAfter: LockAfter;
+  onLockAfter: (value: LockAfter) => void;
   /** One line describing the backup file, for comparing against the phone. */
   describeBackupFile: () => Promise<string>;
   backupFiles: BackupFile[];
@@ -185,6 +190,14 @@ export function Settings({
           Lock now
         </button>
       </fieldset>
+
+      <Choice
+        label="Lock by itself"
+        hint="When nobody has touched Keyweb for this long, it locks, and opening it again needs your face, fingerprint or PIN."
+        value={lockAfter}
+        options={LOCK_AFTER_CHOICES}
+        onChange={onLockAfter}
+      />
 
       <Choice
         label="Text size"

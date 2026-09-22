@@ -26,6 +26,13 @@ import { RecoverySheet } from "./screens/RecoverySheet";
 import { Unlock } from "./screens/Unlock";
 import { VaultList } from "./screens/VaultList";
 import { useDisplaySettings } from "./vault/useDisplaySettings";
+import {
+  describeLockAfter,
+  readLockAfter,
+  storeLockAfter,
+  watchIdle,
+  type LockAfter,
+} from "./vault/idleLock";
 import { useGeneratorRules } from "./vault/useGeneratorRules";
 import { useVault } from "./vault/useVault";
 
@@ -165,6 +172,36 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Lock after a while unused.
+   *
+   * Watched only while the vault is open, and restarted whenever the setting
+   * changes. What was on screen goes with it: coming back to the lock screen
+   * and unlocking should land on the list, not on the password somebody left
+   * showing.
+   */
+  const [lockAfter, setLockAfterState] = useState<LockAfter>(readLockAfter);
+  const setLockAfter = useCallback((value: LockAfter) => {
+    setLockAfterState(value);
+    storeLockAfter(value);
+  }, []);
+  /** Why the lock screen is showing, when Keyweb locked itself. */
+  const [lockedIdle, setLockedIdle] = useState<LockAfter | null>(null);
+  const { phase, lock } = vault;
+  useEffect(() => {
+    if (phase !== "ready") return;
+    setLockedIdle(null);
+    return watchIdle({
+      timeoutMs: Number(lockAfter) * 60_000,
+      onIdle: () => {
+        lock();
+        setRoute({ name: "list" });
+        setViewing(null);
+        setLockedIdle(lockAfter);
+      },
+    });
+  }, [phase, lock, lockAfter]);
+
   useEffect(() => {
     if (toast === null) return;
     const timer = setTimeout(() => setToast(null), 5000);
@@ -219,6 +256,11 @@ export function App() {
           firstRun={vault.firstRun}
           codeOnly={vault.codeOnly}
           error={vault.error}
+          notice={
+            lockedIdle
+              ? `Keyweb locked itself after ${describeLockAfter(lockedIdle)} without being used.`
+              : null
+          }
           backupConfigured={vault.backupConfigured}
           onUnlock={() => void vault.unlock()}
           onRestore={() => void vault.restore()}
@@ -485,6 +527,8 @@ export function App() {
           appearance={display.appearance}
           onTextSize={display.setTextSize}
           onAppearance={display.setAppearance}
+          lockAfter={lockAfter}
+          onLockAfter={setLockAfter}
           onBack={() => setRoute({ name: "list" })}
           onImport={() => setRoute({ name: "import" })}
           onScanCodes={() => setRoute({ name: "scan" })}

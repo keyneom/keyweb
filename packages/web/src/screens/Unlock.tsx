@@ -15,6 +15,7 @@ export function Unlock({
   firstRun,
   codeOnly,
   error,
+  notice,
   backupConfigured,
   onUnlock,
   onRestore,
@@ -29,6 +30,8 @@ export function Unlock({
   /** This browser's copy opens with the recovery code only. */
   codeOnly: boolean;
   error: string | null;
+  /** Why the vault is locked, when it was not somebody pressing Lock. */
+  notice?: string | null;
   backupConfigured: boolean;
   onUnlock: () => void;
   onRestore: () => void;
@@ -87,6 +90,15 @@ export function Unlock({
             ? "Keyweb locks your passwords with the same face, fingerprint or PIN you use to unlock this device. Nothing to remember."
             : "Unlock your passwords with your face, fingerprint or PIN."}
       </p>
+
+      {notice && !error && (
+        <p className="status" data-tone="calm">
+          <ShieldIcon />
+          <span>
+            <b>{notice}</b>
+          </span>
+        </p>
+      )}
 
       {error && (
         <p className="status" data-tone="attn">
