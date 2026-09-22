@@ -427,15 +427,60 @@ export function useVault(): VaultApi {
       // would mean two prompts for one operation, and the second would arrive
       // while the first was still on screen.
       identityRef.current = null;
+      /*
+       * One identity per person, on every device they own.
+       *
+       * The seed this is derived from used to be the printed recovery code and
+       * nothing but it, on the reasoning that the code was "the one secret both
+       * platforms genuinely hold" — true only while the phone had no passkey.
+       * It has one now, and derives the same key from it as this browser does.
+       *
+       * So the seed travels in the backup, sealed under both keys, and this
+       * asks in the order of what a device is likeliest to have: the copy it
+       * already keeps, then the one in the file, then a fresh one it publishes
+       * for the others. A browser that has never been handed the printed code
+       * gets the same identity as the phone that minted it, which is what
+       * makes a keyring shared from one of them openable on the other.
+       */
       const identity = BACKUP_CONFIGURED
         ? createSharingIdentity(async () => {
             const stored = await storage.readMeta("recovery-secret");
-            if (!stored) {
-              throw new Error(
-                "This browser needs your recovery code before it can share a keyring. Enter it in Settings.",
+            if (stored) {
+              const secret = Uint8Array.from(
+                (await cipher.openOp(stored)) as unknown as number[],
               );
+              remoteRef.current?.rememberSharingSeed(secret);
+              return secret;
             }
-            return Uint8Array.from((await cipher.openOp(stored)) as unknown as number[]);
+
+            const fromBackup = await remoteRef.current?.sharingSeed().catch(() => null);
+            if (fromBackup) {
+              // Kept, so the next unlock costs no round trip.
+              await storage.writeMeta(
+                "recovery-secret",
+                await cipher.sealOp([...fromBackup] as never),
+              );
+              return fromBackup;
+            }
+
+            /*
+             * Deliberately not minting one here.
+             *
+             * A seed is only the same identity if every device arrives at the
+             * same bytes, and an identity that already exists is wrapped with
+             * the seed that made it. Inventing a fresh one on the device that
+             * happens to be missing it would unwrap nothing, and would leave
+             * this person as two participants who cannot open the keyrings the
+             * other shared.
+             *
+             * So the honest answer is that this device has not been given it
+             * yet — which the other device fixes by writing once, since it
+             * publishes the seed with every save.
+             */
+            throw new Error(
+              "This browser hasn't been given the key your other device uses for sharing. " +
+                "Open Keyweb on that device once, or enter your recovery code in Settings.",
+            );
           })
         : null;
       identityRef.current = identity;

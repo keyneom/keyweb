@@ -986,6 +986,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                         client,
                         VaultEnvelopeCipher.forRecoveryCode(secret, existing),
                         passkeyCipher = if (opens) passkey else null,
+                        sharingSeed = secret,
                     ),
                 )
                 _state.value = _state.value.copy(backupPhoneOnly = !opens)
@@ -1021,6 +1022,9 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     client,
                     VaultEnvelopeCipher.forRecoveryCode(secret, existing),
                     passkeyCipher = passkey,
+                    // Published so this person's other devices arrive at the
+                    // same sharing identity without being handed the code.
+                    sharingSeed = secret,
                 ),
             )
             // Said, not silently endured: without it this backup opens only on
@@ -1196,6 +1200,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 client,
                 VaultEnvelopeCipher.forRecoveryCode(secret, existing),
                 passkeyCipher = establishPasskey(client),
+                sharingSeed = secret,
             ),
         )
         // Publish immediately, so "backup is on" is true the moment it is said

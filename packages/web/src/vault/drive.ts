@@ -60,6 +60,23 @@ type BackupPayload = {
    */
   passkey?: unknown;
   recovery?: unknown;
+  /**
+   * The seed the sharing identity is wrapped with, sealed under both keys.
+   *
+   * Sharing needs one identity per person, not per device: a keyring shared
+   * from a phone has to be openable and manageable from that person's laptop,
+   * and the people they shared with pinned *one* key to trust. The identity is
+   * wrapped with a key derived from this seed, so every device of theirs has
+   * to arrive at the same bytes.
+   *
+   * It rides in the backup because the backup is the one thing all of their
+   * devices already read, and it is sealed twice for the same reason the vault
+   * is: whichever key opened the file can open this. Before it existed, the
+   * seed was the printed recovery code and nothing distributed it — so a
+   * browser that had never been handed that code could read every password and
+   * still not touch a shared keyring.
+   */
+  seed?: { passkey?: unknown; recovery?: unknown };
 };
 
 /**
@@ -271,6 +288,10 @@ export class GoogleDriveRemote implements RemoteVaultStore {
   #recoveryCipher: VaultCipher | null;
   readonly #authorize: () => Promise<Authorization>;
   readonly #now: () => string;
+  /** A seed this device holds and the file may not have yet. */
+  #seed: number[] | null = null;
+  /** The seed already in the file, carried forward untouched. */
+  #carriedSeed: BackupPayload["seed"] | undefined = undefined;
   #fileId: string | null = null;
   #folderId: string | null = null;
 
@@ -759,11 +780,67 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       cipher.sealStateAt ? cipher.sealStateAt(value, at) : cipher.sealState(value);
 
     const recovery = mine !== null && canReseal ? await seal(mine, state) : carried;
+
+    /*
+     * The sharing seed goes wherever the vault goes, sealed the same way.
+     *
+     * Written when this device knows it and the file does not, and carried
+     * forward untouched otherwise — a device must never mint a second one, for
+     * the same reason it must not mint a second recovery code: the identity it
+     * wraps is the person, and two of them is one person appearing as two
+     * participants who cannot open each other's keyrings.
+     */
+    const seed =
+      this.#seed && this.#carriedSeed === undefined
+        ? {
+            passkey: await this.#cipher.sealOp(this.#seed as never),
+            ...(mine !== null && canReseal
+              ? { recovery: await mine.sealOp(this.#seed as never) }
+              : {}),
+          }
+        : this.#carriedSeed;
+
     return {
       v: 1,
       passkey: await seal(this.#cipher, state),
       ...(recovery === undefined ? {} : { recovery }),
+      ...(seed === undefined ? {} : { seed }),
     };
+  }
+
+  /**
+   * The seed for this person's sharing identity, from whichever copy opens.
+   *
+   * Null when the file has none, which is every backup written before this
+   * existed and every one written by a device that had no seed to put there.
+   * The caller mints one in that case and it lands on the next write.
+   */
+  async sharingSeed(): Promise<Uint8Array | null> {
+    const authorization = await this.#auth();
+    const fileId = await this.#findFile(authorization);
+    if (!fileId) return null;
+    const content = await this.#store.readText(fileId, authorization);
+    const payload = content.trim() ? parsePayload(content) : null;
+    const sealed = payload?.seed;
+    if (!sealed) return null;
+
+    for (const [copy, cipher] of [
+      [sealed.passkey, this.#cipher],
+      [sealed.recovery, this.#recoveryCipher],
+    ] as const) {
+      if (copy === undefined || !cipher) continue;
+      try {
+        return Uint8Array.from((await cipher.openOp(copy)) as unknown as number[]);
+      } catch {
+        // The other copy, or none.
+      }
+    }
+    return null;
+  }
+
+  /** Carry this seed into the next write, when the file has none. */
+  rememberSharingSeed(seed: Uint8Array): void {
+    this.#seed = [...seed];
   }
 
   /**
@@ -796,12 +873,20 @@ export class GoogleDriveRemote implements RemoteVaultStore {
         cause instanceof Error ? cause.message : "Keyweb couldn't read your backup.",
       );
     }
-    if (!existing.trim()) return undefined;
+    if (!existing.trim()) {
+      this.#carriedSeed = undefined;
+      return undefined;
+    }
     try {
-      return parsePayload(existing)?.recovery;
+      const payload = parsePayload(existing);
+      // Read on the same pass, because this is the read the write already
+      // does: a seed in the file is never rewritten, only carried.
+      this.#carriedSeed = payload?.seed;
+      return payload?.recovery;
     } catch {
       // Unreadable content holds no recovery envelope worth preserving, and
       // refusing to write would strand this device permanently.
+      this.#carriedSeed = undefined;
       return undefined;
     }
   }

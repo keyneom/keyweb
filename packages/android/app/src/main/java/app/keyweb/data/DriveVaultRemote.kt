@@ -56,6 +56,17 @@ class DriveVaultRemote(
      * envelope has no business deleting it.
      */
     private val passkeyCipher: VaultEnvelopeCipher? = null,
+    /**
+     * The seed this person's sharing identity is wrapped with.
+     *
+     * Published into the backup, sealed under both keys, so the person's other
+     * devices arrive at the same identity without being handed the printed
+     * code. Null when this phone does not know it, in which case whatever the
+     * file already holds is carried forward untouched — a second seed would be
+     * a second identity, and one person appearing as two participants who
+     * cannot open the keyrings the other shared.
+     */
+    private val sharingSeed: ByteArray? = null,
 ) : RemoteVaultStore {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -89,6 +100,7 @@ class DriveVaultRemote(
     private data class Payload(val raw: JsonObject) {
         val passkey: JsonElement? get() = raw["passkey"]
         val recovery: JsonElement? get() = raw["recovery"]
+        val seed: JsonElement? get() = raw["seed"]
     }
 
     private fun parse(content: String): Payload? {
@@ -329,6 +341,30 @@ class DriveVaultRemote(
             else key.seal(state, updatedAt = at).also { rewritten += "passkey" }
         }
 
+        // Written when this phone knows it and the file does not; carried
+        // forward otherwise. Never reminted.
+        val seed = if (existing?.seed == null && sharingSeed != null) {
+            rewritten += "seed"
+            buildJsonObject {
+                put(
+                    "passkey",
+                    wire.encodeToJsonElement(
+                        SyncEnvelopeV1.serializer(),
+                        (passkeyCipher ?: cipher).sealBytes(sharingSeed, at),
+                    ),
+                )
+                put(
+                    "recovery",
+                    wire.encodeToJsonElement(
+                        SyncEnvelopeV1.serializer(),
+                        cipher.sealBytes(sharingSeed, at),
+                    ),
+                )
+            }
+        } else {
+            null
+        }
+
         val next = buildJsonObject {
             put("v", 1)
             // Every member this device is not authoritative for survives.
@@ -343,6 +379,7 @@ class DriveVaultRemote(
                     put("passkey", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), passkey))
                 null -> if ("passkey" !in rewritten) existing?.passkey?.let { put("passkey", it) }
             }
+            seed?.let { put("seed", it) }
         }
         return next.toString()
     }

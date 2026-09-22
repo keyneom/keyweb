@@ -157,8 +157,36 @@ class VaultEnvelopeCipher internal constructor(
     val metadata: EnvelopeMetadata,
 ) {
 
-    fun seal(state: VaultState, updatedAt: String): SyncEnvelopeV1 {
-        val plain = vaultJson.encodeToString(VaultState.serializer(), state).toByteArray(Charsets.UTF_8)
+    /**
+     * Seal a short secret rather than a vault.
+     *
+     * The sharing seed travels in the backup beside the vault copies, and both
+     * platforms have to read what the other wrote — so it goes in as the JSON
+     * array of its bytes, which is exactly what the browser's `sealOp` writes
+     * for the same value. Same key, same AAD, same compression rule; only the
+     * payload differs.
+     */
+    fun sealBytes(bytes: ByteArray, updatedAt: String): SyncEnvelopeV1 =
+        sealPlain(bytes.joinToString(",", "[", "]").toByteArray(Charsets.UTF_8), updatedAt)
+
+    /** The bytes back out of [sealBytes], or null if this key does not fit. */
+    fun openBytes(envelope: SyncEnvelopeV1): ByteArray? = runCatching {
+        val text = String(openPlain(envelope), Charsets.UTF_8).trim()
+        require(text.startsWith("[") && text.endsWith("]"))
+        text.removeSurrounding("[", "]")
+            .split(",")
+            .filter { it.isNotBlank() }
+            .map { it.trim().toInt().toByte() }
+            .toByteArray()
+    }.getOrNull()
+
+    fun seal(state: VaultState, updatedAt: String): SyncEnvelopeV1 =
+        sealPlain(
+            vaultJson.encodeToString(VaultState.serializer(), state).toByteArray(Charsets.UTF_8),
+            updatedAt,
+        )
+
+    private fun sealPlain(plain: ByteArray, updatedAt: String): SyncEnvelopeV1 {
 
         // "gzip-if-smaller", as the profile specifies. Compressing a payload
         // that grows is pointless, and the flag must reflect what was done.
@@ -185,6 +213,15 @@ class VaultEnvelopeCipher internal constructor(
     }
 
     fun open(envelope: SyncEnvelopeV1): VaultState {
+        val bytes = openPlain(envelope)
+        return try {
+            vaultJson.decodeFromString(VaultState.serializer(), bytes.toString(Charsets.UTF_8))
+        } catch (cause: Exception) {
+            throw EnvelopeDecryptException("The backup opened but could not be read.", cause)
+        }
+    }
+
+    private fun openPlain(envelope: SyncEnvelopeV1): ByteArray {
         validate(envelope)
         val plain =
             try {
@@ -204,13 +241,7 @@ class VaultEnvelopeCipher internal constructor(
                     cause,
                 )
             }
-
-        val bytes = if (envelope.compression == "gzip") gunzip(plain) else plain
-        return try {
-            vaultJson.decodeFromString(VaultState.serializer(), bytes.toString(Charsets.UTF_8))
-        } catch (cause: Exception) {
-            throw EnvelopeDecryptException("The backup opened but could not be read.", cause)
-        }
+        return if (envelope.compression == "gzip") gunzip(plain) else plain
     }
 
     companion object {
