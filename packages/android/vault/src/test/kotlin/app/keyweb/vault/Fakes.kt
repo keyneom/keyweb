@@ -33,7 +33,11 @@ class FakeRemote : RemoteVaultStore {
         return RemoteRevision(current, version.toString())
     }
 
-    override suspend fun write(state: VaultState, expectedVersion: String?): String {
+    override suspend fun write(
+        state: VaultState,
+        expectedVersion: String?,
+        createOnly: Boolean,
+    ): String {
         if (offline) throw RemoteUnavailableException()
         onBeforeWrite?.invoke()
         if (writeDelayMs > 0) delay(writeDelayMs)

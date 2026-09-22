@@ -179,11 +179,14 @@ class VaultSync(
         for (documentId in byDocument.keys.sortedDescending()) {
             val group = byDocument.getValue(documentId)
             val isVault = documentId == VAULT_DOCUMENT
+            // A keyring adopted under a fresh id is stored in the shared
+            // document under the id that document already uses.
+            val writing = if (isVault) group else group.map { forDataset(it, vault) }
             var after = if (isVault) vault else datasets[documentId] ?: emptyVault()
-            for (op in group) after = applyOp(after, op)
+            for (op in writing) after = applyOp(after, op)
 
-            if (group.size == 1 && isVault) storage.commit(group.first(), after)
-            else storage.commitAll(group, after, documentId)
+            if (writing.size == 1 && isVault) storage.commit(writing.first(), after)
+            else storage.commitAll(writing, after, documentId)
 
             if (isVault) nextVault = after else datasets[documentId] = after
         }
@@ -436,7 +439,11 @@ class VaultSync(
      * rearrangement only; a bound keyring with no remote yet simply queues,
      * and sharing it with a person is a separate step.
      */
-    suspend fun bindKeyring(keyringId: String, datasetId: String): VaultState {
+    suspend fun bindKeyring(
+        keyringId: String,
+        datasetId: String,
+        sourceKeyringId: String? = null,
+    ): VaultState {
         require(datasetId.isNotEmpty()) { "A shared keyring needs a document to live in." }
         val vault = storage.readState()
         val datasets = readDatasets(vault).toMutableMap()
@@ -447,7 +454,8 @@ class VaultSync(
         if (already == datasetId) return composed
         check(already == null) { "That keyring already lives in its own document." }
 
-        val relocations = itemsOn(composed, keyringId).map { relocation(it, keyringId) }
+        val alias = sourceKeyringId?.takeIf { it.isNotEmpty() && it != keyringId }
+        val relocations = itemsOn(composed, keyringId).map { relocation(it, alias ?: keyringId) }
 
         // Read rather than taken from the composed map, which only holds
         // documents that are *already* bound. This one is not, and a document
@@ -456,12 +464,11 @@ class VaultSync(
         val base = storage.readState(datasetId)
 
         // The name is written into the dataset only when the dataset does not
-        // already agree with it. Writing it unconditionally would queue an
-        // operation a *reader* has no right to publish, and their status line
-        // would say "1 change still to back up" for as long as they kept the
-        // keyring.
+        // already agree with it. An alias skips this: the shared document
+        // already has its keyring, and a reader must not rename it.
         val datasetOps = buildList {
-            if (base.keyrings[keyringId]?.name?.value != keyring.name.value) {
+            val named = base.keyrings[alias ?: keyringId]
+            if (alias == null && named?.name?.value != keyring.name.value) {
                 add(VaultOp.KeyringPut(newId(), clock.now(), keyringId, keyring.name.value))
             }
             for (pair in relocations) add(pair[1])
@@ -471,7 +478,7 @@ class VaultSync(
 
         val vaultOps = buildList {
             for (pair in relocations) add(pair[0])
-            add(VaultOp.KeyringBind(newId(), clock.now(), keyringId, datasetId))
+            add(VaultOp.KeyringBind(newId(), clock.now(), keyringId, datasetId, alias))
         }
         val remaining = applyOps(vault, vaultOps)
         storage.commitAll(vaultOps, remaining, VAULT_DOCUMENT)
@@ -698,7 +705,7 @@ class VaultSync(
                 }
 
                 val version = try {
-                    store.write(merged, revision?.version)
+                    store.write(merged, revision?.version, createOnly = revision == null)
                 } catch (conflict: VersionConflictException) {
                     return@repeat // re-read, re-merge
                 } catch (error: RemoteUnavailableException) {
@@ -786,6 +793,26 @@ class VaultSync(
      * and a tombstone published into the shared document would delete it out
      * from under everyone else instead.
      */
+    /** Rewrite a local keyring id to the one the shared document uses. */
+    private fun forDataset(op: VaultOp, vault: VaultState): VaultOp {
+        fun sourceOf(id: String): String = sourceKeyringId(vault.keyrings[id], id)
+        return when (op) {
+            is VaultOp.ItemPut -> {
+                val source = sourceOf(op.keyringId)
+                if (source == op.keyringId) op else op.copy(keyringId = source)
+            }
+            is VaultOp.ItemMove -> {
+                val source = sourceOf(op.keyringId)
+                if (source == op.keyringId) op else op.copy(keyringId = source)
+            }
+            is VaultOp.KeyringPut -> {
+                val source = sourceOf(op.keyringId)
+                if (source == op.keyringId) op else op.copy(keyringId = source)
+            }
+            else -> op
+        }
+    }
+
     private fun documentFor(op: VaultOp, composed: VaultState): String = when (op) {
         is VaultOp.KeyringDelete, is VaultOp.KeyringBind -> VAULT_DOCUMENT
         is VaultOp.KeyringPut -> datasetOf(composed.keyrings[op.keyringId]) ?: VAULT_DOCUMENT

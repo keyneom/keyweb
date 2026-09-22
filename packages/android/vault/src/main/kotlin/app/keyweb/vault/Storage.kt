@@ -176,7 +176,17 @@ interface RemoteVaultStore {
      * [expectedVersion] no longer matches the remote head, so a concurrent
      * writer's revision is never silently clobbered.
      */
-    suspend fun write(state: VaultState, expectedVersion: String?): String
+    /**
+     * [createOnly] is true when the caller believes no file exists yet.
+     *
+     * A file that appeared between the read and this write is a conflict to
+     * re-read, not a vault to replace. The deliberate "replace this backup"
+     * action passes false.
+     */
+    suspend fun write(state: VaultState, expectedVersion: String?, createOnly: Boolean): String
+
+    suspend fun write(state: VaultState, expectedVersion: String?): String =
+        write(state, expectedVersion, createOnly = false)
 }
 
 /**

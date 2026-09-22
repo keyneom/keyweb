@@ -256,13 +256,18 @@ export class VaultSync {
     for (const documentId of order) {
       const group = byDocument.get(documentId)!;
       const isVault = documentId === VAULT_DOCUMENT;
+      // A keyring adopted under a fresh id is stored in the shared document
+      // under the id that document already uses. The composed view speaks the
+      // local id; the file must not, or the owner's copy of the keyring would
+      // gain a second one and this device's private id would leak into it.
+      const writing = isVault ? group : group.map((op) => this.#forDataset(op, vault));
       let after = isVault ? vault : (datasets.get(documentId) ?? emptyVault());
-      for (const op of group) after = applyOp(after, op);
+      for (const op of writing) after = applyOp(after, op);
 
-      if (group.length === 1 && isVault) {
-        await this.#storage.commit(group[0]!, after);
+      if (writing.length === 1 && isVault) {
+        await this.#storage.commit(writing[0]!, after);
       } else {
-        await this.#storage.commitAll(group, after, documentId);
+        await this.#storage.commitAll(writing, after, documentId);
       }
 
       if (isVault) nextVault = after;
@@ -474,7 +479,11 @@ export class VaultSync {
    * rearrangement only; a bound keyring with no remote yet simply queues, and
    * sharing it with a person is a separate step.
    */
-  async bindKeyring(keyringId: string, datasetId: string): Promise<VaultState> {
+  async bindKeyring(
+    keyringId: string,
+    datasetId: string,
+    sourceKeyringId?: string,
+  ): Promise<VaultState> {
     if (!datasetId) throw new Error("A shared keyring needs a document to live in.");
     const vault = await this.#storage.readState();
     const datasets = await this.#readDatasets(vault);
@@ -486,8 +495,12 @@ export class VaultSync {
     if (already === datasetId) return composed;
     if (already) throw new Error("That keyring already lives in its own document.");
 
+    // An adopted share is filed locally under a fresh id and in the shared
+    // document under the id that document already has. Writing the local id
+    // into that document would publish a second keyring beside the owner's.
+    const alias = sourceKeyringId && sourceKeyringId !== keyringId ? sourceKeyringId : null;
     const moving = this.#itemsOn(composed, keyringId);
-    const relocations = moving.map((item) => this.#relocation(item, keyringId));
+    const relocations = moving.map((item) => this.#relocation(item, alias ?? keyringId));
 
     // Read rather than taken from the composed map, which only holds documents
     // that are *already* bound. This one is not, and a document that has just
@@ -499,9 +512,11 @@ export class VaultSync {
     // already agree with it. Writing it unconditionally would queue an
     // operation a *reader* has no right to publish, and their status line
     // would say "1 change still to back up" for as long as they kept the
-    // keyring.
+    // keyring. An alias skips this entirely: the shared document already has
+    // its keyring, under the source id, and a reader must not rename it.
+    const named = base.keyrings[alias ?? keyringId];
     const renames: VaultOp[] =
-      base.keyrings[keyringId]?.name.value === keyring.name.value
+      alias || named?.name.value === keyring.name.value
         ? []
         : [
             {
@@ -526,6 +541,7 @@ export class VaultSync {
         ts: this.#clock.now(),
         keyringId,
         datasetId,
+        ...(alias ? { sourceKeyringId: alias } : {}),
       },
     ];
     const remaining = applyOps(vault, vaultOps);
@@ -887,7 +903,7 @@ export class VaultSync {
 
         let version: string;
         try {
-          version = await store.write(merged, remote ? remote.version : null);
+          version = await store.write(merged, remote ? remote.version : null, !remote);
         } catch (error) {
           if (error instanceof VersionConflictError) continue; // re-read, re-merge
           return this.#offline(error);
@@ -1007,6 +1023,24 @@ export class VaultSync {
    * and a tombstone published into the shared document would delete it out
    * from under everyone else instead.
    */
+  /**
+   * Rewrite a local keyring id to the one the shared document uses.
+   *
+   * No-op for every keyring whose ids match, which is all of them except one
+   * adopted despite a collision.
+   */
+  #forDataset(op: VaultOp, vault: VaultState): VaultOp {
+    const sourceOf = (id: string) => {
+      const source = vault.keyrings[id]?.source?.value;
+      return source ? source : id;
+    };
+    if (op.kind === "item.put" || op.kind === "item.move" || op.kind === "keyring.put") {
+      const source = sourceOf(op.keyringId);
+      return source === op.keyringId ? op : { ...op, keyringId: source };
+    }
+    return op;
+  }
+
   #documentFor(op: VaultOp, composed: VaultState): string {
     switch (op.kind) {
       case "keyring.delete":

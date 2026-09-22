@@ -186,8 +186,27 @@ export type HistoryEntry = {
   ts: Hlc;
 };
 
-/** How many superseded values to retain per item for the undo window. */
+/**
+ * How many superseded values to retain per field.
+ *
+ * A shared cap across every field let a run of note edits evict the only
+ * archived password. The undo window is per field so that cannot happen.
+ */
 export const HISTORY_LIMIT = 12;
+
+/** Newest first, at most [HISTORY_LIMIT] entries of each field. */
+export function capHistory(history: HistoryEntry[]): HistoryEntry[] {
+  const counts = new Map<string, number>();
+  const kept: HistoryEntry[] = [];
+  const sorted = [...history].sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0));
+  for (const entry of sorted) {
+    const seen = counts.get(entry.field) ?? 0;
+    if (seen >= HISTORY_LIMIT) continue;
+    counts.set(entry.field, seen + 1);
+    kept.push(entry);
+  }
+  return kept;
+}
 
 export type ItemRecord = {
   id: string;
@@ -229,7 +248,23 @@ export type KeyringRecord = {
    * keyring at once converge rather than producing two datasets.
    */
   dataset: Reg<string>;
+  /**
+   * The keyring id inside a shared document, when it is not this record's id.
+   *
+   * First-run vaults all use `"personal"`. Adopting a share that also uses
+   * that id under the same id would route this vault's private passwords into
+   * the other person's file. The local record therefore gets a fresh id, and
+   * this register names the id the shared document actually uses. Empty means
+   * the two are the same, which is every keyring that was not adopted that way.
+   */
+  source?: Reg<string>;
 };
+
+/** The id a shared document uses for this keyring. Empty source means its own. */
+export function sourceKeyringId(keyring: KeyringRecord | undefined, id: string): string {
+  const source = keyring?.source?.value;
+  return source ? source : id;
+}
 
 export type VaultState = {
   items: Record<string, ItemRecord>;
@@ -482,9 +517,14 @@ export function fingerprint(state: VaultState): string {
       // and a fingerprint must not fault on one — the cross-platform fixtures
       // are exactly such states.
       const dataset = ring.dataset;
-      return !dataset || dataset.ts === HLC_ZERO
-        ? base
-        : `${base}|${dataset.ts}:${dataset.value}`;
+      const withDataset =
+        !dataset || dataset.ts === HLC_ZERO ? base : `${base}|${dataset.ts}:${dataset.value}`;
+      // Same rule as dataset: an unwritten source must not change the
+      // fingerprint of every vault that has never adopted under a new id.
+      const source = ring.source;
+      return !source || source.ts === HLC_ZERO
+        ? withDataset
+        : `${withDataset}|${source.ts}:${source.value}`;
     })
     .join(";");
   return `v1:${items}#${keyrings}`;

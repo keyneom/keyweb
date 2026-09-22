@@ -93,6 +93,8 @@ sealed interface VaultOp {
         override val ts: Hlc,
         val keyringId: String,
         val datasetId: String,
+        /** Set when the shared document's keyring id is not [keyringId]. */
+        val sourceKeyringId: String? = null,
     ) : VaultOp
 
     @Serializable
@@ -105,9 +107,7 @@ sealed interface VaultOp {
 }
 
 private fun pushHistory(history: List<HistoryEntry>, entry: HistoryEntry): List<HistoryEntry> =
-    (listOf(entry) + history.filterNot { it.field == entry.field && it.ts == entry.ts })
-        .sortedByDescending { it.ts }
-        .take(HISTORY_LIMIT)
+    capHistory(listOf(entry) + history.filterNot { it.field == entry.field && it.ts == entry.ts })
 
 /**
  * Apply one operation. Pure: returns a new state and never mutates the input.
@@ -127,7 +127,17 @@ fun applyOp(state: VaultState, op: VaultOp): VaultState = when (op) {
     is VaultOp.KeyringBind -> {
         val existing = state.keyrings[op.keyringId] ?: newKeyring(op.keyringId, "", op.ts)
         val incoming = Reg(op.datasetId, op.ts)
-        val next = existing.copy(dataset = pickReg(existing.dataset, incoming) ?: incoming)
+        val sourceId = op.sourceKeyringId
+        val source = if (!sourceId.isNullOrEmpty() && sourceId != op.keyringId) {
+            val nextSource = Reg(sourceId, op.ts)
+            pickReg(existing.source, nextSource) ?: nextSource
+        } else {
+            existing.source
+        }
+        val next = existing.copy(
+            dataset = pickReg(existing.dataset, incoming) ?: incoming,
+            source = source,
+        )
         state.copy(keyrings = state.keyrings + (op.keyringId to next))
     }
 

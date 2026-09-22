@@ -101,7 +101,15 @@ export interface RemoteVaultStore {
    * `expectedVersion` no longer matches the remote head, so a concurrent
    * writer's revision is never silently clobbered.
    */
-  write(state: VaultState, expectedVersion: string | null): Promise<string>;
+  write(
+    state: VaultState,
+    expectedVersion: string | null,
+    /**
+     * True when the caller believes no file exists yet. A file that appeared
+     * since the read is a conflict to re-read, not a vault to replace.
+     */
+    createOnly?: boolean,
+  ): Promise<string>;
 }
 
 type OutboxEntry = { op: VaultOp; seq: number };

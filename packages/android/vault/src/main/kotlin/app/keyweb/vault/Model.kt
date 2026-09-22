@@ -215,8 +215,26 @@ data class HistoryEntry(
     val ts: Hlc,
 )
 
-/** How many superseded values to retain per item for the undo window. */
+/**
+ * How many superseded values to retain per field.
+ *
+ * A shared cap across every field let a run of note edits evict the only
+ * archived password. The undo window is per field so that cannot happen.
+ */
 const val HISTORY_LIMIT = 12
+
+/** Newest first, at most [HISTORY_LIMIT] entries of each field. */
+fun capHistory(history: List<HistoryEntry>): List<HistoryEntry> {
+    val counts = mutableMapOf<String, Int>()
+    val kept = mutableListOf<HistoryEntry>()
+    for (entry in history.sortedByDescending { it.ts }) {
+        val seen = counts[entry.field] ?: 0
+        if (seen >= HISTORY_LIMIT) continue
+        counts[entry.field] = seen + 1
+        kept += entry
+    }
+    return kept
+}
 
 @Serializable
 data class ItemRecord(
@@ -253,7 +271,19 @@ data class KeyringRecord(
      * Defaulted, so a vault written before this existed still decodes.
      */
     val dataset: Reg<String> = Reg("", HLC_ZERO),
+    /**
+     * The keyring id inside a shared document, when it is not this record's id.
+     *
+     * Empty means the two are the same. Set when a share was adopted under a
+     * fresh local id because the shared document's id was already in use here
+     * — binding that id would have routed private passwords into the file.
+     */
+    val source: Reg<String> = Reg("", HLC_ZERO),
 )
+
+/** The id a shared document uses for this keyring. Empty source means its own. */
+fun sourceKeyringId(keyring: KeyringRecord?, id: String): String =
+    keyring?.source?.value?.takeIf { it.isNotEmpty() } ?: id
 
 /** Where a keyring's items are kept, or null when they are in the vault. */
 fun datasetOf(keyring: KeyringRecord?): String? = keyring?.dataset?.value?.takeIf { it.isNotEmpty() }
@@ -412,7 +442,13 @@ fun fingerprint(state: VaultState): String {
         // a bug: binding a keyring to a dataset changes nothing else in the
         // vault, so the sync saw an unchanged fingerprint, skipped the upload,
         // and other devices never learned where the items had moved to.
-        if (ring.dataset.ts == HLC_ZERO) base else "$base|${ring.dataset.ts}:${ring.dataset.value}"
+        val withDataset =
+            if (ring.dataset.ts == HLC_ZERO) base
+            else "$base|${ring.dataset.ts}:${ring.dataset.value}"
+        // An unwritten source must not change the fingerprint of a vault that
+        // has never adopted a share under a new id.
+        if (ring.source.ts == HLC_ZERO) withDataset
+        else "$withDataset|${ring.source.ts}:${ring.source.value}"
     }
     return "v1:$items#$keyrings"
 }

@@ -1,4 +1,10 @@
-import { datasetOf, emptyVault, type VaultState } from "./model.js";
+import {
+  datasetOf,
+  emptyVault,
+  sourceKeyringId,
+  type KeyringRecord,
+  type VaultState,
+} from "./model.js";
 import { mergeVaults } from "./merge.js";
 
 /**
@@ -61,6 +67,15 @@ export function sandboxDataset(
   keyringId: string,
   dataset: VaultState,
   vault: VaultState = emptyVault(),
+  /**
+   * The id this vault bound, when it differs from [keyringId].
+   *
+   * An adopted share keeps the shared document's id in the file and a fresh
+   * id locally. Items this vault already holds belong to the local id, not
+   * to the source id, even when those strings would otherwise match — that
+   * match is exactly the `"personal"` collision.
+   */
+  localKeyringId: string = keyringId,
 ): VaultState {
   const keyring = dataset.keyrings[keyringId];
   const items = Object.fromEntries(
@@ -70,13 +85,36 @@ export function sandboxDataset(
       // An item this vault already holds on a different keyring is ours, not
       // theirs. Merging the two would let a later HLC on their copy rebind
       // the register and route the next save into their file.
-      return !ours || ours.keyring.value === keyringId;
+      return !ours || ours.keyring.value === localKeyringId;
     }),
   );
   return {
     keyrings: keyring ? { [keyringId]: keyring } : {},
     items,
   };
+}
+
+/**
+ * Show a shared document's keyring under the id this vault bound.
+ *
+ * The bytes in the file keep the source id, so the owner and every other
+ * member still see their own keyring. Only this device's composed view uses
+ * the local id. Writing back translates the other way.
+ */
+function presentAs(dataset: VaultState, sourceId: string, localId: string): VaultState {
+  if (sourceId === localId) return dataset;
+  const ring = dataset.keyrings[sourceId];
+  const keyrings = { ...dataset.keyrings };
+  delete keyrings[sourceId];
+  if (ring) keyrings[localId] = { ...ring, id: localId };
+  const items: VaultState["items"] = {};
+  for (const [id, item] of Object.entries(dataset.items)) {
+    items[id] =
+      item.keyring.value === sourceId
+        ? { ...item, keyring: { ...item.keyring, value: localId } }
+        : item;
+  }
+  return { keyrings, items };
 }
 
 /**
@@ -99,7 +137,11 @@ export function composeVault(
   for (const id of [...datasets.keys()].sort()) {
     const keyringId = expected.get(id);
     if (!keyringId) continue;
-    composed = mergeVaults(composed, sandboxDataset(keyringId, datasets.get(id)!, vault));
+    const sourceId = sourceKeyringId(vault.keyrings[keyringId], keyringId);
+    composed = mergeVaults(
+      composed,
+      presentAs(sandboxDataset(sourceId, datasets.get(id)!, vault, keyringId), sourceId, keyringId),
+    );
   }
   // Bindings are this device's record of where items live. Restore them from
   // the vault after the merge so a later register in a shared file cannot
@@ -107,7 +149,11 @@ export function composeVault(
   const keyrings = { ...composed.keyrings };
   for (const [id, ring] of Object.entries(vault.keyrings)) {
     const current = keyrings[id];
-    if (current) keyrings[id] = { ...current, dataset: ring.dataset };
+    if (!current) continue;
+    const next: KeyringRecord = { ...current, dataset: ring.dataset };
+    if (ring.source) next.source = ring.source;
+    else delete next.source;
+    keyrings[id] = next;
   }
   return { ...composed, keyrings };
 }

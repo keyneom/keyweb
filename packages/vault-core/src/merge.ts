@@ -7,9 +7,9 @@ import type {
   VaultState,
 } from "./model.js";
 import {
+  capHistory,
   fieldsOf,
   historyOf,
-  HISTORY_LIMIT,
   itemsOf,
   keyringsOf,
   pickReg,
@@ -34,7 +34,7 @@ function mergeHistory(a: HistoryEntry[] | undefined, b: HistoryEntry[] | undefin
     seen.add(key);
     all.push(entry);
   }
-  return all.sort((x, y) => (x.ts > y.ts ? -1 : x.ts < y.ts ? 1 : 0)).slice(0, HISTORY_LIMIT);
+  return capHistory(all);
 }
 
 function mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
@@ -44,21 +44,35 @@ function mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
   const aFields = fieldsOf(a);
   const bFields = fieldsOf(b);
   const names = new Set([...Object.keys(aFields), ...Object.keys(bFields)] as ItemField[]);
+  // The losing value of a concurrent edit is not in either history yet: each
+  // device archived only what it itself overwrote. Without this, one of the
+  // two passwords is gone from the item and from the undo window.
+  let history = mergeHistory(a.history, b.history);
   for (const name of names) {
-    const winner = pickReg(aFields[name], bFields[name]);
-    if (winner) fields[name] = winner;
+    const left = aFields[name];
+    const right = bFields[name];
+    const winner = pickReg(left, right);
+    if (!winner) continue;
+    fields[name] = winner;
+    const loser = winner === left ? right : left;
+    if (loser && loser.ts !== winner.ts && loser.value !== winner.value) {
+      history = capHistory([
+        { field: name, value: loser.value, ts: loser.ts },
+        ...history.filter((entry) => !(entry.field === name && entry.ts === loser.ts)),
+      ]);
+    }
   }
   return {
     id: a.id,
     keyring: pickReg(a.keyring, b.keyring) ?? a.keyring,
     deleted: pickReg(a.deleted, b.deleted) ?? a.deleted,
     fields,
-    history: mergeHistory(a.history, b.history),
+    history,
   };
 }
 
 function mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord {
-  return {
+  const merged: KeyringRecord = {
     id: a.id,
     name: pickReg(a.name, b.name) ?? a.name,
     deleted: pickReg(a.deleted, b.deleted) ?? a.deleted,
@@ -72,6 +86,9 @@ function mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord {
     // exactly what those states meant.
     dataset: pickReg(a.dataset, b.dataset) ?? reg("", HLC_ZERO),
   };
+  const source = pickReg(a.source, b.source);
+  if (source) merged.source = source;
+  return merged;
 }
 
 /**

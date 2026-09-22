@@ -1,15 +1,29 @@
 package app.keyweb.vault
 
 private fun mergeHistory(a: List<HistoryEntry>, b: List<HistoryEntry>): List<HistoryEntry> =
-    (a + b)
-        .distinctBy { it.field to it.ts }
-        .sortedByDescending { it.ts }
-        .take(HISTORY_LIMIT)
+    capHistory(
+        (a + b)
+            .distinctBy { it.field to it.ts }
+            .sortedByDescending { it.ts },
+    )
 
 private fun mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
-    val fields = buildMap {
-        for (name in a.fields.keys + b.fields.keys) {
-            pickReg(a.fields[name], b.fields[name])?.let { put(name, it) }
+    val fields = mutableMapOf<ItemField, Reg<String>>()
+    // The losing value of a concurrent edit is not in either history yet: each
+    // device archived only what it itself overwrote. Without this, one of the
+    // two passwords is gone from the item and from the undo window.
+    var history = mergeHistory(a.history, b.history)
+    for (name in a.fields.keys + b.fields.keys) {
+        val left = a.fields[name]
+        val right = b.fields[name]
+        val winner = pickReg(left, right) ?: continue
+        fields[name] = winner
+        val loser = if (winner === left) right else left
+        if (loser != null && loser.ts != winner.ts && loser.value != winner.value) {
+            history = capHistory(
+                listOf(HistoryEntry(name, loser.value, loser.ts)) +
+                    history.filterNot { it.field == name && it.ts == loser.ts },
+            )
         }
     }
     return ItemRecord(
@@ -17,7 +31,7 @@ private fun mergeItem(a: ItemRecord, b: ItemRecord): ItemRecord {
         keyring = pickReg(a.keyring, b.keyring) ?: a.keyring,
         deleted = pickReg(a.deleted, b.deleted) ?: a.deleted,
         fields = fields,
-        history = mergeHistory(a.history, b.history),
+        history = history,
     )
 }
 
@@ -30,6 +44,7 @@ private fun mergeKeyring(a: KeyringRecord, b: KeyringRecord): KeyringRecord =
         // into its own document at the same moment converge on one dataset
         // instead of each keeping their own and splitting the passwords in two.
         dataset = pickReg(a.dataset, b.dataset) ?: Reg("", HLC_ZERO),
+        source = pickReg(a.source, b.source) ?: a.source,
     )
 
 /**

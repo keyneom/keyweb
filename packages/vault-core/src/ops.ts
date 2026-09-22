@@ -1,7 +1,7 @@
 import type { Hlc } from "./hlc.js";
 import type { HistoryEntry, ItemField, Reg, VaultState } from "./model.js";
 import {
-  HISTORY_LIMIT,
+  capHistory,
   itemsOf,
   keyringsOf,
   newItem,
@@ -56,13 +56,19 @@ export type VaultOp =
    * items belong; actually moving them is the caller's job, because it spans
    * two documents and only the storage layer can do that atomically.
    */
-  | { kind: "keyring.bind"; opId: string; ts: Hlc; keyringId: string; datasetId: string };
+  | {
+      kind: "keyring.bind";
+      opId: string;
+      ts: Hlc;
+      keyringId: string;
+      datasetId: string;
+      /** Set when the shared document's keyring id is not [keyringId]. */
+      sourceKeyringId?: string;
+    };
 
 function pushHistory(history: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
   const deduped = history.filter((h) => !(h.field === entry.field && h.ts === entry.ts));
-  return [entry, ...deduped]
-    .sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0))
-    .slice(0, HISTORY_LIMIT);
+  return capHistory([entry, ...deduped]);
 }
 
 /**
@@ -83,9 +89,15 @@ export function applyOp(state: VaultState, op: VaultOp): VaultState {
     }
     case "keyring.bind": {
       const existing = keyringsOf(state)[op.keyringId] ?? newKeyring(op.keyringId, "", op.ts);
+      const sourceId = op.sourceKeyringId;
+      const source =
+        sourceId && sourceId !== op.keyringId
+          ? (pickReg(existing.source, reg(sourceId, op.ts)) ?? reg(sourceId, op.ts))
+          : existing.source;
       const next = {
         ...existing,
         dataset: pickReg(existing.dataset, reg(op.datasetId, op.ts)) ?? reg(op.datasetId, op.ts),
+        ...(source ? { source } : {}),
       };
       return { ...state, keyrings: { ...keyringsOf(state), [op.keyringId]: next } };
     }

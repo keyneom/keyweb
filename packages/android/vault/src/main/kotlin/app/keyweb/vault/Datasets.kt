@@ -49,6 +49,15 @@ fun sandboxDataset(
     keyringId: String,
     dataset: VaultState,
     vault: VaultState = emptyVault(),
+    /**
+     * The id this vault bound, when it differs from [keyringId].
+     *
+     * An adopted share keeps the shared document's id in the file and a fresh
+     * id locally. Items already in this vault belong to the local id, not the
+     * source id, even when those strings match — that match is the `"personal"`
+     * collision.
+     */
+    localKeyringId: String = keyringId,
 ): VaultState {
     val keyring = dataset.keyrings[keyringId]
     val items = dataset.items.filter { (id, item) ->
@@ -57,12 +66,34 @@ fun sandboxDataset(
         // An item this vault already holds on a different keyring is ours,
         // not theirs. Merging the two would let a later HLC on their copy
         // rebind the register and route the next save into their file.
-        ours == null || ours.keyring.value == keyringId
+        ours == null || ours.keyring.value == localKeyringId
     }
     return VaultState(
         items = items,
         keyrings = if (keyring != null) mapOf(keyringId to keyring) else emptyMap(),
     )
+}
+
+/**
+ * Show a shared document's keyring under the id this vault bound.
+ *
+ * The bytes in the file keep the source id. Only this device's composed view
+ * uses the local id. Writing back translates the other way.
+ */
+private fun presentAs(dataset: VaultState, sourceId: String, localId: String): VaultState {
+    if (sourceId == localId) return dataset
+    val ring = dataset.keyrings[sourceId]
+    val keyrings = dataset.keyrings.toMutableMap()
+    keyrings.remove(sourceId)
+    if (ring != null) keyrings[localId] = ring.copy(id = localId)
+    val items = dataset.items.mapValues { (_, item) ->
+        if (item.keyring.value == sourceId) {
+            item.copy(keyring = item.keyring.copy(value = localId))
+        } else {
+            item
+        }
+    }
+    return VaultState(items = items, keyrings = keyrings)
 }
 
 /**
@@ -80,7 +111,15 @@ fun composeVault(vault: VaultState, datasets: Map<String, VaultState>): VaultSta
     var composed = vault
     for (id in datasets.keys.sorted()) {
         val keyringId = expected[id] ?: continue
-        composed = mergeVaults(composed, sandboxDataset(keyringId, datasets.getValue(id), vault))
+        val sourceId = sourceKeyringId(vault.keyrings[keyringId], keyringId)
+        composed = mergeVaults(
+            composed,
+            presentAs(
+                sandboxDataset(sourceId, datasets.getValue(id), vault, keyringId),
+                sourceId,
+                keyringId,
+            ),
+        )
     }
     // Bindings are this device's record of where items live. Restore them
     // from the vault after the merge so a later register in a shared file
@@ -88,7 +127,7 @@ fun composeVault(vault: VaultState, datasets: Map<String, VaultState>): VaultSta
     val keyrings = composed.keyrings.toMutableMap()
     for ((id, ring) in vault.keyrings) {
         val current = keyrings[id] ?: continue
-        keyrings[id] = current.copy(dataset = ring.dataset)
+        keyrings[id] = current.copy(dataset = ring.dataset, source = ring.source)
     }
     return composed.copy(keyrings = keyrings)
 }
