@@ -52,9 +52,23 @@ object SecretClipboard {
      * timer they know nothing about — a clipboard that empties itself at
      * random is its own kind of bug.
      */
-    fun clearIfStill(context: Context, value: String) {
-        val clipboard = clipboard(context) ?: return
-        if (currentText(clipboard) != value) return
+    /**
+     * Remove [value] if it is still the clipboard.
+     *
+     * Returns false when the clipboard could not be read, which is what a
+     * backgrounded app gets on Android 10 and later. The caller retries the
+     * next time Keyweb is in front. Returns true when the secret is gone or
+     * was replaced, so there is nothing left to retry.
+     */
+    fun clearIfStill(context: Context, value: String): Boolean {
+        val clipboard = clipboard(context) ?: return false
+        val current = try {
+            currentText(clipboard)
+        } catch (cause: SecurityException) {
+            return false
+        }
+        if (current == null) return false
+        if (current != value) return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             clipboard.clearPrimaryClip()
         } else {
@@ -62,6 +76,7 @@ object SecretClipboard {
             // closest equivalent, and still removes the secret.
             clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
         }
+        return true
     }
 
     private fun currentText(clipboard: ClipboardManager): String? =

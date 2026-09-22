@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -121,6 +123,7 @@ private fun FileRow(
     onRemove: (String) -> Unit,
 ) {
     val colors = LocalKeywebStatus.current
+    var confirming by remember { mutableStateOf(false) }
     val blob = state.items[file.blobId]
     val type = blob?.field("type")
     val bitmap = rememberBitmap(if (isViewableImage(type)) blob?.field("secret:data") else null)
@@ -153,9 +156,25 @@ private fun FileRow(
             )
         }
         TextButton(onClick = { onOpen(file.blobId) }, enabled = blob != null) { Text("Open") }
-        TextButton(onClick = { onRemove(file.blobId) }) {
+        TextButton(onClick = { confirming = true }) {
             Text("Remove", color = colors.risk)
         }
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Remove ${file.name}?") },
+            text = { Text("This takes the file off this password. It cannot be undone here.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    onRemove(file.blobId)
+                }) { Text("Yes, remove", color = colors.risk) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text("Keep it") }
+            },
+        )
     }
 }
 

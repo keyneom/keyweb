@@ -66,8 +66,17 @@ class KeywebAutofillService : AutofillService() {
             return
         }
 
+        val domain = Matching.domainForFill(found.username?.webDomain, found.password?.webDomain)
+        if (domain is Matching.FillDomain.Conflict) {
+            // A form that names two sites is not one login. Offering either
+            // password would hand it to the other site.
+            callback.onSuccess(null)
+            return
+        }
+        val webDomain = (domain as? Matching.FillDomain.Known)?.domain
+
         val intent = Intent(this, AutofillUnlockActivity::class.java).apply {
-            putExtra(AutofillUnlockActivity.EXTRA_WEB_DOMAIN, read.webDomain)
+            putExtra(AutofillUnlockActivity.EXTRA_WEB_DOMAIN, webDomain)
             putExtra(AutofillUnlockActivity.EXTRA_PACKAGE, callingPackageOf(structure))
             putExtra(AutofillUnlockActivity.EXTRA_USERNAME_ID, found.username?.id as? AutofillId)
             putExtra(AutofillUnlockActivity.EXTRA_PASSWORD_ID, found.password?.id as? AutofillId)

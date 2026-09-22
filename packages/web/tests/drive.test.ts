@@ -9,7 +9,7 @@ import {
   VersionConflictError,
 } from "@keyweb/vault-core";
 import type { GoogleDriveFileStore } from "@keyneom/sync-kit/stores/google-drive";
-import { GoogleDriveRemote, TooManyBackupsError } from "../src/vault/drive";
+import { BackupBehindError, GoogleDriveRemote, TooManyBackupsError } from "../src/vault/drive";
 import { unlockVault } from "../src/vault/crypto";
 import { FakeDrive, fakeAuthenticator } from "./helpers";
 
@@ -173,6 +173,77 @@ describe("encrypted Drive backup", () => {
     await sync.sync();
     expect(await storage.pending()).toHaveLength(0);
     expect(await sync.isFullyBackedUp()).toBe(true);
+  });
+});
+
+/**
+ * A copy this browser can open, with a newer one beside it that it cannot.
+ *
+ * Reachable in one move: a phone with no passkey rewrites only the recovery
+ * copy and leaves the passkey copy frozen. A browser holding the passkey but
+ * not the code then opens the frozen one, and every timestamp in the file says
+ * it is not the newest.
+ *
+ * Returning it would be the browser reporting "synced" over a vault the phone
+ * has moved on from, and the next write would stamp that stale state as the
+ * newest thing in the file. The phone refuses this case; so does this.
+ */
+describe("a browser that can only open the older copy", () => {
+  function fileWith(passkeyAt: string, recoveryAt: string, passkeyCopy: unknown) {
+    return JSON.stringify({
+      v: 1,
+      passkey: passkeyCopy,
+      recovery: {
+        schemaVersion: 1,
+        algorithm: "AES-GCM-256",
+        compression: "gzip",
+        credentialId: "recovery",
+        rpId: "keyweb",
+        prfInput: "x",
+        kdfSalt: "y",
+        nonce: "z",
+        ciphertext: "sealed-with-a-code-this-browser-has-not-got",
+        updatedAt: recoveryAt,
+      },
+      // Written last so the passkey member keeps the timestamp under test.
+      ...(passkeyAt ? {} : {}),
+    });
+  }
+
+  it("refuses, rather than calling the stale copy a sync", async () => {
+    const drive = new FakeDrive();
+    const { sync, remote } = await makeDevice(drive, "web", 7);
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.sync();
+
+    // The passkey copy this browser wrote, now with a newer recovery copy
+    // beside it that only the phone's code opens.
+    const written = JSON.parse(drive.vaultFile()!.content);
+    drive.vaultFile()!.content = fileWith(
+      written.passkey.updatedAt,
+      "2099-01-01T00:00:00.000Z",
+      written.passkey,
+    );
+
+    await expect(remote.read()).rejects.toThrow(BackupBehindError);
+  });
+
+  it("still reads when the copy it can open is the newest", async () => {
+    const drive = new FakeDrive();
+    const { sync, remote } = await makeDevice(drive, "web", 7);
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.sync();
+
+    const written = JSON.parse(drive.vaultFile()!.content);
+    drive.vaultFile()!.content = fileWith(
+      written.passkey.updatedAt,
+      "2000-01-01T00:00:00.000Z",
+      written.passkey,
+    );
+
+    const revision = await remote.read();
+    expect(revision).not.toBeNull();
+    expect(revision!.state.keyrings["ring"]!.name.value).toBe("Household");
   });
 });
 

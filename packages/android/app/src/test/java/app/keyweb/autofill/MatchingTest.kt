@@ -88,6 +88,34 @@ class MatchingTest {
     }
 
     @Test
+    fun `a hosting suffix is its own site per tenant`() {
+        assertEquals("alice.github.io", Matching.registrableDomain("https://alice.github.io/login"))
+        assertEquals("eve.github.io", Matching.registrableDomain("https://www.eve.github.io/"))
+        assertFalse(Matching.urlMatches("https://alice.github.io", "https://eve.github.io"))
+        assertFalse(Matching.urlMatches("https://mine.netlify.app", "https://theirs.netlify.app"))
+        // The suffix itself is not a site anyone saved a password for.
+        assertNull(Matching.registrableDomain("https://github.io"))
+    }
+
+    @Test
+    fun `an unlisted suffix matches the full host only`() {
+        assertEquals("accounts.example.test", Matching.registrableDomain("accounts.example.test"))
+        assertFalse(Matching.urlMatches("https://example.test", "https://accounts.example.test"))
+    }
+
+    @Test
+    fun `fields on different sites are not one fill`() {
+        assertTrue(
+            Matching.domainForFill("https://alice.github.io", "https://eve.github.io")
+                is Matching.FillDomain.Conflict,
+        )
+        val known = Matching.domainForFill(null, "https://www.example.com/login")
+        assertTrue(known is Matching.FillDomain.Known)
+        assertEquals("https://www.example.com/login", (known as Matching.FillDomain.Known).domain)
+        assertTrue(Matching.domainForFill(null, null) is Matching.FillDomain.None)
+    }
+
+    @Test
     fun `an ip address is its own site and matches only itself`() {
         assertEquals("192.168.1.10", Matching.registrableDomain("http://192.168.1.10:8080/"))
         assertTrue(Matching.urlMatches("http://192.168.1.10:8080/", "192.168.1.10"))

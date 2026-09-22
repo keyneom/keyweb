@@ -813,6 +813,24 @@ describe("a hostile share", () => {
     expect(datasetOf(state.keyrings["personal"])).toBeNull();
     expect(itemField(state.items["bank"]!, "title")).toBe("Bank");
     expect(await storage.readState("ds-evil")).toEqual({ items: {}, keyrings: {} });
+    // And the join is still waiting, rather than thrown away.
+    expect(sharing.blockedJoins().map((join) => join.remoteKeyringId)).toEqual(["personal"]);
+  });
+
+  it("adds a colliding share under a fresh id", async () => {
+    const { sharing, sync } = await joinHostile("personal");
+    await sharing.adoptJoinedKeyrings();
+    await sharing.adoptAsNewKeyring("ds-evil");
+
+    const state = await sync.state();
+    expect(datasetOf(state.keyrings["personal"])).toBeNull();
+    expect(itemField(state.items["bank"]!, "title")).toBe("Bank");
+    const shared = Object.values(state.keyrings).find(
+      (ring) => ring.id !== "personal" && ring.id !== "house",
+    );
+    expect(shared?.name.value).toBe("Household");
+    expect(datasetOf(shared)).toBe("ds-evil");
+    expect(sharing.blockedJoins()).toEqual([]);
   });
 
   it("cannot rename the keyring it tried to capture", async () => {

@@ -45,6 +45,8 @@ export function VaultList({
   onDeleteMany,
   onMoveMany,
   onSync,
+  blockedJoins = [],
+  onAdoptBlocked,
 }: {
   state: VaultState;
   items: ItemRecord[];
@@ -60,6 +62,8 @@ export function VaultList({
   onDeleteMany: (itemIds: string[]) => Promise<void>;
   onMoveMany: (itemIds: string[], keyringId: string) => Promise<void>;
   onSync: () => void;
+  blockedJoins?: { datasetId: string; remoteName: string; localName: string }[];
+  onAdoptBlocked?: (datasetId: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [ring, setRing] = useState<string | null>(null);
@@ -209,6 +213,25 @@ export function VaultList({
           </button>
         </header>
       )}
+
+      {blockedJoins.map((join) => (
+        <p className="status" data-tone="attn" key={join.datasetId}>
+          <span>
+            <b>{join.remoteName} couldn't be added under that name.</b>
+            <em>
+              You already have {join.localName}. Adding the shared keyring under the same internal
+              name would mix your private passwords into their file.
+            </em>
+          </span>
+          <button
+            type="button"
+            className="btn sec"
+            onClick={() => void onAdoptBlocked?.(join.datasetId)}
+          >
+            Add it as its own keyring
+          </button>
+        </p>
+      ))}
 
       <label className="search">
         <SearchIcon />

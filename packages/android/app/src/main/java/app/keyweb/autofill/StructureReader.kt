@@ -25,21 +25,26 @@ object StructureReader {
         var domain: String? = null
 
         for (index in 0 until structure.windowNodeCount) {
-            walk(structure.getWindowNodeAt(index).rootViewNode) { node ->
-                node.webDomain?.takeIf { it.isNotBlank() }?.let { if (domain == null) domain = it }
-                toField(node)?.let(fields::add)
+            walk(structure.getWindowNodeAt(index).rootViewNode, inherited = null) { node, here ->
+                if (domain == null && !here.isNullOrBlank()) domain = here
+                toField(node, here)?.let(fields::add)
             }
         }
         return ReadStructure(fields, domain)
     }
 
-    private fun walk(node: AssistStructure.ViewNode?, visit: (AssistStructure.ViewNode) -> Unit) {
+    private fun walk(
+        node: AssistStructure.ViewNode?,
+        inherited: String?,
+        visit: (AssistStructure.ViewNode, String?) -> Unit,
+    ) {
         if (node == null) return
-        visit(node)
-        for (index in 0 until node.childCount) walk(node.getChildAt(index), visit)
+        val here = node.webDomain?.takeIf { it.isNotBlank() } ?: inherited
+        visit(node, here)
+        for (index in 0 until node.childCount) walk(node.getChildAt(index), here, visit)
     }
 
-    private fun toField(node: AssistStructure.ViewNode): FormField? {
+    private fun toField(node: AssistStructure.ViewNode, webDomain: String?): FormField? {
         // Only nodes the platform will actually let us fill.
         val id = node.autofillId ?: return null
         if (node.autofillType != View.AUTOFILL_TYPE_TEXT) return null
@@ -58,6 +63,7 @@ object StructureReader {
             // An invisible field is a trap as often as an oversight; either
             // way filling one puts a password somewhere nobody can see.
             fillable = node.visibility == View.VISIBLE,
+            webDomain = webDomain,
         )
     }
 

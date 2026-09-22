@@ -17,13 +17,16 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +38,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ImportScreen
@@ -101,7 +107,26 @@ class MainActivity : FragmentActivity() {
          */
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         setContent { KeywebApp(viewModel, this) }
-        viewModel.openShareLink(intent?.data?.toString())
+        consumeLink(intent)
+    }
+
+    /**
+     * Hand a link to the view model once, and only once.
+     *
+     * The intent that started a task outlives the process: kill Keyweb and
+     * resume it from recents and Android recreates this activity with the same
+     * intent, so an invitation somebody dealt with days ago reappears as if it
+     * had just arrived. `singleTask` made that likely rather than rare, since
+     * there is now one long-lived task rather than an instance per link.
+     *
+     * Clearing the data as it is read is what makes it a delivery rather than
+     * a standing instruction.
+     */
+    private fun consumeLink(intent: android.content.Intent?) {
+        val url = intent?.data?.toString() ?: return
+        intent.data = null
+        setIntent(intent)
+        viewModel.openShareLink(url)
     }
 
     /**
@@ -122,7 +147,7 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        viewModel.openShareLink(intent.data?.toString())
+        consumeLink(intent)
     }
 }
 
@@ -283,16 +308,35 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
         }
 
         val clipboardScope = rememberCoroutineScope()
+        var pendingClear by remember { mutableStateOf<Pair<String, Long>?>(null) }
+        var dismissedBlocks by remember { mutableStateOf(setOf<String>()) }
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner, pendingClear) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+                val pending = pendingClear ?: return@LifecycleEventObserver
+                // A backgrounded app cannot read the clipboard, so the timer
+                // often no-ops. Coming back to the front is when the read works.
+                if (System.currentTimeMillis() < pending.second) return@LifecycleEventObserver
+                if (SecretClipboard.clearIfStill(context, pending.first)) pendingClear = null
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
 
         fun copy(value: String, label: String) {
             SecretClipboard.copy(context, value, label)
             if (value.isEmpty()) return
+            val deadline = System.currentTimeMillis() + SecretClipboard.CLEAR_AFTER_MS
+            pendingClear = value to deadline
             clipboardScope.launch {
                 delay(SecretClipboard.CLEAR_AFTER_MS)
                 // Only if it is still ours: someone who copied something else
                 // in the meantime must not have it wiped by a timer they know
-                // nothing about.
-                SecretClipboard.clearIfStill(context, value)
+                // nothing about. False means we could not see the clipboard
+                // from the background; the next time this screen is in front
+                // tries again.
+                if (SecretClipboard.clearIfStill(context, value)) pendingClear = null
             }
             viewModel.showToast("$label copied. It clears in a minute.")
         }
@@ -316,6 +360,33 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         onUnlock = { viewModel.unlock(activity) },
                     )
                     return@Box
+                }
+
+                val blocked = ui.blockedJoins.firstOrNull { it.datasetId !in dismissedBlocks }
+                if (blocked != null) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            dismissedBlocks = dismissedBlocks + blocked.datasetId
+                        },
+                        title = { Text("${blocked.remoteName} couldn't be added under that name") },
+                        text = {
+                            Text(
+                                "You already have ${blocked.localName}. Adding the shared keyring " +
+                                    "under the same internal name would mix your private passwords " +
+                                    "into their file.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.adoptBlockedJoin(blocked.datasetId) }) {
+                                Text("Add it as its own keyring")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                dismissedBlocks = dismissedBlocks + blocked.datasetId
+                            }) { Text("Not now") }
+                        },
+                    )
                 }
 
                 /*

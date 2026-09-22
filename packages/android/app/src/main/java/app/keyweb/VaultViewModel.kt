@@ -270,6 +270,8 @@ data class VaultUiState(
     /** Vault files to choose between, when the account holds more than one. */
     val backupFiles: List<BackupFileChoice> = emptyList(),
     val toast: String? = null,
+    /** Shares waiting because their keyring id is already used on this phone. */
+    val blockedJoins: List<app.keyweb.sharing.BlockedJoin> = emptyList(),
 )
 
 /** Where a share flow has got to, from either end of it. */
@@ -592,13 +594,18 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      *  nothing readable stays in memory. */
     fun lock() {
         passkeyHost = null
+        dropSecrets()
+        _state.value = VaultUiState(phase = VaultPhase.LOCKED, firstRun = false)
+    }
+
+    /** Drop every key the process is holding. The UI lock is the caller's job. */
+    private fun dropSecrets() {
         VaultPasskey.clear()
         sync = null
         sharingIdentity?.clear()
         sharingIdentity = null
         sharing = null
         sharingController = null
-        _state.value = VaultUiState(phase = VaultPhase.LOCKED, firstRun = false)
     }
 
     private fun publish(
@@ -664,7 +671,10 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 engine.putItem(itemId = id, keyringId = keyringId, fields = fields)
             } else {
                 val ops = mutableListOf<VaultOp>()
-                val fallback = liveKeyrings(before).firstOrNull()
+                // Never a keyring shared with this phone to look at: a save
+                // rescued into one of those is a save the owner never accepts.
+                val readOnly = _state.value.readOnlyKeyrings
+                val fallback = liveKeyrings(before).firstOrNull { it.id !in readOnly }
                 landedOn = fallback?.id ?: UUID.randomUUID().toString()
                 if (fallback == null) {
                     val stamp = engine.stamp()
@@ -1221,10 +1231,27 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * sync.
      */
     private suspend fun adoptSharedKeyrings(): List<String> {
-        val adopted = runCatching { sharing?.adoptJoinedKeyrings().orEmpty() }
+        val engine = sharing
+        val adopted = runCatching { engine?.adoptJoinedKeyrings().orEmpty() }
             .getOrDefault(emptyList())
+        _state.value = _state.value.copy(blockedJoins = engine?.blockedJoins().orEmpty())
         refreshReadOnly()
         return adopted
+    }
+
+    /** File a collided share under a new keyring id. The private one stays put. */
+    fun adoptBlockedJoin(datasetId: String) {
+        val engine = sharing ?: return
+        val vault = sync ?: return
+        viewModelScope.launch {
+            try {
+                val name = engine.adoptAsNewKeyring(datasetId)
+                _state.value = _state.value.copy(blockedJoins = engine.blockedJoins())
+                publish(vault.state(), toast = "$name was added as its own keyring.")
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't add that keyring.")
+            }
+        }
     }
 
     /** Not knowing must never make a read-only keyring look editable. */
@@ -1314,11 +1341,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      * again" with no way to unlock is worse than useless.
      */
     private fun relock(message: String) {
-        sync = null
+        dropSecrets()
         _state.value = _state.value.copy(
             phase = VaultPhase.LOCKED,
             promptOnEntry = true,
             error = message,
+            vault = emptyVault(),
+            items = emptyList(),
+            blockedJoins = emptyList(),
         )
     }
 
@@ -1560,11 +1590,37 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop sharing a keyring of your own and bring its passwords home. */
     fun stopSharing(keyringId: String) {
         val engine = sync ?: return
+        val sharingEngine = sharing
         viewModelScope.launch {
             val name = _state.value.vault.keyrings[keyringId]?.name?.value ?: "That keyring"
-            val next = engine.unbindKeyring(keyringId)
-            setShare { ShareUiState() }
-            publish(next, toast = "$name is private again.")
+            try {
+                val datasetId = datasetOf(engine.state().keyrings[keyringId])
+                if (datasetId != null && sharingEngine != null) {
+                    val members = try {
+                        sharingEngine.members(datasetId)
+                    } catch (cause: Exception) {
+                        showToast(
+                            "Keyweb couldn't see who has this keyring, so it is still shared.",
+                        )
+                        return@launch
+                    }
+                    for (member in members) {
+                        if (member.you) continue
+                        try {
+                            sharingEngine.revoke(datasetId, member.keyId)
+                        } catch (cause: Exception) {
+                            val who = member.email ?: "someone"
+                            showToast("Keyweb couldn't remove $who. The keyring is still shared.")
+                            return@launch
+                        }
+                    }
+                }
+                val next = engine.unbindKeyring(keyringId)
+                setShare { ShareUiState() }
+                publish(next, toast = "$name is private again.")
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't stop sharing that keyring.")
+            }
         }
     }
 
@@ -1700,7 +1756,19 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                  * read the same sentence.
                  */
                 setShare { it.copy(busy = false) }
-                needsConsent(cause.intentSender) { beginShareGrant(activity) }
+                /*
+                 * Resolved when consent comes back, not captured now.
+                 *
+                 * `afterConsent` is a field on this view model, which outlives
+                 * the activity — capturing one here held it across the whole
+                 * round trip and any rotation, and handed a destroyed activity
+                 * to `GrantBrowser` on the way back. `passkeyHost` is the weak
+                 * reference the rest of this class already uses for exactly
+                 * this.
+                 */
+                needsConsent(cause.intentSender) {
+                    passkeyHost?.get()?.let { host -> beginShareGrant(host) }
+                }
             } catch (cause: Exception) {
                 setShare { it.copy(busy = false, error = describeShare(cause)) }
             }
@@ -1724,8 +1792,16 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     invitation = invite.invitation,
                     files = invite.files,
                     label = invite.label,
-                    // Already done, in the browser. Nothing to ask for here.
-                    grantAccess = {},
+                    grantAccess = { files ->
+                        val client = driveClient()
+                        val missing = files.filter { !client.canReadFile(it.fileId) }
+                        if (missing.isNotEmpty()) {
+                            error(
+                                "Keyweb can't see that shared file yet. Pick it in the browser, " +
+                                    "then come back and try again.",
+                            )
+                        }
+                    },
                 )
                 setShare { it.copy(stage = ShareStage.REPLY_READY, link = link, busy = false) }
             } catch (cause: GoogleAuthorizer.ConsentRequired) {

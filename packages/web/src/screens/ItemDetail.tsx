@@ -65,6 +65,7 @@ export function ItemDetail({
   onRestore: (field: string, value: string) => void;
 }) {
   const [revealed, setRevealed] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const title = itemField(item, "title") ?? "Untitled";
   const username = itemField(item, "username") ?? "";
   const password = itemField(item, "password") ?? "";
@@ -231,9 +232,26 @@ export function ItemDetail({
       )}
 
       <div className="stack">
-        <button type="button" className="btn danger big" onClick={onDelete}>
-          Delete this password
-        </button>
+        {confirmingDelete ? (
+          <>
+            <p className="status" data-tone="attn">
+              <span>
+                <b>Delete {title}?</b>
+                <em>This cannot be undone on this device, and it syncs.</em>
+              </span>
+            </p>
+            <button type="button" className="btn danger big" onClick={onDelete}>
+              Yes, delete it
+            </button>
+            <button type="button" className="btn sec" onClick={() => setConfirmingDelete(false)}>
+              Keep it
+            </button>
+          </>
+        ) : (
+          <button type="button" className="btn danger big" onClick={() => setConfirmingDelete(true)}>
+            Delete this password
+          </button>
+        )}
       </div>
     </>
   );
@@ -413,6 +431,7 @@ function Files({
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const files = attachmentsOf(item);
 
   return (
@@ -442,21 +461,43 @@ function Files({
                   >
                     Open
                   </button>
-                  <button
-                    type="button"
-                    className="iconbtn"
-                    disabled={busy}
-                    onClick={async () => {
-                      setBusy(true);
-                      try {
-                        await onRemove(file.blobId);
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    Remove
-                  </button>
+                  {confirming === file.blobId ? (
+                    <>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            await onRemove(file.blobId);
+                            setConfirming(null);
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Yes, remove
+                      </button>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        disabled={busy}
+                        onClick={() => setConfirming(null)}
+                      >
+                        Keep
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      disabled={busy}
+                      onClick={() => setConfirming(file.blobId)}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               );
             })}

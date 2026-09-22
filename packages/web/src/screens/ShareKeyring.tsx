@@ -30,7 +30,7 @@ export function ShareKeyring({
   datasetId: string | null;
   sharing: SharingApi;
   onBack: () => void;
-  onToast: (message: string) => void;
+  onToast: (message: string, tone?: "safe" | "risk") => void;
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ShareRole>("viewer");
@@ -470,6 +470,13 @@ export function ShareKeyring({
               await sharing.stopSharing(keyring.id);
               onToast(`${keyring.name.value} is private again.`);
               onBack();
+            } catch (cause) {
+              onToast(
+                cause instanceof Error
+                  ? cause.message
+                  : "Keyweb couldn't stop sharing that keyring.",
+                "risk",
+              );
             } finally {
               setBusy(false);
             }

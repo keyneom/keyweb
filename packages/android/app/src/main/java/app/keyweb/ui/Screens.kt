@@ -592,6 +592,7 @@ fun ItemDetailScreen(
     onRestore: (String, String) -> Unit = { _, _ -> },
 ) {
     var revealed by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
     val statusColors = LocalKeywebStatus.current
     val title = item.field(Fields.TITLE) ?: "Untitled"
     val ringName = keyringLabel(state, item.keyring.value)
@@ -706,7 +707,23 @@ fun ItemDetailScreen(
                 }
             }
 
-            SecondaryButton("Delete this password", onDelete, danger = true)
+            SecondaryButton("Delete this password", { confirmingDelete = true }, danger = true)
+            if (confirmingDelete) {
+                AlertDialog(
+                    onDismissRequest = { confirmingDelete = false },
+                    title = { Text("Delete $title?") },
+                    text = { Text("This cannot be undone on this phone, and it syncs.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmingDelete = false
+                            onDelete()
+                        }) { Text("Yes, delete it", color = statusColors.risk) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmingDelete = false }) { Text("Keep it") }
+                    },
+                )
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

@@ -154,91 +154,89 @@ class DriveVaultRemote(
     override suspend fun read(): RemoteRevision? = reachable {
         val id = locate() ?: return@reachable null
         val current = version(id)
-        val payload = parse(drive.readText(id)) ?: return@reachable null
+        val text = drive.readText(id)
+        if (text.isBlank()) return@reachable null
+        val payload = parse(text) ?: throw BackupUnreadableException(
+            "The backup file is in Google Drive but Keyweb couldn't read it, so nothing " +
+                "was changed.",
+        )
 
         /*
-         * The passkey copy first, when this phone can open one.
+         * The newest copy this phone can actually open.
          *
-         * Both copies hold the same vault whenever the device that wrote them
-         * could seal both — which, now that the phone has a passkey, is every
-         * ordinary write. Preferring the passkey envelope is what makes a
-         * browser's write visible here without waiting for anything, and it is
-         * the direction that used to be impossible: the phone could only ever
-         * read the copy the browser could not rewrite.
+         * Not "the passkey one, always". A phone that writes recovery-only
+         * leaves the passkey envelope frozen, so opening that one and calling
+         * it current publishes the old vault back over the newer recovery
+         * copy. The browser already sorts by updatedAt. This is that, here.
+         *
+         * A copy that opens but is older than one that does not is not a
+         * success either. Returning it would let the next write stamp the
+         * stale vault as the newest, and the newer copy would never be read
+         * again.
          */
-        val viaPasskey = passkeyCipher?.let { key ->
-            payload.passkey?.let { raw ->
-                runCatching {
-                    key.open(json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), raw))
-                }.getOrNull()
+        val candidates = buildList {
+            passkeyCipher?.let { key ->
+                payload.passkey?.let { raw ->
+                    add((sealedAt(raw) ?: "") to {
+                        key.open(json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), raw))
+                    })
+                }
             }
-        }
-        if (viaPasskey != null) return@reachable RemoteRevision(viaPasskey, current)
+            payload.recovery?.let { raw ->
+                add((sealedAt(raw) ?: "") to {
+                    cipher.open(json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), raw))
+                })
+            }
+        }.sortedByDescending { it.first }
 
-        /*
-         * A backup with no copy this phone can open is NOT an absent backup.
-         *
-         * Returning null here said "there is nothing in Drive", and the engine
-         * believes that: the next sync publishes this phone's vault straight
-         * over whatever is in the file. That is the mistake that cost somebody
-         * their backup in the browser, in the same words, and it was still
-         * sitting here — reachable by any file holding a passkey copy and no
-         * recovery copy, which is what a browser writes when it has no code of
-         * its own to seal the second one with.
-         *
-         * Never "I cannot read this" into "I may overwrite this".
-         */
-        val recovery = payload.recovery ?: run {
-            if (payload.passkey == null) return@reachable null
-            throw BackupUnreadableException(
-                "The backup in Google Drive has no copy this phone's code can open. It was " +
-                    "written in a browser. Nothing on this phone has changed.",
-            )
+        var opened: VaultState? = null
+        var openedAt = ""
+        for ((at, open) in candidates) {
+            val state = runCatching { open() }.getOrNull() ?: continue
+            opened = state
+            openedAt = at
+            break
         }
 
-        /*
-         * Refuse the recovery copy when the passkey copy is demonstrably newer.
-         *
-         * The mirror of the browser's check, and the same failure: opening a
-         * copy that is behind succeeds, so the phone reports itself synced
-         * while showing a vault a browser has moved on from. A wrong answer
-         * delivered confidently is worse than an error, and the timestamps are
-         * the only evidence available without the key to the other envelope.
-         *
-         * Only when this phone cannot open the passkey copy — if it could, it
-         * already returned it above.
-         */
+        val newestAt = listOfNotNull(payload.passkey, payload.recovery)
+            .mapNotNull { sealedAt(it) }
+            .maxOrNull()
+        if (opened != null) {
+            if (newestAt != null && openedAt < newestAt) {
+                throw BackupBehindException(
+                    "A browser has newer passwords than this phone can read. Set up the shared " +
+                        "key on this phone to catch up.",
+                )
+            }
+            return@reachable RemoteRevision(opened, current)
+        }
+
+        if (payload.passkey == null && payload.recovery == null) return@reachable null
+        val recovery = payload.recovery
         val passkeyCopy = payload.passkey
-        if (passkeyCopy != null && behind(recovery, passkeyCopy)) {
+        if (recovery != null && passkeyCopy != null && behind(recovery, passkeyCopy)) {
             throw BackupBehindException(
                 "A browser has newer passwords than this phone can read. Set up the shared " +
                     "key on this phone to catch up.",
             )
         }
-
-        val envelope = json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), recovery)
-        /*
-         * A backup that exists and will not open is not an absent backup.
-         *
-         * Letting this throw killed the app outright; returning null would
-         * have been worse, because the engine would have read "no backup" and
-         * published over whatever is actually in the file. Both were reachable
-         * the moment something else wrote a recovery envelope sealed under a
-         * different code — which is precisely what a browser did.
-         */
-        val state = try {
-            cipher.open(envelope)
-        } catch (cause: EnvelopeDecryptException) {
-            throw BackupUnreadableException(
-                "The backup in Google Drive was written by something else and this phone's " +
-                    "code doesn't open it. Nothing on this phone has changed.",
+        if (passkeyCopy != null && recovery != null && behind(passkeyCopy, recovery)) {
+            throw BackupBehindException(
+                "This phone's recovery copy is newer than the passkey copy it can open. " +
+                    "Enter the recovery code for this backup to catch up.",
             )
         }
-
-        RemoteRevision(state, current)
+        throw BackupUnreadableException(
+            "The backup in Google Drive has no copy this phone can open. Nothing on this " +
+                "phone has changed.",
+        )
     }
 
-    override suspend fun write(state: VaultState, expectedVersion: String?): String {
+    override suspend fun write(
+        state: VaultState,
+        expectedVersion: String?,
+        createOnly: Boolean,
+    ): String {
         val id = try {
             locate()
         } catch (cause: IOException) {
@@ -265,10 +263,8 @@ class DriveVaultRemote(
         }
 
         return reachable {
-            // Preflight: refuse if the remote moved since it was read. Drive has
-            // no compare-and-set, so a narrow window remains between this check
-            // and the upload; the CRDT join is what makes losing that race an
-            // extra round trip rather than a lost edit.
+            // Preflight before anything else. A revision that moved is a
+            // conflict even when the new bytes do not parse.
             if (expectedVersion != null) {
                 val current = version(id)
                 if (current != expectedVersion) {
@@ -277,10 +273,29 @@ class DriveVaultRemote(
                     )
                 }
             }
-            // Read before write, so the passkey envelope is carried rather than
-            // dropped. Not knowing what is in the file must never escalate into
-            // replacing it with less.
-            val existing = parse(drive.readText(id))
+            val text = drive.readText(id)
+            if (text.isNotBlank() && parse(text) == null) {
+                // A deliberate replace is allowed to overwrite a file this
+                // phone cannot read. Every other write leaves it untouched:
+                // replacing it with less is how a passkey envelope disappears.
+                if (createOnly || expectedVersion != null) {
+                    throw BackupUnreadableException(
+                        "The backup file is in Google Drive but Keyweb couldn't read it, so " +
+                            "nothing was changed.",
+                    )
+                }
+            }
+            // First publish may only create. A file that showed up after the
+            // read holds somebody else's vault; the engine re-reads and merges
+            // rather than writing this one over it.
+            if (createOnly && text.isNotBlank()) {
+                throw VersionConflictException(
+                    "A backup appeared after it was read. Keyweb will merge it instead of replacing it.",
+                )
+            }
+            // Read before write, so an envelope this device cannot rewrite is
+            // carried rather than dropped.
+            val existing = if (text.isBlank()) null else parse(text)
             drive.write(id, sealed(state, existing))
             version(id)
         }
@@ -302,20 +317,42 @@ class DriveVaultRemote(
      */
     private fun sealed(state: VaultState, existing: Payload?): String {
         val at = Instant.now().toString()
-        val rewritten = mutableSetOf("recovery")
-        val recovery = cipher.seal(state, updatedAt = at)
-        val passkey = passkeyCipher?.seal(state, updatedAt = at)?.also { rewritten += "passkey" }
+        val rewritten = mutableSetOf<String>()
+        // Reseal a copy only with a cipher that already opens it. Holding *a*
+        // recovery code is not the same as holding *this* backup's, and
+        // resealing under the wrong one retires the printed sheet.
+        val recovery = existing?.recovery?.takeUnless { opens(cipher, it) }
+            ?: cipher.seal(state, updatedAt = at).also { rewritten += "recovery" }
+        val passkey = passkeyCipher?.let { key ->
+            val carried = existing?.passkey
+            if (carried != null && !opens(key, carried)) null
+            else key.seal(state, updatedAt = at).also { rewritten += "passkey" }
+        }
 
         val next = buildJsonObject {
             put("v", 1)
             // Every member this device is not authoritative for survives.
             existing?.raw?.forEach { (key, value) -> if (key !in rewritten) put(key, value) }
-            put("recovery", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), recovery))
-            passkey?.let {
-                put("passkey", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), it))
+            when (recovery) {
+                is SyncEnvelopeV1 ->
+                    put("recovery", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), recovery))
+                else -> existing?.recovery?.let { put("recovery", it) }
+            }
+            when (passkey) {
+                is SyncEnvelopeV1 ->
+                    put("passkey", wire.encodeToJsonElement(SyncEnvelopeV1.serializer(), passkey))
+                null -> if ("passkey" !in rewritten) existing?.passkey?.let { put("passkey", it) }
             }
         }
         return next.toString()
+    }
+
+    /** Can this cipher open that envelope? The only honest test is to try. */
+    private fun opens(cipher: VaultEnvelopeCipher, raw: JsonElement): Boolean {
+        val envelope = runCatching {
+            json.decodeFromJsonElement(SyncEnvelopeV1.serializer(), raw)
+        }.getOrNull() ?: return false
+        return runCatching { cipher.open(envelope) }.isSuccess
     }
 
     /**

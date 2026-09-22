@@ -21,6 +21,14 @@ data class FormField(
     val isPassword: Boolean = false,
     /** False for a field that cannot be filled, e.g. one that is not shown. */
     val fillable: Boolean = true,
+    /**
+     * The web domain of this field, inherited from the web view it sits in.
+     *
+     * Null for a native field. Never taken from a sibling view: a hidden
+     * WebView for a bank must not make the app's own password box look like
+     * that bank.
+     */
+    val webDomain: String? = null,
 )
 
 /** What a form turned out to be. */

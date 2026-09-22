@@ -118,6 +118,21 @@ class DriveClient(
     override suspend fun readText(fileId: String): String =
         get("$FILES/${encode(fileId)}?alt=media&supportsAllDrives=true")
 
+    /**
+     * Whether this account can actually read [fileId].
+     *
+     * A 404 means the Picker grant never landed. Any other failure is left as
+     * a failure: treating "Drive is down" as "not granted" would refuse a join
+     * that had already succeeded.
+     */
+    suspend fun canReadFile(fileId: String): Boolean =
+        try {
+            get("$FILES/${encode(fileId)}?fields=id&supportsAllDrives=true")
+            true
+        } catch (cause: DriveException) {
+            if (cause.status == 404) false else throw cause
+        }
+
     /** The raw bytes of a file, for anything that is not text -- a .kdbx. */
     suspend fun readBytes(fileId: String): ByteArray =
         sendBytes("$FILES/${encode(fileId)}?alt=media&supportsAllDrives=true")

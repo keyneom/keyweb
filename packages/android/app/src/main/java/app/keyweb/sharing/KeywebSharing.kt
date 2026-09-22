@@ -75,6 +75,20 @@ data class PendingInvite(
     val createdAt: String,
 )
 
+/**
+ * A share that is readable but cannot be bound under the id in the file.
+ *
+ * The file's keyring id is already a different keyring in this vault. It stays
+ * pending until the person adds it under a new id.
+ */
+data class BlockedJoin(
+    val datasetId: String,
+    val label: String,
+    val remoteKeyringId: String,
+    val remoteName: String,
+    val localName: String,
+)
+
 /** A dataset this device asked to join, before it can read it. */
 @Serializable
 private data class JoinedDataset(
@@ -89,6 +103,10 @@ class KeywebSharing(
     private val identity: KeywebSharingIdentity,
     private val dao: VaultDao,
 ) {
+    private var blocked: List<BlockedJoin> = emptyList()
+
+    /** Shares waiting because their keyring id is already used here. */
+    fun blockedJoins(): List<BlockedJoin> = blocked
 
     /** Six characters naming this device's owner, for reading aloud. */
     suspend fun myFingerprint(): String =
@@ -328,6 +346,7 @@ class KeywebSharing(
 
         val adopted = mutableListOf<String>()
         val remaining = mutableListOf<JoinedDataset>()
+        val blockedNow = mutableListOf<BlockedJoin>()
         for (entry in joined) {
             val value = runCatching { controller.adoptDataset(entry.datasetId).value }.getOrNull()
             val keyring = value?.keyrings?.values?.firstOrNull { !it.deleted.value }
@@ -346,7 +365,19 @@ class KeywebSharing(
             val vault = sync.documentState(VAULT_DOCUMENT)
             val existing = vault.keyrings[keyring.id]
             val already = existing?.let { datasetOf(it) }
-            if (existing != null && already != entry.datasetId) continue
+            if (existing != null && already != entry.datasetId) {
+                // Kept, and said out loud. Dropping it made the share vanish
+                // after the owner had already let this person in.
+                remaining += entry
+                blockedNow += BlockedJoin(
+                    datasetId = entry.datasetId,
+                    label = entry.label,
+                    remoteKeyringId = keyring.id,
+                    remoteName = keyring.name.value,
+                    localName = existing.name.value,
+                )
+                continue
+            }
             if (already == entry.datasetId) {
                 adopted += keyring.name.value
                 continue
@@ -364,8 +395,43 @@ class KeywebSharing(
             rememberRole(entry.datasetId, entry.role)
             adopted += keyring.name.value
         }
+        blocked = blockedNow
         writeMeta(JOINED_KEY, json.encodeToString(JoinedDatasets, remaining))
         return adopted
+    }
+
+    /**
+     * Add a blocked share under a fresh keyring id.
+     *
+     * The shared file keeps the id it already has. This vault files the
+     * keyring under a new one, so the private keyring that collided stays
+     * private and the shared passwords still sync.
+     */
+    suspend fun adoptAsNewKeyring(datasetId: String): String {
+        val joined = joined().toMutableList()
+        val entry = joined.firstOrNull { it.datasetId == datasetId }
+            ?: error("That shared keyring is no longer waiting.")
+        val value = controller.adoptDataset(entry.datasetId).value
+        val keyring = value.keyrings.values.firstOrNull { !it.deleted.value }
+            ?: error("That shared keyring has nothing in it yet.")
+        val vault = sync.documentState(VAULT_DOCUMENT)
+        val existing = vault.keyrings[keyring.id]
+        val colliding = existing != null && datasetOf(existing) != entry.datasetId
+        val localId = if (colliding) UUID.randomUUID().toString() else keyring.id
+
+        sync.adoptDocument(entry.datasetId, value)
+        sync.putKeyring(keyringId = localId, name = keyring.name.value)
+        sync.bindKeyring(
+            keyringId = localId,
+            datasetId = entry.datasetId,
+            sourceKeyringId = if (colliding) keyring.id else null,
+        )
+        rememberRole(entry.datasetId, entry.role)
+
+        joined.removeAll { it.datasetId == datasetId }
+        blocked = blocked.filter { it.datasetId != datasetId }
+        writeMeta(JOINED_KEY, json.encodeToString(JoinedDatasets, joined))
+        return keyring.name.value
     }
 
     // ---- Who has access ----

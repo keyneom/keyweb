@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { CheckIcon } from "./ui/icons";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertIcon, CheckIcon } from "./ui/icons";
 import { ItemDetail } from "./screens/ItemDetail";
 import { FileViewer } from "./screens/FileViewer";
 import { ItemEdit } from "./screens/ItemEdit";
@@ -46,7 +46,10 @@ export function App() {
   const [route, setRoute] = useState<Route>({ name: "list" });
   /** Keyrings picked to share together, while that is being arranged. */
   const [sharingMany, setSharingMany] = useState<string[] | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; tone: "safe" | "risk" } | null>(null);
+  const notify = useCallback((text: string, tone: "safe" | "risk" = "safe") => {
+    setToast({ text, tone });
+  }, []);
   /**
    * A file being looked at, by the id of the item holding its bytes.
    *
@@ -140,9 +143,12 @@ export function App() {
     setTakingOver(null);
     void vault.sharing
       .acceptOwnership(payload)
-      .then(() => setToast("That keyring is yours now. You can invite and remove people on it."))
+      .then(() => notify("That keyring is yours now. You can invite and remove people on it."))
       .catch((cause: unknown) =>
-        setToast(cause instanceof Error ? cause.message : "Keyweb couldn't take that keyring on."),
+        notify(
+          cause instanceof Error ? cause.message : "Keyweb couldn't take that keyring on.",
+          "risk",
+        ),
       );
   }, [takingOver, vault.phase, vault.sharing]);
 
@@ -243,7 +249,7 @@ export function App() {
         <JoinShare
           invite={joining}
           sharing={vault.sharing}
-          onToast={setToast}
+          onToast={notify}
           onDone={() => setJoining(null)}
         />
       </main>
@@ -295,7 +301,7 @@ export function App() {
           onSettings={() => setRoute({ name: "settings" })}
           onDeleteMany={async (itemIds) => {
             await vault.deleteItems(itemIds);
-            setToast(
+            notify(
               `${itemIds.length} password${itemIds.length === 1 ? "" : "s"} deleted.`,
             );
           }}
@@ -303,9 +309,21 @@ export function App() {
           onMoveMany={async (itemIds, keyringId) => {
             await vault.moveItems(itemIds, keyringId);
             const name = vault.state.keyrings[keyringId]?.name.value ?? "that keyring";
-            setToast(
+            notify(
               `${itemIds.length} password${itemIds.length === 1 ? "" : "s"} moved to ${name}.`,
             );
+          }}
+          blockedJoins={vault.blockedJoins}
+          onAdoptBlocked={async (datasetId) => {
+            try {
+              await vault.adoptBlockedJoin(datasetId);
+              notify("That keyring was added on its own, separate from yours.");
+            } catch (cause) {
+              notify(
+                cause instanceof Error ? cause.message : "Keyweb couldn't add that keyring.",
+                "risk",
+              );
+            }
           }}
         />
       )}
@@ -328,7 +346,7 @@ export function App() {
           onAttach={(file) => vault.attachFile(current.id, file)}
           onRemoveFile={async (blobId) => {
             await vault.removeAttachment(current.id, blobId);
-            setToast("That file was removed from your vault.");
+            notify("That file was removed from your vault.");
           }}
           onRestore={(field, value) => {
             void vault
@@ -337,17 +355,17 @@ export function App() {
                 keyringId: current.keyring.value,
                 fields: { [field]: value },
               })
-              .then(() => setToast("Put back. The value it replaced is in the list too."));
+              .then(() => notify("Put back. The value it replaced is in the list too."));
           }}
           onBack={() => setRoute({ name: "list" })}
           onEdit={() => setRoute({ name: "edit", itemId: current.id })}
           onDelete={() => {
             void vault.deleteItem(current.id).then(() => {
-              setToast(`${current.fields.title?.value ?? "That password"} was deleted.`);
+              notify(`${current.fields.title?.value ?? "That password"} was deleted.`);
               setRoute({ name: "list" });
             });
           }}
-          onCopied={setToast}
+          onCopied={notify}
         />
       )}
 
@@ -372,7 +390,7 @@ export function App() {
              */
             try {
               const saved = await vault.saveItem(input);
-              setToast(
+              notify(
                 saved.keyringId === input.keyringId
                   ? "Saved on this device."
                   : `Saved in ${saved.keyringName}, because the keyring you chose is no longer there.`,
@@ -390,8 +408,9 @@ export function App() {
                */
               setRoute({ name: "detail", itemId: saved.itemId });
             } catch (cause) {
-              setToast(
+              notify(
                 cause instanceof Error ? cause.message : "That password was not saved.",
+                "risk",
               );
             }
           }}
@@ -405,7 +424,7 @@ export function App() {
             keyring={vault.state.keyrings[route.keyringId]!}
             datasetId={datasetOf(vault.state.keyrings[route.keyringId])}
             sharing={vault.sharing}
-            onToast={setToast}
+            onToast={notify}
             onBack={() => setRoute({ name: "keyrings" })}
           />
         )}
@@ -431,7 +450,7 @@ export function App() {
           }}
           onCopy={async (link) => {
             await navigator.clipboard.writeText(link);
-            setToast("The link is on your clipboard. Send it to them.");
+            notify("The link is on your clipboard. Send it to them.");
           }}
           onClose={() => setSharingMany(null)}
         />
@@ -447,12 +466,12 @@ export function App() {
           onBack={() => setRoute({ name: "list" })}
           onAdd={async (name) => {
             await vault.addKeyring(name);
-            setToast(`The ${name} keyring is ready.`);
+            notify(`The ${name} keyring is ready.`);
           }}
           onDelete={async (keyringId) => {
             const name = vault.state.keyrings[keyringId]?.name.value ?? "That keyring";
             await vault.deleteKeyring(keyringId);
-            setToast(`${name} was deleted.`);
+            notify(`${name} was deleted.`);
           }}
         />
       )}
@@ -495,10 +514,10 @@ export function App() {
       )}
 
       {toast && (
-        <p className="status toast" data-tone="safe" role="status">
-          <CheckIcon />
+        <p className="status toast" data-tone={toast.tone} role="status">
+          {toast.tone === "risk" ? <AlertIcon /> : <CheckIcon />}
           <span>
-            <b>{toast}</b>
+            <b>{toast.text}</b>
           </span>
         </p>
       )}

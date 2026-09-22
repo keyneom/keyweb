@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createClock,
+  datasetOf,
   emptyVault,
   type ItemField,
   type ItemRecord,
@@ -34,7 +35,9 @@ import {
   createKeywebSharingController,
   createSharingIdentity,
   KeywebSharing,
+  type BlockedJoin,
   SharedKeyringRemote,
+  type SharingIdentity,
   type Member,
   type PendingInvite,
   type ShareRole,
@@ -172,6 +175,10 @@ export type VaultApi = {
    * screens should not offer a button that apologises when pressed.
    */
   sharing: SharingApi | null;
+  /** Shares that cannot use the keyring id in the file. */
+  blockedJoins: BlockedJoin[];
+  /** File one of those under a fresh id, leaving the private keyring alone. */
+  adoptBlockedJoin(datasetId: string): Promise<void>;
 };
 
 /** What the sharing screens need, with the identity and controller already wired. */
@@ -269,7 +276,9 @@ export function useVault(): VaultApi {
   const cipherRef = useRef<VaultCipher | null>(null);
   const remoteRef = useRef<GoogleDriveRemote | null>(null);
   const sharingRef = useRef<KeywebSharing | null>(null);
+  const identityRef = useRef<SharingIdentity | null>(null);
   const [sharing, setSharing] = useState<SharingApi | null>(null);
+  const [blockedJoins, setBlockedJoins] = useState<BlockedJoin[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -325,6 +334,7 @@ export function useVault(): VaultApi {
     let adopted = false;
     try {
       adopted = (await engine.adoptJoinedKeyrings()).length > 0;
+      setBlockedJoins(engine.blockedJoins());
     } catch {
       // A share that is not ready yet is the normal case, not an error worth
       // showing. It will be ready on some later sync.
@@ -412,6 +422,7 @@ export function useVault(): VaultApi {
       // keypair for the session and serialises the passkey prompt; two of them
       // would mean two prompts for one operation, and the second would arrive
       // while the first was still on screen.
+      identityRef.current = null;
       const identity = BACKUP_CONFIGURED
         ? createSharingIdentity(async () => {
             const stored = await storage.readMeta("recovery-secret");
@@ -423,6 +434,7 @@ export function useVault(): VaultApi {
             return Uint8Array.from((await cipher.openOp(stored)) as unknown as number[]);
           })
         : null;
+      identityRef.current = identity;
       const controller = identity ? createKeywebSharingController(identity) : null;
       const datasetRemotes = new Map<string, SharedKeyringRemote>();
       const sync = new VaultSync({
@@ -717,8 +729,27 @@ export function useVault(): VaultApi {
     lockRef.current?.();
     lockRef.current = null;
     syncRef.current = null;
+    cipherRef.current = null;
+    storageRef.current = null;
+    remoteRef.current = null;
+    sharingRef.current = null;
+    identityRef.current?.clear();
+    identityRef.current = null;
+    setSharing(null);
+    setBlockedJoins([]);
     setState(emptyVault());
     setPhase("locked");
+  }, []);
+
+  const adoptBlockedJoin = useCallback(async (datasetId: string) => {
+    const engine = sharingRef.current;
+    const sync = syncRef.current;
+    if (!engine || !sync) throw new Error("Keyweb is locked.");
+    await engine.adoptAsNewKeyring(datasetId);
+    setBlockedJoins(engine.blockedJoins());
+    setState(await sync.state());
+    setStatus({ ...sync.status() });
+    void name;
   }, []);
 
   const syncNow = useCallback(async () => {
@@ -768,7 +799,9 @@ export function useVault(): VaultApi {
         next = await sync.putItem({ ...input, itemId });
       } else {
         const ops: VaultOp[] = [];
-        const fallback = liveKeyrings(before)[0];
+        // Never a keyring shared with this browser to look at: a save rescued
+        // into one of those is a save the owner never accepts.
+        const fallback = liveKeyrings(before).find((ring) => !readOnlyKeyrings.has(ring.id));
         keyringId = fallback?.id ?? crypto.randomUUID();
         if (!fallback) {
           const { opId, ts } = sync.stamp();
@@ -787,7 +820,7 @@ export function useVault(): VaultApi {
       }
       return { itemId, keyringId, keyringName: keyringLabel(next, keyringId) };
     },
-    [refresh, backgroundSync],
+    [refresh, backgroundSync, readOnlyKeyrings],
   );
 
   /**
@@ -1096,6 +1129,8 @@ export function useVault(): VaultApi {
     removeAttachment,
     readOnlyKeyrings,
     sharing,
+    blockedJoins,
+    adoptBlockedJoin,
   };
 }
 
@@ -1149,6 +1184,28 @@ function sharingApi(
     pendingInvites: (keyringId) => engine.pendingInvites(keyringId),
     cancelInvite: (exchangeId) => engine.cancelInvite(exchangeId),
     async stopSharing(keyringId) {
+      const datasetId = datasetOf((await sync.state()).keyrings[keyringId]);
+      if (datasetId) {
+        let members;
+        try {
+          members = await engine.members(datasetId);
+        } catch {
+          throw new Error(
+            "Keyweb couldn't see who has this keyring, so it is still shared.",
+          );
+        }
+        for (const member of members) {
+          if (member.you) continue;
+          try {
+            await engine.revoke({ datasetId, keyId: member.keyId });
+          } catch {
+            const who = member.email ?? "someone";
+            throw new Error(
+              `Keyweb couldn't remove ${who}. The keyring is still shared.`,
+            );
+          }
+        }
+      }
       await sync.unbindKeyring(keyringId);
       await refresh();
     },

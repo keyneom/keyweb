@@ -1,5 +1,6 @@
 package app.keyweb.data
 
+import app.keyweb.vault.BackupUnreadableException
 import app.keyweb.vault.Fields
 import app.keyweb.vault.ItemField
 import app.keyweb.vault.RecoveryCode
@@ -229,6 +230,93 @@ class DriveVaultRemoteTest {
             drive.readCount > afterCreate,
             "a write onto an existing file must read it first, or it would drop what it cannot rewrite",
         )
+    }
+
+    @Test
+    fun `reads the newer recovery copy instead of a stale passkey`() = runTest {
+        val drive = FakeDrive()
+        val recoverySecret = RecoveryCode.generate()
+        val passkeySecret = RecoveryCode.generate()
+        val recovery = VaultEnvelopeCipher.forRecoveryCode(recoverySecret)
+        val passkey = VaultEnvelopeCipher.forRecoveryCode(passkeySecret)
+        val both = DriveVaultRemote(drive, recovery, passkey)
+        val first = both.write(vaultWith("old-password"), null)
+
+        // A later write that can only reseal recovery, the way a declined
+        // passkey sheet leaves the passkey envelope frozen.
+        val phone = DriveVaultRemote(drive, recovery)
+        phone.write(vaultWith("new-password"), first)
+
+        val read = assertNotNull(both.read())
+        assertEquals("new-password", read.state.items["bank"]?.field(Fields.PASSWORD))
+    }
+
+    @Test
+    fun `does not reseal recovery under a code that cannot open it`() = runTest {
+        val drive = FakeDrive()
+        val right = RecoveryCode.generate()
+        val wrong = RecoveryCode.generate()
+        val passkeySecret = RecoveryCode.generate()
+        DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(right)).write(vaultWith("kept"), null)
+
+        val fileId = drive.files.entries.first { it.value.content.isNotBlank() }.key
+        val before = json.parseToJsonElement(drive.files.getValue(fileId).content).jsonObject
+        val recoveryBytes = before["recovery"].toString()
+        val passkey = VaultEnvelopeCipher.forRecoveryCode(passkeySecret)
+        val withPasskey = before.toMutableMap()
+        withPasskey["passkey"] = json.parseToJsonElement(
+            json.encodeToString(
+                app.keyweb.vault.SyncEnvelopeV1.serializer(),
+                passkey.seal(vaultWith("kept"), updatedAt = "2020-01-01T00:00:00Z"),
+            ),
+        )
+        drive.files.getValue(fileId).content = kotlinx.serialization.json.JsonObject(withPasskey).toString()
+
+        val existing = assertNotNull(DriveVaultRemote(drive, VaultEnvelopeCipher.forRecoveryCode(right)).fetchRecoverySealed())
+        val mismatched = DriveVaultRemote(
+            drive,
+            VaultEnvelopeCipher.forRecoveryCode(wrong, existing),
+            passkeyCipher = passkey,
+        )
+        val head = drive.writeHead(fileId).headRevisionId
+        mismatched.write(vaultWith("should-not-retire-the-code"), head)
+
+        val after = json.parseToJsonElement(assertNotNull(drive.vaultFile()).content).jsonObject
+        assertEquals(recoveryBytes, after["recovery"].toString())
+        // The right code still opens what was carried forward.
+        val opened = VaultEnvelopeCipher.forRecoveryCode(right, existing).open(
+            json.decodeFromJsonElement(app.keyweb.vault.SyncEnvelopeV1.serializer(), after["recovery"]!!),
+        )
+        assertEquals("kept", opened.items["bank"]?.field(Fields.PASSWORD))
+    }
+
+    @Test
+    fun `refuses to replace a file it cannot parse`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        val remote = remoteOn(drive, secret)
+        val version = remote.write(vaultWith("first"), null)
+        val fileId = drive.files.entries.first { it.value.appProperties["keyweb"] == "vault-v1" }.key
+        drive.files.getValue(fileId).content = "this is not json"
+        // The revision did not move; the content did. A normal update must not
+        // treat "I cannot read this" as "there is nothing here".
+        assertFailsWith<BackupUnreadableException> {
+            remote.write(vaultWith("second"), version)
+        }
+        assertEquals("this is not json", drive.files.getValue(fileId).content)
+    }
+
+    @Test
+    fun `a first publish does not overwrite a file that appeared`() = runTest {
+        val drive = FakeDrive()
+        val secret = RecoveryCode.generate()
+        val remote = remoteOn(drive, secret)
+        remote.write(vaultWith("already-there"), null)
+        val before = assertNotNull(drive.vaultFile()).content
+        assertFailsWith<VersionConflictException> {
+            remote.write(vaultWith("clobber"), null, createOnly = true)
+        }
+        assertEquals(before, assertNotNull(drive.vaultFile()).content)
     }
 }
 

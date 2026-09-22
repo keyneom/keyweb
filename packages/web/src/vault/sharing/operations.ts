@@ -107,6 +107,21 @@ const ROLES_KEY = "sharing:roles";
 type JoinedDataset = { datasetId: string; label: string; role: ShareRole };
 
 /**
+ * A share that is readable but cannot be bound under the id in the file.
+ *
+ * The file's keyring id is already a different keyring in this vault. Binding
+ * it would move this vault's private passwords into that file. It stays
+ * pending until the person adds it under a new id.
+ */
+export type BlockedJoin = {
+  datasetId: string;
+  label: string;
+  remoteKeyringId: string;
+  remoteName: string;
+  localName: string;
+};
+
+/**
  * A keyring this device may read but not write.
  *
  * Kept because the alternative is worse than a stale answer. Without it,
@@ -138,6 +153,12 @@ function inviteFor(
 }
 
 export class KeywebSharing {
+  #blocked: BlockedJoin[] = [];
+
+  /** Shares waiting because their keyring id is already used here. */
+  blockedJoins(): BlockedJoin[] {
+    return this.#blocked;
+  }
   readonly #sync: VaultSync;
   readonly #controller: SharingController;
   readonly #identity: SharingIdentity;
@@ -420,6 +441,7 @@ export class KeywebSharing {
 
     const adopted: string[] = [];
     const remaining: JoinedDataset[] = [];
+    const blocked: BlockedJoin[] = [];
     for (const entry of joined) {
       let value: VaultState;
       try {
@@ -442,6 +464,16 @@ export class KeywebSharing {
       const vault = await this.#sync.documentState(VAULT_DOCUMENT);
       const existing = vault.keyrings[keyring.id];
       if (existing && datasetOf(existing) !== entry.datasetId) {
+        // Kept, and said out loud. Dropping it made the share vanish after
+        // the owner had already let this person in.
+        remaining.push(entry);
+        blocked.push({
+          datasetId: entry.datasetId,
+          label: entry.label,
+          remoteKeyringId: keyring.id,
+          remoteName: keyring.name.value,
+          localName: existing.name.value,
+        });
         continue;
       }
       if (existing && datasetOf(existing) === entry.datasetId) {
@@ -461,8 +493,44 @@ export class KeywebSharing {
       await this.#rememberRole(entry.datasetId, entry.role);
       adopted.push(keyring.name.value);
     }
+    this.#blocked = blocked;
     await this.#store.writeMeta(JOINED_KEY, remaining);
     return adopted;
+  }
+
+  /**
+   * Add a blocked share under a fresh keyring id.
+   *
+   * The shared file keeps the id it already has. This vault files the keyring
+   * under a new one, so the private keyring that collided stays private and
+   * the shared passwords still sync.
+   */
+  async adoptAsNewKeyring(datasetId: string): Promise<string> {
+    const joined = await this.#joined();
+    const entry = joined.find((candidate) => candidate.datasetId === datasetId);
+    if (!entry) throw new Error("That shared keyring is no longer waiting.");
+    const value = (await this.#controller.adoptDataset(entry.datasetId)).value;
+    const keyring = Object.values(value.keyrings).find((ring) => !ring.deleted.value);
+    if (!keyring) throw new Error("That shared keyring has nothing in it yet.");
+
+    const vault = await this.#sync.documentState(VAULT_DOCUMENT);
+    const existing = vault.keyrings[keyring.id];
+    const colliding = existing && datasetOf(existing) !== entry.datasetId;
+    const localId = colliding ? crypto.randomUUID() : keyring.id;
+
+    await this.#sync.adoptDocument(entry.datasetId, value);
+    await this.#sync.putKeyring({ keyringId: localId, name: keyring.name.value });
+    await this.#sync.bindKeyring(
+      localId,
+      entry.datasetId,
+      colliding ? keyring.id : undefined,
+    );
+    await this.#rememberRole(entry.datasetId, entry.role);
+
+    const remaining = joined.filter((candidate) => candidate.datasetId !== datasetId);
+    this.#blocked = this.#blocked.filter((candidate) => candidate.datasetId !== datasetId);
+    await this.#store.writeMeta(JOINED_KEY, remaining);
+    return keyring.name.value;
   }
 
   // ---- Who has access ----

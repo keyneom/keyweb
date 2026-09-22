@@ -37,6 +37,9 @@ class SwitchableRemote : RemoteVaultStore {
 
     override suspend fun read(): RemoteRevision? = require().read()
 
-    override suspend fun write(state: VaultState, expectedVersion: String?): String =
-        require().write(state, expectedVersion)
+    override suspend fun write(
+        state: VaultState,
+        expectedVersion: String?,
+        createOnly: Boolean,
+    ): String = require().write(state, expectedVersion, createOnly)
 }

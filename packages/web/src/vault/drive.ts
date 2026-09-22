@@ -171,6 +171,14 @@ function parsePayload(content: string): BackupPayload | null {
   return parsed as BackupPayload;
 }
 
+function parsePayloadSafe(content: string): BackupPayload | null {
+  try {
+    return parsePayload(content);
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * What is in a Google account, as far as can be told without a key.
@@ -545,12 +553,40 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       // winning by accident.
       openable.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
 
+      let opened: VaultState | null = null;
+      let openedAt = "";
       for (const candidate of openable) {
         try {
-          return { state: await candidate.open(), version };
+          opened = await candidate.open();
+          openedAt = candidate.at ?? "";
+          break;
         } catch {
           // Try the next one. A key that does not fit this copy is ordinary.
         }
+      }
+
+      /*
+       * A copy that opens but is older than one that does not is not a read.
+       *
+       * The phone refuses this case; this browser used to return the copy and
+       * call itself synced. It is reachable in one move: a phone with no
+       * passkey rewrites only the recovery copy, leaving the passkey copy
+       * frozen, and a browser holding the passkey but not the code opens the
+       * frozen one. It then shows a vault the phone has moved on from and
+       * republishes from it.
+       *
+       * The timestamps are the only evidence available without the other key,
+       * and they are enough to know this is not the newest. Saying so sends
+       * somebody to their recovery code, which is the thing that fixes it.
+       */
+      const newestAt = [payload.passkey, payload.recovery]
+        .filter((copy) => copy !== undefined)
+        .map((copy) => sealedAt(copy) ?? "")
+        .reduce((newest, at) => (at > newest ? at : newest), "");
+
+      if (opened !== null) {
+        if (newestAt !== "" && openedAt < newestAt) throw new BackupBehindError();
+        return { state: opened, version };
       }
 
       // Nothing opened. Which message depends on whether the thing this
@@ -576,7 +612,11 @@ export class GoogleDriveRemote implements RemoteVaultStore {
     }
   }
 
-  async write(state: VaultState, expectedVersion: string | null): Promise<string> {
+  async write(
+    state: VaultState,
+    expectedVersion: string | null,
+    createOnly = false,
+  ): Promise<string> {
     const authorization = await this.#auth();
 
     let fileId: string | null;
@@ -608,10 +648,9 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       return this.#version(createdId, authorization);
     }
 
-    // Preflight: refuse if the remote moved since it was read. sync-kit
-    // documents a narrow window between this check and the upload where a
-    // last-writer can still win; the CRDT join is what makes that recoverable
-    // rather than destructive.
+    // Preflight before anything else. A revision that moved is a conflict
+    // even when the new bytes do not parse: the engine re-reads and merges,
+    // and "unreadable" would hide that the file changed.
     if (expectedVersion !== null) {
       const current = await this.#version(fileId, authorization);
       if (current !== expectedVersion) {
@@ -621,9 +660,26 @@ export class GoogleDriveRemote implements RemoteVaultStore {
       }
     }
 
-    const sealed = JSON.stringify(
-      await this.#payload(state, await this.#carriedRecovery(fileId, authorization)),
-    );
+    const carried = await this.#carriedRecovery(fileId, authorization);
+    // `#carriedRecovery` returns undefined both for a missing recovery member
+    // and for a file that could not be parsed. The raw read distinguishes
+    // them: an unreadable file is left untouched, except by the deliberate
+    // replace action, which passes createOnly false and no expected revision.
+    if (createOnly || expectedVersion !== null) {
+      const raw = await this.#store.readText(fileId, authorization);
+      if (raw.trim() && parsePayloadSafe(raw) === null) {
+        throw new BackupUnreadableError(
+          "The backup file is in Google Drive but Keyweb couldn't read it, so nothing was changed.",
+        );
+      }
+      if (createOnly && raw.trim()) {
+        throw new VersionConflictError(
+          "A backup appeared after it was read. Keyweb will merge it instead of replacing it.",
+        );
+      }
+    }
+
+    const sealed = JSON.stringify(await this.#payload(state, carried));
     await this.#store.write(fileId, sealed, authorization, { contentType: CONTENT_TYPE });
     return this.#version(fileId, authorization);
   }

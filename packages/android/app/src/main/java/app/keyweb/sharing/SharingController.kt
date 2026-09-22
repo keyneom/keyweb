@@ -191,7 +191,11 @@ class SharedKeyringRemote(
         if (isMissing(cause)) null else throw unavailable(cause)
     }
 
-    override suspend fun write(state: VaultState, expectedVersion: String?): String = try {
+    override suspend fun write(
+        state: VaultState,
+        expectedVersion: String?,
+        createOnly: Boolean,
+    ): String = try {
         val result = controller.syncDataset(
             datasetId,
             sharedDatasetMutator(
