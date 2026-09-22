@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { BackupFile } from "../vault/drive";
 import {
   csvOmissions,
   exportCsv,
@@ -124,6 +125,10 @@ export function Settings({
   onScanCodes,
   onLock,
   describeBackupFile,
+  backupFiles,
+  onRefreshBackupFiles,
+  onChooseBackupFile,
+  onDeleteBackupFile,
   state,
   sharing,
 }: {
@@ -137,6 +142,10 @@ export function Settings({
   onLock: () => void;
   /** One line describing the backup file, for comparing against the phone. */
   describeBackupFile: () => Promise<string>;
+  backupFiles: BackupFile[];
+  onRefreshBackupFiles: () => Promise<void>;
+  onChooseBackupFile: (fileId: string) => Promise<void>;
+  onDeleteBackupFile: (fileId: string) => Promise<void>;
   /** The vault as it stands, so an export is built from what is on screen. */
   state: VaultState;
   /** Null when this build has no Google account and so cannot share at all. */
@@ -205,6 +214,13 @@ export function Settings({
           beside the passwords they belong to.
         </p>
       </fieldset>
+
+      <BackupFiles
+        files={backupFiles}
+        onRefresh={onRefreshBackupFiles}
+        onUse={onChooseBackupFile}
+        onDelete={onDeleteBackupFile}
+      />
 
       <BackupDiagnostic describe={describeBackupFile} />
 
@@ -348,4 +364,178 @@ function BackupDiagnostic({ describe }: { describe: () => Promise<string> }) {
       )}
     </fieldset>
   );
+}
+
+/**
+ * Every Keyweb backup in this Google account, and what can be told about one
+ * without opening it.
+ *
+ * This existed only as a refusal: when the account held two files the app
+ * would not guess between them and offered the choice at that moment. Which
+ * meant somebody who suspected they had a stray file — from a browser that set
+ * itself up twice, or a restore that went sideways — could not look, and
+ * certainly could not tidy up.
+ *
+ * Nothing here needs a key. The date is the envelope header, the size is the
+ * file's own, and "your recovery code opens this" is the presence of a second
+ * copy rather than a claim about the code. The size is the honest answer to
+ * "is that one empty": a sealed empty vault is about a kilobyte, and a real
+ * one is not.
+ */
+function BackupFiles({
+  files,
+  onRefresh,
+  onUse,
+  onDelete,
+}: {
+  files: BackupFile[];
+  onRefresh: () => Promise<void>;
+  onUse: (fileId: string) => Promise<void>;
+  onDelete: (fileId: string) => Promise<void>;
+}) {
+  const [looked, setLooked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <fieldset className="card">
+      <legend>Backups in this Google account</legend>
+      <p className="hint">
+        Keyweb keeps one file. If there are more, one of them is being read by
+        something and the rest are strays — usually from a setup that ran twice.
+      </p>
+
+      {error && (
+        <p className="status" data-tone="risk">
+          <span>
+            <b>{error}</b>
+          </span>
+        </p>
+      )}
+
+      {!looked ? (
+        <button
+          type="button"
+          className="btn sec"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              await onRefresh();
+              setLooked(true);
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : "Keyweb couldn't look.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Looking…" : "Show me what is there"}
+        </button>
+      ) : files.length === 0 ? (
+        <p className="hint">No Keyweb backup in this account yet.</p>
+      ) : (
+        <div className="list">
+          {files.map((file) => (
+            <div key={file.fileId} className="row" style={{ cursor: "default" }}>
+              <span className="rowtext">
+                <b>
+                  Last changed {whenChanged(file.updatedAt)}
+                  {file.inUse ? " · in use" : ""}
+                </b>
+                <span>
+                  {humanSize(file.bytes)} ·{" "}
+                  {file.hasCodeCopy
+                    ? "your recovery code opens it"
+                    : "no recovery copy — only the device that made it"}{" "}
+                  · {file.fileId.slice(-6)}
+                </span>
+              </span>
+              {!file.inUse && (
+                <>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    disabled={busy}
+                    onClick={() => void onUse(file.fileId)}
+                  >
+                    Use this one
+                  </button>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    disabled={busy}
+                    onClick={() => setConfirming(file.fileId)}
+                  >
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {confirming !== null && (
+        <p className="status" data-tone="attn">
+          <span>
+            <b>Delete that backup file?</b>
+            <em>
+              Keyweb will not be able to open it again. Google keeps deleted files in your
+              Drive bin for thirty days, so this is undoable there and nowhere else.
+            </em>
+            <span style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="btn pri"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    await onDelete(confirming);
+                    setConfirming(null);
+                  } catch (cause) {
+                    setError(
+                      cause instanceof Error ? cause.message : "Keyweb couldn't delete it.",
+                    );
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Delete it
+              </button>
+              <button type="button" className="btn sec" onClick={() => setConfirming(null)}>
+                Keep it
+              </button>
+            </span>
+          </span>
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
+/** A file size somebody can judge a vault by. */
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** When the vault inside it last changed, in words. */
+function whenChanged(at: string | null): string {
+  if (!at) return "at some point";
+  const then = Date.parse(at);
+  if (Number.isNaN(then)) return "at some point";
+  const minutes = Math.floor((Date.now() - then) / 60_000);
+  if (minutes < 2) return "just now";
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }

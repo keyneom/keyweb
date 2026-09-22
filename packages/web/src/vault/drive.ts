@@ -206,6 +206,18 @@ export type BackupFile = {
   hasPasskeyCopy: boolean;
   hasCodeCopy: boolean;
   chosen: boolean;
+  /**
+   * How big the sealed file is.
+   *
+   * The nearest thing to "what is in it" that can be had without a key. An
+   * empty vault seals to about a kilobyte whatever it was sealed with, and a
+   * vault with a few hundred passwords is tens of kilobytes, so somebody
+   * deciding which of two files is theirs can tell a stub from the real one
+   * without opening either.
+   */
+  bytes: number;
+  /** Whether this is the file the app is actually reading and writing. */
+  inUse: boolean;
 };
 
 const CHOSEN_KEY = "keyweb.backup-file";
@@ -478,9 +490,33 @@ export class GoogleDriveRemote implements RemoteVaultStore {
           hasPasskeyCopy: payload?.passkey !== undefined,
           hasCodeCopy: payload?.recovery !== undefined,
           chosen: file.fileId === chosenBackupFile(),
+          bytes: content.length,
+          inUse: file.fileId === (chosenBackupFile() ?? this.#fileId),
         };
       }),
     );
+  }
+
+  /**
+   * Throw away one of the vault files in this account.
+   *
+   * Only ever what somebody picked off a list that showed them its date and
+   * its size, and never the file this device is using — that one is reachable
+   * through "replace the backup", which writes rather than deletes, so there
+   * is no path here that ends in no backup at all.
+   *
+   * Drive keeps deleted files in the owner's bin for thirty days, which is
+   * worth saying on screen: this is recoverable by them, and by nobody else.
+   */
+  async deleteBackupFile(fileId: string): Promise<void> {
+    if (!fileId) throw new Error("No file was chosen.");
+    const inUse = chosenBackupFile() ?? this.#fileId;
+    if (fileId === inUse) {
+      throw new Error("That is the backup Keyweb is using. Choose the other one first.");
+    }
+    const authorization = await this.#auth();
+    await this.#store.delete(fileId, authorization);
+    if (this.#fileId === fileId) this.#fileId = null;
   }
 
   async read(): Promise<RemoteRevision | null> {

@@ -96,7 +96,7 @@ class DriveClient(
             append(FILES)
             append("?spaces=drive&corpora=user&pageSize=200")
             append("&supportsAllDrives=true&includeItemsFromAllDrives=true")
-            append("&fields=").append(encode("files(id,name,modifiedTime,appProperties)"))
+            append("&fields=").append(encode("files(id,name,modifiedTime,appProperties,size)"))
             append("&q=").append(encode("trashed = false"))
         }
         val body = json.parseToJsonElement(get(query)).jsonObject
@@ -111,8 +111,19 @@ class DriveClient(
                 },
                 keywebMarker = file["appProperties"]?.jsonObject
                     ?.get("keyweb")?.jsonPrimitive?.content,
+                bytes = file["size"]?.jsonPrimitive?.content?.toLongOrNull(),
             )
         }
+    }
+
+    /**
+     * Throw one file away.
+     *
+     * Drive keeps it in the owner's bin for thirty days, which is the only
+     * undo there is and is worth saying on screen rather than relying on.
+     */
+    suspend fun deleteFile(fileId: String) {
+        send("$FILES/${encode(fileId)}?supportsAllDrives=true", "DELETE", null, null)
     }
 
     override suspend fun readText(fileId: String): String =

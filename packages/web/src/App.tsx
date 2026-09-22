@@ -490,6 +490,10 @@ export function App() {
             setRoute({ name: "list" });
           }}
           describeBackupFile={vault.describeBackupFile}
+          backupFiles={vault.backupFiles}
+          onRefreshBackupFiles={vault.refreshBackupFiles}
+          onChooseBackupFile={vault.chooseBackupFile}
+          onDeleteBackupFile={vault.deleteBackupFile}
           state={vault.state}
           sharing={vault.sharing}
         />

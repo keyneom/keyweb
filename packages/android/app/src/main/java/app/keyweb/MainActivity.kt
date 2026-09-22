@@ -666,6 +666,10 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             route = Route.List
                         },
                         onDescribeBackup = viewModel::describeBackupFile,
+                        backupFiles = ui.backupFiles,
+                        onShowBackupFiles = viewModel::listBackupFiles,
+                        onUseBackupFile = viewModel::chooseBackupFile,
+                        onDeleteBackupFile = viewModel::deleteBackupFile,
                         exportSummary = viewModel.exportSummary(),
                         onExport = { csv ->
                             exportingCsv = csv

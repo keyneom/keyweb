@@ -1601,6 +1601,11 @@ fun SettingsScreen(
     onLock: () -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
     onDescribeBackup: () -> Unit = {},
+    /** Every Keyweb backup in this Google account, once somebody has looked. */
+    backupFiles: List<BackupFileChoice> = emptyList(),
+    onShowBackupFiles: () -> Unit = {},
+    onUseBackupFile: (String) -> Unit = {},
+    onDeleteBackupFile: (String) -> Unit = {},
     /** How many passwords, and what a CSV would leave behind. */
     exportSummary: Pair<Int, CsvOmissions>? = null,
     /** Null when this build has no Google account and so cannot share at all. */
@@ -1721,6 +1726,87 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Check the backup file", onDescribeBackup)
+
+            /*
+             * What is actually in this Google account.
+             *
+             * The list existed only as a refusal: when the account held two
+             * files Keyweb would not guess and offered the choice at that
+             * moment. So somebody who suspected a stray file — a setup that
+             * ran twice, a restore that went sideways — could not look, and
+             * could not tidy up.
+             *
+             * Nothing shown needs a key. The date is the envelope header, the
+             * size is the file's own, and the size is the honest answer to "is
+             * that one empty": a sealed empty vault is about a kilobyte.
+             */
+            Spacer(Modifier.height(20.dp))
+            Text("Backups in this Google account", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Keyweb keeps one file. If there are more, one is being read and the rest " +
+                    "are strays.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            if (backupFiles.isEmpty()) {
+                SecondaryButton("Show me what is there", onShowBackupFiles)
+            } else {
+                var confirming by remember { mutableStateOf<String?>(null) }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    Column {
+                        backupFiles.forEach { file ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.weight(1f)) {
+                                    VaultRow(
+                                        initials = if (file.inUse) "●" else "○",
+                                        title = "Last changed " + whenChanged(file.modifiedAtMs) +
+                                            if (file.inUse) " · in use" else "",
+                                        subtitle = humanSize(file.bytes) + " · " +
+                                            file.fileId.takeLast(6),
+                                        onClick = {},
+                                    )
+                                }
+                                if (!file.inUse) {
+                                    TextButton(onClick = { onUseBackupFile(file.fileId) }) {
+                                        Text("Use")
+                                    }
+                                    TextButton(onClick = { confirming = file.fileId }) {
+                                        Text("Delete", color = statusColors.risk)
+                                    }
+                                }
+                            }
+                            HorizontalDivider(color = statusColors.line)
+                        }
+                    }
+                }
+
+                confirming?.let { fileId ->
+                    AlertDialog(
+                        onDismissRequest = { confirming = null },
+                        title = { Text("Delete that backup file?") },
+                        text = {
+                            Text(
+                                "Keyweb will not be able to open it again. Google keeps deleted " +
+                                    "files in your Drive bin for thirty days, so this is undoable " +
+                                    "there and nowhere else.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                onDeleteBackupFile(fileId)
+                                confirming = null
+                            }) { Text("Delete it", color = statusColors.risk) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirming = null }) { Text("Keep it") }
+                        },
+                    )
+                }
+            }
 
             /*
              * The door has to swing both ways.
@@ -1951,3 +2037,11 @@ private fun customFields(
  */
 private fun storedName(field: EditableField): ItemField =
     storedFieldName(field.name.trim(), field.secret)
+
+/** A file size somebody can judge a vault by. */
+private fun humanSize(bytes: Long?): String = when {
+    bytes == null -> "size unknown"
+    bytes < 1024 -> "$bytes bytes"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+}

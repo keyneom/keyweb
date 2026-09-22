@@ -135,6 +135,10 @@ export type VaultApi = {
    * between. Empty until something has looked.
    */
   backupFiles: BackupFile[];
+  /** Look again at what is in the account. */
+  refreshBackupFiles(): Promise<void>;
+  /** Throw one away. Never the one in use; Drive keeps it in the bin. */
+  deleteBackupFile(fileId: string): Promise<void>;
   /** Say which of them is the real vault, and carry on with it. */
   chooseBackupFile(fileId: string): Promise<void>;
   lock(): void;
@@ -701,6 +705,27 @@ export function useVault(): VaultApi {
     setBackupFiles(await probe.listBackupFiles().catch(() => []));
   }, []);
 
+  /**
+   * Look at what is in this Google account, whenever somebody asks.
+   *
+   * The list used to appear only when something had already gone wrong and
+   * Keyweb refused to choose between two files. That is the worst moment to
+   * meet it and the only one — so a person who suspected they had a stray file
+   * had no way to look, and no way to be rid of it.
+   */
+  const refreshBackupFiles = useCallback(async () => {
+    await listBackupFiles();
+  }, [listBackupFiles]);
+
+  const deleteBackupFile = useCallback<VaultApi["deleteBackupFile"]>(
+    async (fileId) => {
+      const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
+      await probe.deleteBackupFile(fileId);
+      await listBackupFiles();
+    },
+    [listBackupFiles],
+  );
+
   const chooseBackupFileAndRetry = useCallback<VaultApi["chooseBackupFile"]>(
     async (fileId) => {
       chooseBackupFile(fileId);
@@ -1112,6 +1137,8 @@ export function useVault(): VaultApi {
     accountContents,
     describeBackupFile,
     backupFiles,
+    refreshBackupFiles,
+    deleteBackupFile,
     chooseBackupFile: chooseBackupFileAndRetry,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,

@@ -48,5 +48,12 @@ interface DriveFiles {
         val modifiedAtMs: Long?,
         /** Keyweb's own files carry a marker, so its backup is never offered. */
         val keywebMarker: String?,
+        /**
+         * How big the sealed file is, when Drive said.
+         *
+         * The nearest thing to "what is in it" that can be had without a key:
+         * an empty vault seals to about a kilobyte, a real one does not.
+         */
+        val bytes: Long? = null,
     )
 }

@@ -207,6 +207,10 @@ data class BackupFileChoice(
     val fileId: String,
     val modifiedAtMs: Long?,
     val chosen: Boolean,
+    /** Size of the sealed file: a stub and a real vault are not alike. */
+    val bytes: Long? = null,
+    /** Whether this is the file this phone is actually reading and writing. */
+    val inUse: Boolean = false,
 )
 
 enum class VaultPhase {
@@ -851,13 +855,44 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             }.getOrNull().orEmpty()
             _state.value = _state.value.copy(
                 backupFiles = found.map {
+                    val chosen = prefs.getString(CHOSEN_BACKUP_KEY, null)
                     BackupFileChoice(
                         fileId = it.fileId,
                         modifiedAtMs = it.modifiedAtMs,
-                        chosen = it.fileId == prefs.getString(CHOSEN_BACKUP_KEY, null),
+                        chosen = it.fileId == chosen,
+                        bytes = it.bytes,
+                        // With one file and no choice recorded, that one file
+                        // is the one in use — saying otherwise would offer to
+                        // delete the only backup there is.
+                        inUse = it.fileId == chosen || (chosen == null && found.size == 1),
                     )
                 },
             )
+        }
+    }
+
+    /**
+     * Throw away a backup file this phone is not using.
+     *
+     * Never the one in use: that one is reachable through "replace the
+     * backup", which writes rather than deletes, so no path here ends in no
+     * backup at all. Drive keeps what it deletes in the owner's bin for thirty
+     * days, which the screen says rather than this relying on it.
+     */
+    fun deleteBackupFile(fileId: String) {
+        val inUse = _state.value.backupFiles.firstOrNull { it.fileId == fileId }?.inUse == true
+        if (inUse) {
+            showToast("That is the backup Keyweb is using. Choose the other one first.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                driveClient().deleteFile(fileId)
+                showToast("That backup file was deleted. It is in your Drive bin for 30 days.")
+                listBackupFiles()
+            } catch (cause: Exception) {
+                showToast(describeBackup(cause))
+            }
         }
     }
 
