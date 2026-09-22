@@ -96,6 +96,40 @@ export type SharingIdentityLike = {
   clear(): void;
 };
 
+/**
+ * Where the recovery lock on the identity is kept, beside the passkey one.
+ * The same app id the phone writes it under.
+ */
+export const KEYWEB_RECOVERY_APP_ID = "keyweb-recovery";
+
+/**
+ * Become yourself again from the printed code, in a browser with no passkey.
+ *
+ * Every keyring is a file whose key is wrapped to its participants, and you
+ * are a participant on every one of yours — so what the code has to restore is
+ * *you*, not a copy of anything. The phone that minted the code writes this
+ * record: the very keypair the passkey record holds, wrapped by a key derived
+ * from the code with the same label both platforms use.
+ *
+ * Null when the account has no such record, which is every account whose
+ * phone has not yet run a build that writes it.
+ */
+export async function unlockRecoveryIdentity(
+  store: ProtectedSharingIdentityStore,
+  code: Uint8Array,
+): Promise<WebCryptoSharingIdentity | null> {
+  const stored = await store.load(KEYWEB_RECOVERY_APP_ID);
+  if (!stored) return null;
+  const record = parseProtectedSharingIdentityV1(stored);
+  const key = await deriveContentKey(
+    keywebSharingProfile,
+    code,
+    base64UrlToBytes(record.kdfSalt),
+    backend,
+  );
+  return unlockProtectedSharingIdentityV1(record, key);
+}
+
 export class SharingIdentityMissing extends Error {
   constructor(message = "This device has no sharing key yet.") {
     super(message);

@@ -79,6 +79,39 @@ class RecoveryLockTest {
         assertEquals(fixture.keyId, recovered.publicKey.keyId)
     }
 
+    @Serializable
+    private data class LockFixture(
+        val note: String,
+        val secretBase64: String,
+        val keyId: String,
+        val record: ProtectedSharingIdentityV1,
+    )
+
+    /**
+     * The lock as the phone writes it, for the browser's suite to open. The
+     * browser cannot write one, so this is the only direction there is — and
+     * the one a restore in a browser depends on.
+     */
+    @Test
+    fun `emits the recovery lock the phone writes, for the web suite`() = runTest {
+        val fixture = fixture()
+        val secret = java.util.Base64.getDecoder().decode(fixture.secretBase64)
+        val store = AppData(fixture.record)
+        identity(store, secret).get()
+
+        File("../../../fixtures/sharing-recovery-lock-v1.json").writeText(
+            Json { prettyPrint = true }.encodeToString(
+                LockFixture.serializer(),
+                LockFixture(
+                    note = "Written by Android's KeywebSharingIdentity. Do not edit.",
+                    secretBase64 = fixture.secretBase64,
+                    keyId = fixture.keyId,
+                    record = store.records.getValue(RECOVERY_APP_ID),
+                ),
+            ),
+        )
+    }
+
     @Test
     fun `a wrong code opens nothing`() = runTest {
         val fixture = fixture()

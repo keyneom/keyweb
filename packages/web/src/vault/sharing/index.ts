@@ -6,10 +6,12 @@ import {
 import { createWebPasskeyProvider } from "@keyneom/sync-kit/keys/web-passkey";
 import { authorizeGoogle } from "../googleAuth";
 import { keywebRpId } from "../profile";
+import type { WebCryptoSharingIdentity } from "@keyneom/sync-kit/sharing/web-crypto";
 import {
   KEYWEB_SHARING_APP_ID,
   KeywebSharingIdentityStore,
   keywebSharingProfile,
+  type SharingIdentityLike,
 } from "./identity";
 
 export * from "./identity";
@@ -26,7 +28,32 @@ export * from "./identity";
  * this store precisely so one account carries one identity to all its devices;
  * easy-bc has used both from the start. Keyweb had the store and not the key.
  */
-export function createSharingIdentity(): PasskeyProtectedSharingIdentityProvider {
+/** The app-data store the identity records live in, both locks side by side. */
+export function sharingIdentityStore(): KeywebSharingIdentityStore {
+  return new KeywebSharingIdentityStore({
+    remote: new DriveAppDataProtectedSharingIdentityStore({
+      authorization: () => authorizeGoogle(),
+    }),
+    local: new IndexedDbProtectedSharingIdentityStore({ databaseName: "keyweb-sharing" }),
+  });
+}
+
+/**
+ * The identity for this session.
+ *
+ * Handed one already unlocked by the printed code when the passkey is what was
+ * lost; otherwise the passkey unlocks it as on every other device.
+ */
+export function createSharingIdentity(recovered?: WebCryptoSharingIdentity | null): SharingIdentityLike {
+  const provider = createPasskeyIdentity();
+  if (!recovered) return provider;
+  return {
+    getOrCreate: async () => recovered,
+    clear: () => provider.clear(),
+  };
+}
+
+function createPasskeyIdentity(): PasskeyProtectedSharingIdentityProvider {
   return new PasskeyProtectedSharingIdentityProvider({
     appId: KEYWEB_SHARING_APP_ID,
     // The same passkey that opens the vault, through the sharing profile whose

@@ -1176,13 +1176,31 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val secret = RecoveryCode.parse(typed)
                 val client = driveClient()
-                val existing = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
-                    .fetchRecoverySealed()
-                    ?: throw InvalidRecoveryCode("That backup has no recovery copy yet.")
-                // Throws if the code is wrong, which is the whole point.
-                VaultEnvelopeCipher.forRecoveryCode(secret, existing).open(existing)
 
-                finishSetup(secret, existing)
+                /*
+                 * You, first. Every keyring is a file wrapped to you, so what
+                 * the code has to restore is *you*: the lock beside your
+                 * passkey record gives back the same keypair, and a fresh
+                 * passkey is wrapped around it so this phone never needs the
+                 * code again. With that, the index and every keyring open.
+                 */
+                val recovered = runCatching { sharingIdentity?.recoverWith(secret) }.getOrNull()
+
+                // The old file too, when there is one: until the index exists
+                // it holds the root, and it is only ever read.
+                val existing = runCatching {
+                    DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
+                        .fetchRecoverySealed()
+                }.getOrNull()
+                val opensOld = existing != null && runCatching {
+                    VaultEnvelopeCipher.forRecoveryCode(secret, existing).open(existing)
+                }.isSuccess
+
+                if (recovered == null && !opensOld) {
+                    throw InvalidRecoveryCode("That code doesn't open anything in this Google account.")
+                }
+
+                finishSetup(secret, existing.takeIf { opensOld })
                 _state.value = _state.value.copy(
                     backupConfigured = true,
                     backup = BackupUiState(stage = BackupStage.ON),

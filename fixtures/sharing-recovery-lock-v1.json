@@ -1,0 +1,23 @@
+{
+    "note": "Written by Android's KeywebSharingIdentity. Do not edit.",
+    "secretBase64": "OpEMfeJFuBbwKVyjcdRoC543wlA=",
+    "keyId": "GHPacpdObB-cZtu3dEVd1zj5r6Dzino4_Ye3FWgnFWw",
+    "record": {
+        "schemaVersion": 1,
+        "kind": "sync-kit-protected-sharing-identity",
+        "appId": "keyweb-recovery",
+        "rpId": "keyweb",
+        "credentialId": "recovery",
+        "prfInput": "TtyL9DdJIP__EEG1z9tdDlH2h9GekrZcNa1lTbg2q4c",
+        "kdfSalt": "VQkWQAa7neaqt33YIhCMZXtpmBJqsln2wg2hgLRzlSM",
+        "nonce": "mfqc3iDyYK6ScwCf",
+        "publicKey": {
+            "keyId": "GHPacpdObB-cZtu3dEVd1zj5r6Dzino4_Ye3FWgnFWw",
+            "encryptionAlgorithm": "ECDH-P256",
+            "encryptionPublicKey": "BIXf8HUJzw7AR6xAik-rLP8NdurEYHCtbY7FIvMDtSbsRBl7VMivBQCESdrQttdtb0ckkuUDyPfo_cVZnFyMQDE",
+            "signatureAlgorithm": "ECDSA-P256-SHA256-P1363",
+            "signingPublicKey": "BIvuSGh1hDGNVj6brMxFSHskADEjaonabWEkjxWdC0Oktm1GLROnyR_4QVABdCv8aYafok_fHBGOUBww2ZlRVfc"
+        },
+        "encryptedPrivateKeys": "DR3kzPL_RTmWl_ZUCtmm4AwrDFdVl8jAhmiuLV7TkYVURWf9275Rbzsg5hS6PX3oN0iwfS1QpSfRlmoICbganY6DcNBBHii4QtbGpWiUvnejTLc8qWK7dq4eJYpoKr4g46S-k2sJNKGboMa0oKIMchqnQSASb9b8m5qytfGO4mVvnJT5gW1EF4egFnImATqVH5etT-Kv6vt60qV6r9uT-H7w-PYBqZwbSml_gp75c13a3AaGXsRphour5kMbMKMI4aUIYS8ZVAcBOQPKN-QIP8SVQgu_SqpTTQe0UQUCOmaZBMUb7UPFrvo0oR5yISWbRRaZpRKNAvuW9UHzohlOESrhvsEQLDAm-Y2QvlTjC2NQ2bu8SCqa6aUl8ybO2IEV9WuGZ7Ifqsw"
+    }
+}

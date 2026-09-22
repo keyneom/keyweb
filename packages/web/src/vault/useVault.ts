@@ -34,6 +34,8 @@ import {
 import {
   createKeywebSharingController,
   createSharingIdentity,
+  sharingIdentityStore,
+  unlockRecoveryIdentity,
   KeywebSharing,
   type BlockedJoin,
   IndexRemote,
@@ -44,6 +46,7 @@ import {
   type ShareRole,
 } from "./sharing";
 import { grantSharedFiles } from "./sharing/picker";
+import type { WebCryptoSharingIdentity } from "@keyneom/sync-kit/sharing/web-crypto";
 
 export type { Member, PendingInvite, ShareRole } from "./sharing";
 import type { SharingDatasetFileV1, SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
@@ -287,6 +290,8 @@ export function useVault(): VaultApi {
   const remoteRef = useRef<GoogleDriveRemote | null>(null);
   const sharingRef = useRef<KeywebSharing | null>(null);
   const identityRef = useRef<SharingIdentityLike | null>(null);
+  /** An identity the printed code unlocked, for the session the restore starts. */
+  const recoveredIdentityRef = useRef<WebCryptoSharingIdentity | null>(null);
   const [sharing, setSharing] = useState<SharingApi | null>(null);
   const [blockedJoins, setBlockedJoins] = useState<BlockedJoin[]>([]);
 
@@ -450,7 +455,10 @@ export function useVault(): VaultApi {
        * code instead, so a browser that had never been handed that code could
        * read every password and still not touch a shared keyring.
        */
-      const identity = BACKUP_CONFIGURED ? createSharingIdentity() : null;
+      const identity = BACKUP_CONFIGURED
+        ? createSharingIdentity(recoveredIdentityRef.current)
+        : null;
+      recoveredIdentityRef.current = null;
       identityRef.current = identity;
       const controller = identity ? createKeywebSharingController(identity) : null;
       const datasetRemotes = new Map<string, SharedKeyringRemote>();
@@ -529,7 +537,7 @@ export function useVault(): VaultApi {
       const cipher = cipherRef.current;
       if (storage && cipher) {
         await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
-        await storage.writeMeta("recovery-envelope", sealed);
+        if (sealed) await storage.writeMeta("recovery-envelope", sealed);
       }
       setRecoveryNeedsCode(false);
       // Reseal the recovery copy now rather than at the next unlock, so the
@@ -649,15 +657,30 @@ export function useVault(): VaultApi {
       setError(null);
       try {
         const secret = parseRecoveryCode(code);
+
+        /*
+         * You, first. Every keyring is a file wrapped to you, so the code's
+         * real job is to make this browser you again — through the lock the
+         * phone wrote beside your passkey one. With that, the index and every
+         * keyring open exactly as they do on any device of yours.
+         */
+        const identity = await unlockRecoveryIdentity(sharingIdentityStore(), secret).catch(
+          () => null,
+        );
+
+        // The old file too, when there is one: until the index exists it is
+        // where the root lives, and it is only ever read.
         const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
-        const sealed = await probe.fetchRecoverySealed();
-        if (!sealed) {
-          setError("That Google account has no Keyweb backup that a code can open.");
+        const sealed = await probe.fetchRecoverySealed().catch(() => null);
+        const viaCode = sealed ? await createRecoveryCipher(secret, sealed) : null;
+        const recovered = viaCode && sealed ? await viaCode.openState(sealed).catch(() => null) : null;
+
+        if (!identity && !recovered) {
+          setError("That code doesn't open anything in this Google account.");
           setPhase("locked");
           return;
         }
-        const viaCode = await createRecoveryCipher(secret, sealed);
-        const recovered = await viaCode.openState(sealed);
+        recoveredIdentityRef.current = identity;
 
         /*
          * Reuse this browser's passkey when it has one.
@@ -670,7 +693,7 @@ export function useVault(): VaultApi {
          */
         const { cipher, lock } = await unlockVault(await peekSealedState());
         const storage = await IndexedDbVaultStorage.open({ cipher });
-        await storage.applyRemote(recovered);
+        if (recovered) await storage.applyRemote(recovered);
         /*
          * Keep the code, so this browser can rewrite the recovery copy too.
          *
