@@ -133,7 +133,19 @@ export function ItemEdit({
   // Kept in the list rather than hidden, so an item that is already in one
   // still shows where it lives — but choosing it says why it cannot be saved.
   const readOnly = readOnlyKeyrings.has(chosen);
-  const canSave = title.trim().length > 0 && password.length > 0 && !saving && !readOnly;
+  /*
+   * A name is the whole requirement.
+   *
+   * Requiring a password too made every entry that has none impossible to
+   * edit — not merely awkward, impossible, because the same rule that blocks
+   * creating one blocks saving any change to one that exists. A second-factor
+   * code scanned from a QR has a title, sometimes a username, and no password
+   * by construction; so does a note, a card, a membership number. Their names
+   * could never be corrected, and nothing on the screen said why.
+   *
+   * The name stays required because it is what somebody finds the entry by.
+   */
+  const canSave = title.trim().length > 0 && !saving && !readOnly;
 
   async function save() {
     if (!canSave) return;
@@ -172,7 +184,7 @@ export function ItemEdit({
       </header>
 
       <h1 className="screen-title">{item ? "Edit password" : "Add a password"}</h1>
-      <p className="screen-sub">Only the name and the password are required.</p>
+      <p className="screen-sub">Only the name is required.</p>
 
       <label className="field">
         <span>What is it for?</span>

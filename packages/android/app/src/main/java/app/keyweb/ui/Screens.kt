@@ -1093,7 +1093,16 @@ fun ItemEditScreen(
      * two agree by construction.
      */
     val chosen = if (rings.any { it.id == keyringId }) keyringId else rings.firstOrNull()?.id ?: ""
-    val canSave = title.isNotBlank() && password.isNotEmpty()
+    /*
+     * A name is the whole requirement.
+     *
+     * Requiring a password too made every entry that has none impossible to
+     * edit — the same rule that blocks creating one blocks saving any change
+     * to one that exists. A second-factor code scanned from a QR has a title
+     * and no password by construction; so does a note or a card. Their names
+     * could never be corrected, and nothing on the screen said why.
+     */
+    val canSave = title.isNotBlank()
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
@@ -1106,7 +1115,7 @@ fun ItemEditScreen(
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
-                "Only the name and the password are required.",
+                "Only the name is required.",
                 color = statusColors.muted,
                 modifier = Modifier.padding(bottom = 12.dp),
             )
