@@ -274,11 +274,7 @@ class KeywebSharingIdentity(
      */
     suspend fun recoverWith(code: ByteArray): SharingIdentity = gate.withLock {
         val stored = store.load(RECOVERY_APP_ID) ?: throw SharingIdentityMissing()
-        val record = ProtectedSharingIdentityCrypto.parse(stored)
-        val identity = ProtectedSharingIdentityCrypto.unlock(
-            record,
-            wrapping(code, base64UrlToBytes(record.kdfSalt)),
-        )
+        val identity = unlockRecoveryLock(stored, code)
         runCatching {
             val rewrapped = passkey.wrap(appId, identity)
             store.save(rewrapped.record)
@@ -287,8 +283,14 @@ class KeywebSharingIdentity(
         identity
     }
 
-    private fun wrapping(secret: ByteArray, salt: ByteArray): ByteArray =
-        hkdfSha256(secret, salt, HKDF_INFO.toByteArray(Charsets.UTF_8), KEY_BYTES)
+    /**
+     * The lock the printed code opens, as it stands in the account.
+     *
+     * For a backup file, which carries it so the file opens with the code and
+     * nothing else. Null until a phone holding the code has written one.
+     */
+    suspend fun recoveryLock(): ProtectedSharingIdentityV1? =
+        store.load(RECOVERY_APP_ID)?.let(ProtectedSharingIdentityCrypto::parse)
 
     companion object {
         /**
@@ -312,6 +314,24 @@ class KeywebSharingIdentity(
         ): ProtectedSharingIdentityStore =
             DriveAppDataProtectedSharingIdentityStore({ authorization() })
     }
+}
+
+private fun wrapping(secret: ByteArray, salt: ByteArray): ByteArray =
+    hkdfSha256(secret, salt, HKDF_INFO.toByteArray(Charsets.UTF_8), KEY_BYTES)
+
+/**
+ * Become yourself from the printed code and a recovery lock, wherever the lock
+ * came from — the account's app-data folder, or a backup file.
+ *
+ * The same derivation the web's `unlockRecoveryIdentity` uses, so a lock
+ * either one wrote opens on the other. Throws on the wrong code.
+ */
+internal fun unlockRecoveryLock(record: ProtectedSharingIdentityV1, code: ByteArray): SharingIdentity {
+    val parsed = ProtectedSharingIdentityCrypto.parse(record)
+    return ProtectedSharingIdentityCrypto.unlock(
+        parsed,
+        wrapping(code, base64UrlToBytes(parsed.kdfSalt)),
+    )
 }
 
 /**

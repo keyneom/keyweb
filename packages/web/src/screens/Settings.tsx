@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { BackupFile } from "../vault/drive";
+import type { BackupFileV1 } from "../vault/backupFile";
 import {
   csvOmissions,
   exportCsv,
@@ -129,6 +130,7 @@ export function Settings({
   onRefreshBackupFiles,
   onChooseBackupFile,
   onDeleteBackupFile,
+  onSaveBackup,
   state,
   sharing,
 }: {
@@ -146,6 +148,7 @@ export function Settings({
   onRefreshBackupFiles: () => Promise<void>;
   onChooseBackupFile: (fileId: string) => Promise<void>;
   onDeleteBackupFile: (fileId: string) => Promise<void>;
+  onSaveBackup: () => Promise<BackupFileV1>;
   /** The vault as it stands, so an export is built from what is on screen. */
   state: VaultState;
   /** Null when this build has no Google account and so cannot share at all. */
@@ -224,7 +227,7 @@ export function Settings({
 
       <BackupDiagnostic describe={describeBackupFile} />
 
-      <ExportSection state={state} />
+      <ExportSection state={state} onSaveBackup={onSaveBackup} />
 
       {sharing && <SharingKey sharing={sharing} />}
 
@@ -252,7 +255,13 @@ export function Settings({
  * using Keyweb" — the Drive backup is a sealed envelope only Keyweb can open,
  * which is a safety net and not a way out.
  */
-function ExportSection({ state }: { state: VaultState }) {
+function ExportSection({
+  state,
+  onSaveBackup,
+}: {
+  state: VaultState;
+  onSaveBackup: () => Promise<BackupFileV1>;
+}) {
   // Built once per render of this screen rather than on the click, so the
   // counts below and the file that gets written come from the same pass: a
   // warning derived separately from the thing it warns about goes stale.
@@ -262,17 +271,11 @@ function ExportSection({ state }: { state: VaultState }) {
   function save(kind: "json" | "csv") {
     const text = kind === "csv" ? exportCsv(exported) : JSON.stringify(exported, null, 2);
     const stamp = new Date().toISOString().slice(0, 10);
-    const blob = new Blob([text], {
-      type: kind === "csv" ? "text/csv;charset=utf-8" : "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `keyweb-${stamp}.${kind}`;
-    link.click();
-    // The blob holds every password in memory until it is released, and the
-    // download has already been handed to the browser by this point.
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    download(
+      text,
+      `keyweb-${stamp}.${kind}`,
+      kind === "csv" ? "text/csv;charset=utf-8" : "application/json",
+    );
   }
 
   const losses = [
@@ -283,13 +286,64 @@ function ExportSection({ state }: { state: VaultState }) {
       `${omissions.history} earlier value${omissions.history === 1 ? "" : "s"}`,
   ].filter((part): part is string => typeof part === "string");
 
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
+
+  async function saveBackup() {
+    setBackupBusy(true);
+    setBackupError(null);
+    try {
+      const file = await onSaveBackup();
+      download(
+        JSON.stringify(file),
+        `keyweb-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        "application/json",
+      );
+    } catch (cause) {
+      setBackupError(cause instanceof Error ? cause.message : "Keyweb couldn't make the backup.");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
   return (
     <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
       <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
         Take a copy of everything
       </legend>
+
+      {/*
+        The locked one first, because it is the one to keep.
+
+        Everything else Keyweb holds lives in your Google account — which covers
+        losing a passkey and does not cover losing Google. This file carries the
+        passwords and the lock your recovery code opens, so the file and the
+        code on paper are enough on their own, with no network at all.
+      */}
       <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
-        Your passwords in a plain file you can read, print, or load into another password app.
+        A locked copy that opens with your recovery code — even if Google is down and you have
+        no other device. Keep it somewhere that isn&rsquo;t your Google account.
+      </p>
+      {backupError && (
+        <p className="status" data-tone="risk" style={{ margin: "0 0 0.7rem" }}>
+          <span>
+            <b>{backupError}</b>
+          </span>
+        </p>
+      )}
+      <div className="stack" style={{ marginBottom: "1.25rem" }}>
+        <button
+          type="button"
+          className="btn pri big"
+          disabled={backupBusy}
+          onClick={() => void saveBackup()}
+        >
+          {backupBusy ? "Locking it…" : "Save a locked backup"}
+        </button>
+      </div>
+
+      <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+        Or your passwords in a plain file you can read, print, or load into another password app.
       </p>
       {/*
         Before the buttons, not after the file exists. Somebody who decides
@@ -538,4 +592,17 @@ function whenChanged(at: string | null): string {
   if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.floor(hours / 24);
   return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+/** Hand a file to the browser to save. */
+function download(text: string, name: string, type: string) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  // The blob holds the contents in memory until released, and the download
+  // has already been handed to the browser by this point.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

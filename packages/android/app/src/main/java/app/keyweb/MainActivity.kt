@@ -306,6 +306,20 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
         ) { uri ->
             if (uri != null) viewModel.writeExport(uri, exportingCsv)
         }
+        val saveBackupFile = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json"),
+        ) { uri ->
+            if (uri != null) viewModel.writeBackupFile(uri)
+        }
+        // Held here rather than in the screen: the file chooser comes back to
+        // this activity, and the code typed before it has to still be there.
+        var backupFileCode by remember { mutableStateOf("") }
+        val openBackupFile = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            if (uri != null) viewModel.openBackupFile(uri, backupFileCode)
+            backupFileCode = ""
+        }
 
         val clipboardScope = rememberCoroutineScope()
         var pendingClear by remember { mutableStateOf<Pair<String, Long>?>(null) }
@@ -678,6 +692,13 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                             exportFile.launch(
                                 if (csv) "keyweb-$stamp.csv" else "keyweb-$stamp.json",
                             )
+                        },
+                        onSaveBackupFile = {
+                            saveBackupFile.launch("keyweb-backup-${java.time.LocalDate.now()}.json")
+                        },
+                        onOpenBackupFile = { code ->
+                            backupFileCode = code
+                            openBackupFile.launch(arrayOf("application/json", "*/*"))
                         },
                         onImport = {
                             // Quietly: if Drive access already exists the list

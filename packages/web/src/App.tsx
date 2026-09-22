@@ -187,7 +187,7 @@ export function App() {
   const promptedOnEntry = useRef(false);
   useEffect(() => {
     if (granting || promptedOnEntry.current) return;
-    if (vault.phase !== "locked" || vault.firstRun) return;
+    if (vault.phase !== "locked" || vault.firstRun || vault.codeOnly) return;
     promptedOnEntry.current = true;
     void vault.unlock({ quiet: true });
   }, [granting, vault]);
@@ -217,11 +217,13 @@ export function App() {
         <Unlock
           phase={vault.phase}
           firstRun={vault.firstRun}
+          codeOnly={vault.codeOnly}
           error={vault.error}
           backupConfigured={vault.backupConfigured}
           onUnlock={() => void vault.unlock()}
           onRestore={() => void vault.restore()}
           onRestoreWithCode={(code) => void vault.restoreWithCode(code)}
+          onRestoreFromFile={(text, code) => void vault.restoreFromFile(text, code)}
           contents={vault.accountContents}
           files={vault.backupFiles}
           onChooseFile={(fileId) => void vault.chooseBackupFile(fileId)}
@@ -495,6 +497,7 @@ export function App() {
           onRefreshBackupFiles={vault.refreshBackupFiles}
           onChooseBackupFile={vault.chooseBackupFile}
           onDeleteBackupFile={vault.deleteBackupFile}
+          onSaveBackup={vault.saveBackupFile}
           state={vault.state}
           sharing={vault.sharing}
         />

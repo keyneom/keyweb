@@ -19,6 +19,8 @@ import app.keyweb.data.VaultUnlock
 import app.keyweb.data.GrantBrowser
 import app.keyweb.data.needsAuthentication
 import app.keyweb.sharing.AcceptedShare
+import app.keyweb.sharing.restorePlan
+import app.keyweb.sharing.sealBackupFile
 import app.keyweb.sharing.KEYWEB_LANDING_URL
 import app.keyweb.sharing.KeywebSharing
 import app.keyweb.sharing.KeywebSharingIdentity
@@ -2498,6 +2500,77 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 )
             } catch (cause: Exception) {
                 showToast(cause.message ?: "Keyweb couldn't save that file.")
+            }
+        }
+    }
+
+    /**
+     * Save a locked backup: the vault sealed so the printed code opens it.
+     *
+     * The file the web saves too, in the same format, so either opens on the
+     * other. Needs the lock the code opens, which this phone writes the first
+     * time it is unlocked with backup on; without one there is nothing the
+     * code could open, and a backup nobody can open is worse than none.
+     */
+    fun writeBackupFile(uri: android.net.Uri) {
+        val engine = sync ?: return
+        val identity = sharingIdentity
+        viewModelScope.launch {
+            try {
+                if (identity == null) error("Turn on backup first, so Keyweb knows who you are.")
+                val you = identity.getOrCreate()
+                val lock = identity.recoveryLock()
+                    ?: error("Your recovery code isn't set up for backups yet. Try again once backup has run.")
+                val text = withContext(Dispatchers.Default) {
+                    sealBackupFile(engine.state(), you, lock)
+                }
+                withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver
+                        .openOutputStream(uri, "wt")
+                        ?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        ?: error("Keyweb couldn't write to that file.")
+                }
+                showToast("Saved. Your recovery code opens it.")
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't save that file.")
+            }
+        }
+    }
+
+    /**
+     * Bring a locked backup file's passwords into this phone.
+     *
+     * Added to what is here, never replacing it: the same merge a sync does,
+     * so opening an old file cannot undo anything newer. Each keyring's
+     * passwords go into the document that keyring lives in.
+     */
+    fun openBackupFile(uri: android.net.Uri, code: String) {
+        val engine = sync ?: return
+        val store = storage ?: return
+        viewModelScope.launch {
+            try {
+                val secret = RecoveryCode.parse(code)
+                val text = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver
+                        .openInputStream(uri)
+                        ?.use { it.readBytes().toString(Charsets.UTF_8) }
+                        ?: error("Keyweb couldn't read that file.")
+                }
+                val opened = withContext(Dispatchers.Default) {
+                    app.keyweb.sharing.openBackupFile(text, secret)
+                }
+                val plan = restorePlan(store.readState(), opened.state)
+                for ((documentId, part) in plan) store.applyRemote(part, documentId)
+                publish(engine.state())
+                val count = opened.state.items.values.count { !it.deleted.value }
+                showToast(
+                    "Opened. $count password" + (if (count == 1) "" else "s") + " from the file are here now.",
+                )
+                syncNow()
+            } catch (cause: InvalidRecoveryCode) {
+                showToast("That doesn't look like a recovery code. Check it and try again.")
+            } catch (cause: Exception) {
+                showToast(cause.message ?: "Keyweb couldn't open that file.")
             }
         }
     }

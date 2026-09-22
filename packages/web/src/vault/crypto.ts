@@ -133,6 +133,40 @@ function asEnvelope(value: unknown): SyncEnvelopeV1 {
 
 
 /**
+ * The browser's local copy, locked by its own key.
+ *
+ * The local copy used to be locked by a key derived from the passkey, and
+ * nothing else — so a browser whose passkey was unavailable could not open its
+ * own copy of your passwords, even with the printed code in hand. Now the copy
+ * is locked by a random key of its own, and that key is kept twice: once sealed
+ * by the passkey, for every day, and once sealed to your identity, which the
+ * recovery code can unlock with no network and no passkey at all.
+ *
+ * The envelopes it writes name themselves `local`, so a stored row says which
+ * key it needs rather than implying a passkey that did not seal it.
+ */
+export async function createLocalCipher(
+  localKey: Uint8Array,
+  salt: Uint8Array,
+  rpId: string = keywebRpId(),
+): Promise<VaultCipher> {
+  const metadata: V1KeyMetadata = {
+    credentialId: "local",
+    rpId,
+    prfInput: new Uint8Array(32),
+    kdfSalt: salt,
+  };
+  const key = await deriveContentKey(keywebV1Profile, localKey, salt, backend);
+  return {
+    sealState: (state) => stateCrypto.encrypt(state, key, metadata),
+    sealStateAt: (state, updatedAt) => sealAt(state, key, metadata, updatedAt),
+    openState: (stored) => stateCrypto.decrypt(asEnvelope(stored), key),
+    sealOp: (op) => opCrypto.encrypt(op, key, metadata),
+    openOp: (stored) => opCrypto.decrypt(asEnvelope(stored), key),
+  };
+}
+
+/**
  * A cipher keyed by the printed recovery code rather than the passkey.
  *
  * Pass the existing recovery envelope to reuse its salt, so the same code keeps

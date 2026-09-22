@@ -18,7 +18,16 @@ import {
   visibleItems,
 } from "@keyweb/vault-core";
 import { IndexedDbVaultStorage, peekSealedState, type VaultCipher } from "@keyweb/vault-idb";
-import { createRecoveryCipher, passkeySupported, unlockVault } from "./crypto";
+import { createRecoveryCipher, passkeySupported } from "./crypto";
+import {
+  codeCanOpen,
+  createWithCode,
+  opensOnlyWithCode,
+  openWithCode,
+  openWithPasskey,
+  protectLocalKey,
+  type OpenedVault,
+} from "./localVault";
 import {
   formatRecoveryCode,
   generateRecoverySecret,
@@ -34,6 +43,7 @@ import {
 import {
   createKeywebSharingController,
   createSharingIdentity,
+  KEYWEB_RECOVERY_APP_ID,
   sharingIdentityStore,
   unlockRecoveryIdentity,
   KeywebSharing,
@@ -47,6 +57,14 @@ import {
 } from "./sharing";
 import { grantSharedFiles } from "./sharing/picker";
 import type { WebCryptoSharingIdentity } from "@keyneom/sync-kit/sharing/web-crypto";
+import { parseProtectedSharingIdentityV1 } from "@keyneom/sync-kit/sharing/web-passkey";
+import {
+  openBackupFileAsYou,
+  restoreInto,
+  sealBackupFile,
+  WrongBackupCode,
+  type BackupFileV1,
+} from "./backupFile";
 
 export type { Member, PendingInvite, ShareRole } from "./sharing";
 import type { SharingDatasetFileV1, SharingPublicKeyResponseV1 } from "@keyneom/sync-kit/sharing";
@@ -89,6 +107,11 @@ export type VaultApi = {
   phase: VaultPhase;
   /** True when this device has no vault yet, so unlocking means setting up. */
   firstRun: boolean;
+  /**
+   * This browser cannot use a passkey, but its copy opens with the printed
+   * code. The lock screen offers the code and nothing else.
+   */
+  codeOnly: boolean;
   error: string | null;
   state: VaultState;
   status: SyncStatus;
@@ -110,6 +133,13 @@ export type VaultApi = {
   restore(): Promise<void>;
   /** Open a backup with the printed code, when the passkey is gone. */
   restoreWithCode(code: string): Promise<void>;
+  /**
+   * Bring back a saved backup file with the printed code.
+   *
+   * Needs neither Google nor, if none can be had, a passkey: the file and the
+   * code are enough, which is the whole reason the file exists.
+   */
+  restoreFromFile(text: string, code: string): Promise<void>;
   /**
    * The printed recovery code, surfaced once just after setup so it can be
    * written down. Null at every other time: it is never re-derivable for
@@ -143,6 +173,11 @@ export type VaultApi = {
   backupFiles: BackupFile[];
   /** Look again at what is in the account. */
   refreshBackupFiles(): Promise<void>;
+  /**
+   * An encrypted backup file you keep yourself, opened with the printed code.
+   * The one thing that survives Google being unreachable.
+   */
+  saveBackupFile(): Promise<BackupFileV1>;
   /** Throw one away. Never the one in use; Drive keeps it in the bin. */
   deleteBackupFile(fileId: string): Promise<void>;
   /** Say which of them is the real vault, and carry on with it. */
@@ -263,6 +298,7 @@ async function backupAlreadyHasRecovery(): Promise<boolean> {
 export function useVault(): VaultApi {
   const [phase, setPhase] = useState<VaultPhase>("checking");
   const [firstRun, setFirstRun] = useState(false);
+  const [codeOnly, setCodeOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountContents, setAccountContents] = useState<AccountContents | null>(null);
   const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
@@ -287,6 +323,8 @@ export function useVault(): VaultApi {
   const lockRef = useRef<(() => void) | null>(null);
   const storageRef = useRef<IndexedDbVaultStorage | null>(null);
   const cipherRef = useRef<VaultCipher | null>(null);
+  /** The key this browser's copy is locked with, to seal to you once you are known. */
+  const localKeyRef = useRef<Uint8Array | null>(null);
   const remoteRef = useRef<GoogleDriveRemote | null>(null);
   const sharingRef = useRef<KeywebSharing | null>(null);
   const identityRef = useRef<SharingIdentityLike | null>(null);
@@ -299,12 +337,19 @@ export function useVault(): VaultApi {
     let cancelled = false;
     void (async () => {
       if (!passkeySupported()) {
-        if (!cancelled) setPhase("unsupported");
+        // No passkey here, but a copy the code can open is still a copy
+        // somebody can get into. Only a browser with neither is a dead end.
+        const viaCode = await codeCanOpen().catch(() => false);
+        if (cancelled) return;
+        setCodeOnly(viaCode);
+        setPhase(viaCode ? "locked" : "unsupported");
         return;
       }
       const sealed = await peekSealedState();
+      const viaCodeOnly = await opensOnlyWithCode().catch(() => false);
       if (cancelled) return;
       setFirstRun(sealed === null);
+      setCodeOnly(viaCodeOnly);
       setPhase("locked");
     })();
     return () => {
@@ -365,6 +410,29 @@ export function useVault(): VaultApi {
     return adopted;
   }, []);
 
+  /**
+   * Let the printed code open this browser's copy from now on.
+   *
+   * After a sync, because by then you are unlocked — the sync needed you to
+   * open your files — so this never asks for the passkey on its own account.
+   * Quiet on failure: it runs again after every sync until it has worked.
+   */
+  const protectThisCopy = useCallback(async () => {
+    const storage = storageRef.current;
+    const localKey = localKeyRef.current;
+    const identity = identityRef.current;
+    if (!storage || !localKey || !identity) return;
+    try {
+      const lock = await sharingIdentityStore()
+        .load(KEYWEB_RECOVERY_APP_ID)
+        .then((record) => (record ? parseProtectedSharingIdentityV1(record) : null))
+        .catch(() => null);
+      await protectLocalKey(storage, localKey, await identity.getOrCreate(), lock);
+    } catch {
+      // Not yet. The next sync tries again.
+    }
+  }, []);
+
   /** Publish in the background; the UI already showed "Saved" from the commit. */
   const backgroundSync = useCallback(() => {
     const sync = syncRef.current;
@@ -381,19 +449,22 @@ export function useVault(): VaultApi {
         } catch {
           // Offline, or the sharing key is not unlocked yet.
         }
+        await protectThisCopy();
         if (changed) setState(await sync.state());
         setStatus({ ...sync.status() });
       },
       () => setStatus({ ...sync.status() }),
     );
-  }, [adoptShared]);
+  }, [adoptShared, protectThisCopy]);
 
-  /** Shared tail of unlock and restore: open storage and start the engine. */
+  /** Shared tail of unlock and restore: start the engine on an opened copy. */
   const start = useCallback(
-    async (cipher: VaultCipher, lock: () => void, seedFromRemote: boolean) => {
+    async (opened: OpenedVault, seedFromRemote: boolean) => {
+      const { storage, lock, cipher } = opened;
       lockRef.current = lock;
       cipherRef.current = cipher;
-      const storage = await IndexedDbVaultStorage.open({ cipher });
+      localKeyRef.current = opened.localKey;
+      if (opened.identity) recoveredIdentityRef.current = opened.identity;
       storageRef.current = storage;
       const clock = createClock({ node: deviceNode(), resume: await storage.readClock() });
 
@@ -426,13 +497,17 @@ export function useVault(): VaultApi {
         }
       }
 
-      const legacy = BACKUP_CONFIGURED
-        ? new GoogleDriveRemote({
-            clientId: CLIENT_ID,
-            cipher,
-            ...(recoveryCipher ? { recoveryCipher } : {}),
-          })
-        : null;
+      // The old Drive file was sealed with the passkey key itself, so only a
+      // passkey unlock can read it. Opened with the code, there is no need to:
+      // the index is the root now, and this copy already holds what it had.
+      const legacy =
+        BACKUP_CONFIGURED && opened.passkeyCipher
+          ? new GoogleDriveRemote({
+              clientId: CLIENT_ID,
+              cipher: opened.passkeyCipher,
+              ...(recoveryCipher ? { recoveryCipher } : {}),
+            })
+          : null;
       remoteRef.current = legacy;
 
       // Sharing is wired in before the engine starts, because the engine asks
@@ -572,9 +647,7 @@ export function useVault(): VaultApi {
       setPhase("unlocking");
       setError(null);
       try {
-        const sealed = await peekSealedState();
-        const { cipher, lock } = await unlockVault(sealed);
-        await start(cipher, lock, false);
+        await start(await openWithPasskey(), false);
       } catch (cause) {
         if (!quiet) setError(describe(cause));
         setPhase("locked");
@@ -636,8 +709,7 @@ export function useVault(): VaultApi {
         setPhase("locked");
         return;
       }
-      const { cipher, lock } = await unlockVault(sealed);
-      await start(cipher, lock, true);
+      await start(await openWithPasskey({ sealed }), true);
     } catch (cause) {
       setError(describe(cause));
       setPhase("locked");
@@ -645,11 +717,13 @@ export function useVault(): VaultApi {
   }, [describe, start]);
 
   /**
-   * Last resort: open the backup using the printed code.
+   * Last resort: open with the printed code.
    *
    * This path exists precisely because the passkey is unavailable, so it must
-   * not require one. It rebuilds the vault locally under a fresh passkey once
-   * the code has proved itself.
+   * not require one. This browser's own copy is tried first: it opens with the
+   * code alone, with no passkey and no network, which is the day this is for.
+   * Only a browser with no copy the code can open goes on to Google, and sets
+   * itself up under a passkey from what it finds there.
    */
   const restoreWithCode = useCallback(
     async (code: string) => {
@@ -657,6 +731,19 @@ export function useVault(): VaultApi {
       setError(null);
       try {
         const secret = parseRecoveryCode(code);
+
+        let own: OpenedVault | null;
+        try {
+          own = await openWithCode(secret);
+        } catch {
+          setError("That code doesn't open the passwords in this browser. Check it and try again.");
+          setPhase("locked");
+          return;
+        }
+        if (own) {
+          await start(own, false);
+          return;
+        }
 
         /*
          * You, first. Every keyring is a file wrapped to you, so the code's
@@ -691,8 +778,8 @@ export function useVault(): VaultApi {
          * credential for the same vault leaves the first one orphaned, and the
          * envelope it sealed unopenable by the browser that wrote it.
          */
-        const { cipher, lock } = await unlockVault(await peekSealedState());
-        const storage = await IndexedDbVaultStorage.open({ cipher });
+        const opened = await openWithPasskey();
+        const { storage, cipher } = opened;
         if (recovered) await storage.applyRemote(recovered);
         /*
          * Keep the code, so this browser can rewrite the recovery copy too.
@@ -711,10 +798,63 @@ export function useVault(): VaultApi {
         // and this browser silently loses the ability to reseal the copy it
         // just proved it could open.
         await storage.writeMeta("recovery-envelope", sealed);
-        await start(cipher, lock, false);
+        await start(opened, false);
       } catch (cause) {
         setError(describe(cause));
         setPhase("locked");
+      }
+    },
+    [describe, start],
+  );
+
+  const restoreFromFile = useCallback(
+    async (text: string, code: string) => {
+      setPhase("unlocking");
+      setError(null);
+      try {
+        const secret = parseRecoveryCode(code);
+        const { state: restored, identity, recoveryLock } = await openBackupFileAsYou(
+          text,
+          secret,
+        );
+
+        /*
+         * Into this browser's copy, under the passkey when there is one to be
+         * had — the everyday lock, so the code is not needed every morning.
+         * When there is none, the copy is locked to the code alone: the file
+         * exists for the day the passkey cannot be used, and refusing then
+         * would make it worthless on exactly that day.
+         */
+        let opened: OpenedVault;
+        if (await opensOnlyWithCode()) {
+          const own = await openWithCode(secret);
+          if (!own) throw new Error("Keyweb couldn't open the passwords in this browser.");
+          opened = own;
+        } else {
+          try {
+            opened = await openWithPasskey();
+          } catch (cause) {
+            const fresh = (await peekSealedState()) === null;
+            if (!fresh) throw cause;
+            opened = await createWithCode(identity, recoveryLock);
+          }
+        }
+        await restoreInto(opened.storage, restored);
+        // So the code opens this copy next time too, even with Google down.
+        await protectLocalKey(opened.storage, opened.localKey, identity, recoveryLock);
+        recoveredIdentityRef.current = identity;
+        setCodeOnly(opened.passkeyCipher === null);
+        await start(opened, false);
+      } catch (cause) {
+        setError(
+          cause instanceof InvalidRecoveryCode || cause instanceof WrongBackupCode
+            ? "That recovery code doesn't open this backup file. Check it and try again."
+            : describe(cause),
+        );
+        // Back to the screen this started from: a browser with no passkey
+        // support and nothing the code opens has only the file to offer.
+        const stranded = !passkeySupported() && !(await opensOnlyWithCode().catch(() => false));
+        setPhase(stranded ? "unsupported" : "locked");
       }
     },
     [describe, start],
@@ -759,6 +899,31 @@ export function useVault(): VaultApi {
     await listBackupFiles();
   }, [listBackupFiles]);
 
+  const saveBackupFile = useCallback<VaultApi["saveBackupFile"]>(async () => {
+    const sync = syncRef.current;
+    const identity = identityRef.current;
+    if (!sync || !identity) {
+      throw new Error("Unlock Keyweb with backup turned on first.");
+    }
+    /*
+     * The lock is what makes the file openable with the code, and the phone
+     * that minted the code is what writes it. Without one there is no way to
+     * seal a file the code can open — and a backup nobody can open is worse
+     * than none, so this refuses rather than making one.
+     */
+    const lock = await sharingIdentityStore().load(KEYWEB_RECOVERY_APP_ID);
+    if (!lock) {
+      throw new Error(
+        "Your recovery code isn't set up for backups yet. Open Keyweb on your phone once, then try again.",
+      );
+    }
+    return sealBackupFile(
+      await sync.state(),
+      await identity.getOrCreate(),
+      parseProtectedSharingIdentityV1(lock),
+    );
+  }, []);
+
   const deleteBackupFile = useCallback<VaultApi["deleteBackupFile"]>(
     async (fileId) => {
       const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
@@ -797,6 +962,7 @@ export function useVault(): VaultApi {
     lockRef.current = null;
     syncRef.current = null;
     cipherRef.current = null;
+    localKeyRef.current = null;
     storageRef.current = null;
     remoteRef.current = null;
     sharingRef.current = null;
@@ -1165,6 +1331,7 @@ export function useVault(): VaultApi {
   return {
     phase,
     firstRun,
+    codeOnly,
     error,
     state,
     status,
@@ -1173,6 +1340,7 @@ export function useVault(): VaultApi {
     unlock,
     restore,
     restoreWithCode,
+    restoreFromFile,
     newRecoveryCode,
     recoveryNeedsCode,
     adoptRecoveryCode,
@@ -1181,6 +1349,7 @@ export function useVault(): VaultApi {
     backupFiles,
     refreshBackupFiles,
     deleteBackupFile,
+    saveBackupFile,
     chooseBackupFile: chooseBackupFileAndRetry,
     dismissRecoveryCode: () => setNewRecoveryCode(null),
     lock,

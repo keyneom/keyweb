@@ -2,14 +2,16 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  applyOps,
   createClock,
+  emptyVault,
   FakeRemote,
   itemField,
   MemoryVaultStorage,
   seqIds,
   VaultSync,
 } from "@keyweb/vault-core";
-import { IndexedDbVaultStorage, type VaultCipher } from "../src/index.js";
+import { IndexedDbVaultStorage, peekMeta, type VaultCipher } from "../src/index.js";
 
 let factory: IDBFactory;
 let dbName: string;
@@ -287,5 +289,92 @@ describe("encryption at rest", () => {
     // A different session, a different key: the bytes must be useless.
     const wrongKey = await openStorage(await testCipher());
     await expect(wrongKey.readState()).rejects.toThrow();
+  });
+});
+
+/**
+ * Re-encrypting a browser's whole local copy under a new key.
+ *
+ * Run once, on somebody's only local copy of their passwords, when the copy
+ * moves from being locked by the passkey to being locked by its own key — the
+ * one the passkey and the recovery code each hold. So what matters is that
+ * nothing is left behind under the old key and that the new key is stored in
+ * the same breath as the data it opens.
+ */
+describe("re-encrypting under a new key", () => {
+  async function filled(cipher: VaultCipher) {
+    const storage = await openStorage(cipher);
+    const sync = new VaultSync({
+      storage,
+      remote: new FakeRemote(),
+      clock: createClock({ node: "A" }),
+      newId: seqIds("A"),
+    });
+    await sync.putKeyring({ keyringId: "ring", name: "Household" });
+    await sync.putItem({ itemId: "bank", keyringId: "ring", fields: { password: "s3cret" } });
+    // A second document, as a keyring in its own file has.
+    await storage.commitAll(
+      [{ kind: "keyring.put", opId: "d1", ts: "001700000000000-00000-A", keyringId: "house", name: "House" }],
+      applyOps(emptyVault(), [
+        { kind: "keyring.put", opId: "d1", ts: "001700000000000-00000-A", keyringId: "house", name: "House" },
+      ]),
+      "keyweb-house",
+    );
+    await storage.writeMeta("recovery-secret", await cipher.sealOp([1, 2, 3] as never));
+    return storage;
+  }
+
+  it("leaves every record readable under the new key", async () => {
+    const before = await testCipher();
+    const after = await testCipher();
+    const storage = await filled(before);
+
+    await storage.rekey(after, { sealedMeta: ["recovery-secret"] });
+
+    const reopened = await openStorage(after);
+    const vault = await reopened.readState();
+    expect(itemField(vault.items["bank"]!, "password")).toBe("s3cret");
+    expect((await reopened.readState("keyweb-house")).keyrings["house"]!.name.value).toBe("House");
+    expect((await reopened.pending()).length).toBeGreaterThan(0);
+    expect(await after.openOp((await reopened.readMeta("recovery-secret"))!)).toEqual([1, 2, 3]);
+  });
+
+  it("leaves nothing readable under the old key", async () => {
+    const before = await testCipher();
+    const after = await testCipher();
+    const storage = await filled(before);
+    await storage.rekey(after, { sealedMeta: ["recovery-secret"] });
+
+    const withOldKey = await openStorage(before);
+    await expect(withOldKey.readState()).rejects.toThrow();
+    await expect(withOldKey.pending()).rejects.toThrow();
+  });
+
+  it("stores the wrapped key in the same write as the data it opens", async () => {
+    const before = await testCipher();
+    const after = await testCipher();
+    const storage = await filled(before);
+
+    await storage.rekey(after, { alongside: { "local-key:passkey": { wrapped: "the-key" } } });
+
+    expect(await peekMeta("local-key:passkey", factory, dbName)).toEqual({ wrapped: "the-key" });
+  });
+
+  it("keeps working on the same storage object afterwards", async () => {
+    const before = await testCipher();
+    const after = await testCipher();
+    const storage = await filled(before);
+    await storage.rekey(after);
+
+    // Writes after the rekey are sealed with the new key, not the old one.
+    await storage.writeMeta("unrelated", "plain");
+    await storage.commit(
+      { kind: "keyring.put", opId: "late", ts: "001700000000099-00000-A", keyringId: "late", name: "Late" },
+      applyOps(await storage.readState(), [
+        { kind: "keyring.put", opId: "late", ts: "001700000000099-00000-A", keyringId: "late", name: "Late" },
+      ]),
+    );
+    const reopened = await openStorage(after);
+    expect((await reopened.readState()).keyrings["late"]!.name.value).toBe("Late");
   });
 });

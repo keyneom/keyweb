@@ -13,22 +13,27 @@ import type { VaultPhase } from "../vault/useVault";
 export function Unlock({
   phase,
   firstRun,
+  codeOnly,
   error,
   backupConfigured,
   onUnlock,
   onRestore,
   onRestoreWithCode,
+  onRestoreFromFile,
   contents,
   files,
   onChooseFile,
 }: {
   phase: VaultPhase;
   firstRun: boolean;
+  /** This browser's copy opens with the recovery code only. */
+  codeOnly: boolean;
   error: string | null;
   backupConfigured: boolean;
   onUnlock: () => void;
   onRestore: () => void;
   onRestoreWithCode: (code: string) => void;
+  onRestoreFromFile: (text: string, code: string) => void;
   /** What the account holds, once something has looked. Null until then. */
   contents: AccountContents | null;
   /** Vault files in the account, when there is more than one to choose from. */
@@ -36,7 +41,7 @@ export function Unlock({
   onChooseFile: (fileId: string) => void;
 }) {
   const [code, setCode] = useState("");
-  const [showCode, setShowCode] = useState(false);
+  const [showCode, setShowCode] = useState(codeOnly);
   if (phase === "unsupported") {
     return (
       <section className="unlock">
@@ -50,6 +55,18 @@ export function Unlock({
             </em>
           </span>
         </p>
+        {error && (
+          <p className="status" data-tone="attn">
+            <AlertIcon />
+            <span>
+              <b>{error}</b>
+            </span>
+          </p>
+        )}
+        <p className="unlock-note">
+          If you saved a Keyweb backup file, your recovery code opens it here.
+        </p>
+        <BackupFileEntry busy={false} onOpen={onRestoreFromFile} />
       </section>
     );
   }
@@ -64,9 +81,11 @@ export function Unlock({
 
       <h1 className="unlock-title">{firstRun ? "Set up Keyweb" : "Welcome back"}</h1>
       <p className="unlock-sub">
-        {firstRun
-          ? "Keyweb locks your passwords with the same face, fingerprint or PIN you use to unlock this device. Nothing to remember."
-          : "Unlock your passwords with your face, fingerprint or PIN."}
+        {codeOnly
+          ? "The passwords in this browser open with your recovery code."
+          : firstRun
+            ? "Keyweb locks your passwords with the same face, fingerprint or PIN you use to unlock this device. Nothing to remember."
+            : "Unlock your passwords with your face, fingerprint or PIN."}
       </p>
 
       {error && (
@@ -154,9 +173,11 @@ export function Unlock({
         </div>
       )}
 
-      <button type="button" className="btn pri big" onClick={onUnlock} disabled={busy}>
-        {busy ? "Waiting for you…" : firstRun ? "Set up Keyweb" : "Unlock"}
-      </button>
+      {!codeOnly && (
+        <button type="button" className="btn pri big" onClick={onUnlock} disabled={busy}>
+          {busy ? "Waiting for you…" : firstRun ? "Set up Keyweb" : "Unlock"}
+        </button>
+      )}
 
       {/*
         Not `firstRun` any more, and that was the bug.
@@ -169,9 +190,9 @@ export function Unlock({
         Somebody who has set this browser up is exactly who needs the way back
         in, not somebody who has not.
       */}
-      {backupConfigured && (
+      {(backupConfigured || codeOnly) && (
         <>
-          <p className="unlock-or">or</p>
+          {!codeOnly && <p className="unlock-or">or</p>}
           {firstRun && (
             <>
               <button type="button" className="btn sec big" onClick={onRestore} disabled={busy}>
@@ -206,12 +227,18 @@ export function Unlock({
               </label>
               <button
                 type="button"
-                className="btn sec big"
+                className={codeOnly ? "btn pri big" : "btn sec big"}
                 disabled={busy || code.trim().length === 0}
                 onClick={() => onRestoreWithCode(code)}
               >
-                Open my backup with this code
+                {busy ? "Opening…" : firstRun ? "Open my backup with this code" : "Open with this code"}
               </button>
+              {!firstRun && !codeOnly && (
+                <p className="unlock-note">
+                  Opens the passwords in this browser with no face, fingerprint or PIN, and
+                  without Google.
+                </p>
+              )}
             </div>
           ) : (
             /*
@@ -224,11 +251,21 @@ export function Unlock({
             <button type="button" className="linkish" onClick={() => setShowCode(true)}>
               {firstRun
                 ? "Use my recovery code instead — or if my vault was made on a phone"
-                : "My passwords are missing — open the backup with my recovery code"}
+                : "Can't use your face, fingerprint or PIN? Use my recovery code"}
             </button>
           )}
         </>
       )}
+
+      {/*
+        A saved backup file, for when Google itself is the problem.
+
+        Opened with the recovery code and nothing else, so it works on a new
+        computer with no Google account signed in. Kept separate from the code
+        entry above because it asks for two things, and a person holding a
+        file needs to see that the file is what this is for.
+      */}
+      <BackupFileEntry busy={busy} onOpen={onRestoreFromFile} />
 
       {firstRun && (
         <p className="status" data-tone="calm" style={{ marginTop: "1.25rem" }}>
@@ -243,6 +280,75 @@ export function Unlock({
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * A saved backup file, for when Google itself is the problem.
+ *
+ * Opened with the recovery code and nothing else, so it works on a new
+ * computer with no Google account signed in and, if need be, no passkey. Kept
+ * apart from the code entry because it asks for two things, and a person
+ * holding a file needs to see that the file is what this is for.
+ */
+function BackupFileEntry({
+  busy,
+  onOpen,
+}: {
+  busy: boolean;
+  onOpen: (text: string, code: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<{ name: string; text: string } | null>(null);
+  const [code, setCode] = useState("");
+
+  if (!open) {
+    return (
+      <button type="button" className="linkish" onClick={() => setOpen(true)}>
+        Open a backup file I saved
+      </button>
+    );
+  }
+  return (
+    <div className="code-entry">
+      <label className="field">
+        <span>Your backup file</span>
+        <input
+          type="file"
+          accept=".json,application/json"
+          onChange={(event) => {
+            const chosen = event.target.files?.[0];
+            if (!chosen) return setFile(null);
+            void chosen.text().then((text) => setFile({ name: chosen.name, text }));
+          }}
+        />
+        <span className="hint">
+          The file Keyweb saved, called <b>keyweb-backup-</b> and the date it was saved.
+        </span>
+      </label>
+      <label className="field">
+        <span>Your recovery code</span>
+        <div className="box">
+          <input
+            className="mono"
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            placeholder="H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F-P2TM-6BKX"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+      </label>
+      <button
+        type="button"
+        className="btn sec big"
+        disabled={busy || !file || code.trim().length === 0}
+        onClick={() => file && onOpen(file.text, code)}
+      >
+        {busy ? "Opening…" : "Open this backup file"}
+      </button>
+      <p className="unlock-note">Its passwords are added to this browser. Nothing here is replaced.</p>
+    </div>
   );
 }
 

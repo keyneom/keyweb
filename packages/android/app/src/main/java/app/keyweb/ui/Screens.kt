@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -1605,6 +1606,10 @@ fun SettingsScreen(
     onScanCodes: () -> Unit = {},
     onLock: () -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
+    /** Save the vault sealed so the printed code opens it. */
+    onSaveBackupFile: () -> Unit = {},
+    /** Choose a saved backup file and open it with this code. */
+    onOpenBackupFile: (code: String) -> Unit = {},
     onDescribeBackup: () -> Unit = {},
     /** Every Keyweb backup in this Google account, once somebody has looked. */
     backupFiles: List<BackupFileChoice> = emptyList(),
@@ -1822,6 +1827,59 @@ fun SettingsScreen(
              * Keyweb" — the Drive backup is a sealed envelope only Keyweb can
              * open, which is a safety net and not a way out.
              */
+            /*
+             * A copy for the day Google is the thing that is down.
+             *
+             * Locked, unlike the copy below: the same sealing every keyring
+             * file uses, opened by the printed code alone. The web saves the
+             * same file, so one made here opens in a browser and the other
+             * way round.
+             */
+            Spacer(Modifier.height(24.dp))
+            Text("A locked backup", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Save your passwords in a file only your recovery code opens. Keep it " +
+                    "somewhere away from Google — a USB stick, another cloud — and it gets " +
+                    "you back in even if Google can't.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SecondaryButton(
+                "Save a locked backup",
+                onSaveBackupFile,
+                Modifier.padding(bottom = 8.dp),
+            )
+            var openingFile by remember { mutableStateOf(false) }
+            var fileCode by remember { mutableStateOf("") }
+            if (!openingFile) {
+                TextButton(onClick = { openingFile = true }) {
+                    Text("Open a backup file I saved", style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                OutlinedTextField(
+                    value = fileCode,
+                    onValueChange = { fileCode = it },
+                    label = { Text("Recovery code") },
+                    placeholder = { Text("H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F-P2TM-6BKX") },
+                    singleLine = false,
+                    shape = RoundedCornerShape(14.dp),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Then choose the file. Its passwords are added to this phone; nothing " +
+                        "here is replaced.",
+                    color = statusColors.muted,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 8.dp),
+                )
+                SecondaryButton(
+                    "Choose the file",
+                    { if (fileCode.isNotBlank()) onOpenBackupFile(fileCode) },
+                )
+            }
+
             Spacer(Modifier.height(24.dp))
             Text("Take a copy of everything", style = MaterialTheme.typography.labelLarge)
             Text(

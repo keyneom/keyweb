@@ -154,7 +154,7 @@ export function openVaultDb(
 
 export class IndexedDbVaultStorage implements VaultStorage {
   readonly #db: IDBDatabase;
-  readonly #cipher: VaultCipher;
+  #cipher: VaultCipher;
   readonly #withLock: (fn: () => Promise<unknown>) => Promise<unknown>;
 
   constructor(db: IDBDatabase, cipher: VaultCipher = plaintextCipher) {
@@ -364,6 +364,92 @@ export class IndexedDbVaultStorage implements VaultStorage {
     await committed(tx);
   }
 
+  /**
+   * Re-encrypt everything under a different key, in one step.
+   *
+   * For moving a browser from "the local copy is locked by the passkey" to
+   * "the local copy is locked by its own key, which the passkey and the
+   * recovery code each hold". Every sealed record changes key: each document's
+   * state, every queued edit, and the named values the caller says are sealed.
+   *
+   * Two rules make it safe to run on somebody's only copy of their passwords:
+   *
+   *  - Everything is read and re-sealed in memory first, and written back in a
+   *    single transaction. IndexedDB closes a transaction the moment it waits
+   *    on anything else, so the crypto cannot happen inside it; doing all of it
+   *    before the write means the database is either entirely old or entirely
+   *    new, never half of each.
+   *  - `alongside` is written in that same transaction. It is where the new key
+   *    itself is kept, wrapped. Writing it separately would open a moment in
+   *    which the data is sealed under a key that is stored nowhere — and a
+   *    crash in that moment would lose everything, with nothing to say why.
+   */
+  async rekey(
+    next: VaultCipher,
+    options: {
+      /** Named values sealed with `sealOp`, re-sealed along with the rest. */
+      sealedMeta?: string[];
+      /** Raw named values written in the same transaction. */
+      alongside?: Record<string, unknown>;
+    } = {},
+  ): Promise<void> {
+    await this.#withLock(async () => {
+      const read = this.#db.transaction([META, OUTBOX], "readonly");
+      const metaStore = read.objectStore(META);
+      const keys = (await request<IDBValidKey[]>(metaStore.getAllKeys())).filter(
+        (key): key is string => typeof key === "string",
+      );
+      const stateKeys = keys.filter((key) => key === STATE_KEY || key.startsWith(`${STATE_KEY}:`));
+      const states = await Promise.all(
+        stateKeys.map((key) => request<StateRow | undefined>(metaStore.get(key))),
+      );
+      const metaKeys = (options.sealedMeta ?? []).map((key) => `meta:${key}`);
+      const metas = await Promise.all(
+        metaKeys.map((key) => request<unknown | undefined>(metaStore.get(key))),
+      );
+      const outbox = await request<OutboxRow[]>(read.objectStore(OUTBOX).getAll());
+
+      // All of the crypto, before anything is written.
+      const nextStates = await Promise.all(
+        states.map(async (row) =>
+          row && row.payload !== null
+            ? { ...row, payload: await next.sealState(await this.#cipher.openState(row.payload)) }
+            : row,
+        ),
+      );
+      const nextMetas = await Promise.all(
+        metas.map(async (value) =>
+          value === undefined
+            ? undefined
+            : next.sealOp((await this.#cipher.openOp(value)) as never),
+        ),
+      );
+      const nextOutbox = await Promise.all(
+        outbox.map(async (row) => ({
+          ...row,
+          payload: await next.sealOp(await this.#cipher.openOp(row.payload)),
+        })),
+      );
+
+      // One write, or none.
+      const write = this.#db.transaction([META, OUTBOX], "readwrite");
+      const metaOut = write.objectStore(META);
+      stateKeys.forEach((key, i) => {
+        if (nextStates[i]) metaOut.put(nextStates[i], key);
+      });
+      metaKeys.forEach((key, i) => {
+        if (nextMetas[i] !== undefined) metaOut.put(nextMetas[i], key);
+      });
+      for (const [key, value] of Object.entries(options.alongside ?? {})) {
+        metaOut.put(value, `meta:${key}`);
+      }
+      const outboxOut = write.objectStore(OUTBOX);
+      for (const row of nextOutbox) outboxOut.put(row);
+      await committed(write);
+      this.#cipher = next;
+    });
+  }
+
   async readClock(): Promise<Hlc | undefined> {
     const tx = this.#db.transaction(META, "readonly");
     return request<Hlc | undefined>(tx.objectStore(META).get(CLOCK_KEY));
@@ -388,6 +474,26 @@ export class IndexedDbVaultStorage implements VaultStorage {
  * The envelope is self-describing, so this returns it raw — null on a first
  * run, when there is nothing to unlock and a new key must be created instead.
  */
+/**
+ * Read a named value without opening the vault.
+ *
+ * For the wrapped local key and the cached recovery lock, which have to be
+ * read *before* there is a key to open anything else with.
+ */
+export async function peekMeta(
+  key: string,
+  factory: IDBFactory = indexedDB,
+  name: string = DB_NAME,
+): Promise<unknown | null> {
+  const db = await openVaultDb(factory, name);
+  try {
+    const tx = db.transaction(META, "readonly");
+    return (await request<unknown | undefined>(tx.objectStore(META).get(`meta:${key}`))) ?? null;
+  } finally {
+    db.close();
+  }
+}
+
 export async function peekSealedState(
   factory: IDBFactory = indexedDB,
   name: string = DB_NAME,
