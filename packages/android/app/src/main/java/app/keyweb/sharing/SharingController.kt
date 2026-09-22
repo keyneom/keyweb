@@ -63,7 +63,17 @@ private object VaultStateCodec : SharedBackupControllerCodec<VaultState> {
     override fun merge(local: VaultState, remote: VaultState): VaultState =
         mergeVaults(local, remote)
 
-    override fun fingerprint(value: VaultState): String = fingerprint(value)
+    /*
+     * Qualified, because unqualified it is this method calling itself.
+     *
+     * Inside the object the member `fingerprint` shadows vault-core's
+     * top-level one, so `fingerprint(value)` recursed until the stack ran out.
+     * sync-kit calls this on every `syncDataset` — every write to a shared
+     * keyring — so the phone could create one and never publish a change to
+     * it. `StackOverflowError` is an `Error`, not an `Exception`, so the
+     * `catch (Exception)` around the write never saw it either.
+     */
+    override fun fingerprint(value: VaultState): String = app.keyweb.vault.fingerprint(value)
 }
 
 /**
