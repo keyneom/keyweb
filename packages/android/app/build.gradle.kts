@@ -44,8 +44,8 @@ android {
         applicationId = "app.keyweb"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40
-        versionName = "0.2.0-beta.28"
+        versionCode = 41
+        versionName = "0.2.0-beta.29"
     }
 
     signingConfigs {
