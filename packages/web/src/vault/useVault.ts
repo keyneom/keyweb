@@ -36,6 +36,7 @@ import {
   createSharingIdentity,
   KeywebSharing,
   type BlockedJoin,
+  IndexRemote,
   SharedKeyringRemote,
   type SharingIdentityLike,
   type Member,
@@ -395,6 +396,19 @@ export function useVault(): VaultApi {
       // publish can reseal the recovery copy and it never drifts out of date.
       // It is minted once, shown once, and after that only ever used, never
       // displayed again.
+      /*
+       * No recovery copy to maintain any more.
+       *
+       * The vault root now lives in a file of the same kind as every keyring —
+       * encrypted once, its key wrapped to you — so there is no second copy
+       * sealed to the printed code for this browser to keep current, and
+       * nothing to ask for the code in order to do it. The code locks your
+       * identity instead, and it is the device that minted it that writes
+       * that lock.
+       *
+       * A code this browser already holds is still loaded, because it can
+       * open the old file's recovery copy during the one-time move off it.
+       */
       let recoveryCipher: VaultCipher | undefined;
       if (BACKUP_CONFIGURED) {
         const storedSecret = await storage.readMeta("recovery-secret");
@@ -404,36 +418,17 @@ export function useVault(): VaultApi {
             Uint8Array.from(raw as unknown as number[]),
             await storage.readMeta("recovery-envelope"),
           );
-        } else if (await backupAlreadyHasRecovery()) {
-          // A second device, or a reinstall. There is already a code written
-          // down somewhere, and this device cannot derive it.
-          //
-          // Minting a fresh one here would look harmless — a new sheet to
-          // print — but it would reseal the backup under a different key and
-          // silently retire the sheet already in someone's filing cabinet.
-          // They would discover that only on the day they needed it. So this
-          // device leaves the recovery copy alone and asks for the existing
-          // code instead.
-          setRecoveryNeedsCode(true);
-        } else {
-          const secret = generateRecoverySecret();
-          recoveryCipher = await createRecoveryCipher(secret);
-          await storage.writeMeta(
-            "recovery-secret",
-            await cipher.sealOp([...secret] as never),
-          );
-          setNewRecoveryCode(formatRecoveryCode(secret));
         }
       }
 
-      const remote = BACKUP_CONFIGURED
+      const legacy = BACKUP_CONFIGURED
         ? new GoogleDriveRemote({
             clientId: CLIENT_ID,
             cipher,
             ...(recoveryCipher ? { recoveryCipher } : {}),
           })
-        : new UnconfiguredRemote();
-      remoteRef.current = remote instanceof GoogleDriveRemote ? remote : null;
+        : null;
+      remoteRef.current = legacy;
 
       // Sharing is wired in before the engine starts, because the engine asks
       // for a dataset's remote the first time it syncs one — and a keyring
@@ -459,6 +454,12 @@ export function useVault(): VaultApi {
       identityRef.current = identity;
       const controller = identity ? createKeywebSharingController(identity) : null;
       const datasetRemotes = new Map<string, SharedKeyringRemote>();
+      // The root publishes to the index file, reading the old one once if no
+      // device has moved off it yet. Without sharing there is no identity to
+      // wrap an index to, so it stays where it was.
+      const remote: RemoteVaultStore = controller
+        ? new IndexRemote(controller, legacy)
+        : (legacy ?? new UnconfiguredRemote());
       const sync = new VaultSync({
         storage,
         remote,

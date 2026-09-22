@@ -63,7 +63,18 @@ private object VaultStateCodec : SharedBackupControllerCodec<VaultState> {
     override fun merge(local: VaultState, remote: VaultState): VaultState =
         mergeVaults(local, remote)
 
-    override fun fingerprint(value: VaultState): String = fingerprint(value)
+    /*
+     * Qualified, because unqualified it is this method calling itself.
+     *
+     * Inside the object the member `fingerprint` shadows vault-core's
+     * top-level one, so `fingerprint(value)` recursed until the stack ran out.
+     * sync-kit calls this on every `syncDataset`, which is every write to a
+     * keyring in a file of its own — so the phone could create a shared
+     * keyring and never publish a change to it. `StackOverflowError` is an
+     * `Error`, not an `Exception`, so the `catch (Exception)` around the write
+     * never saw it either.
+     */
+    override fun fingerprint(value: VaultState): String = app.keyweb.vault.fingerprint(value)
 }
 
 /**
@@ -145,9 +156,7 @@ fun createKeywebSharingController(
         /** The token is the app's, not this feature's, so this must not sign out. */
         override fun clear() = Unit
     }
-    return SharedBackupController(
-        appId = KEYWEB_APP_ID,
-        codec = VaultStateCodec,
+    return keywebSharingController(
         identity = { identity.getOrCreate() },
         transport = GoogleDriveSharedBackupTransport(
             appId = KEYWEB_APP_ID,
@@ -157,6 +166,26 @@ fun createKeywebSharingController(
         registry = registry,
     )
 }
+
+/**
+ * The controller with Keyweb's codec, over any transport.
+ *
+ * Split out so the files this app writes can be exercised through sync-kit's
+ * real envelope, signing and registry with an in-memory transport in place of
+ * Drive — rather than through a fake controller that would pass whatever the
+ * real one does.
+ */
+internal fun keywebSharingController(
+    identity: suspend () -> com.keyneom.synckit.sharing.SharingIdentity,
+    transport: com.keyneom.synckit.sharing.SharedBackupTransport,
+    registry: SharedBackupRegistry,
+): SharedBackupController<VaultState> = SharedBackupController(
+    appId = KEYWEB_APP_ID,
+    codec = VaultStateCodec,
+    identity = identity,
+    transport = transport,
+    registry = registry,
+)
 
 /**
  * One shared keyring, as something [app.keyweb.vault.VaultSync] can publish to.
@@ -222,6 +251,79 @@ class SharedKeyringRemote(
             // Deliberately not requiring ownership: the common case for
             // adopting is a keyring somebody else owns and shared with us.
             controller.adoptDataset(datasetId)
+        }
+    }
+}
+
+/** The one file that says which keyrings are yours. Same id on every device. */
+const val INDEX_DATASET_ID = "keyweb-index"
+
+/**
+ * The vault's own root: which keyrings exist and which file each lives in.
+ *
+ * A file of the same kind as every keyring — encrypted once, its key wrapped
+ * to you — so nothing is left sealed twice, and there is no second copy for a
+ * device without the printed code to leave behind. The CRDT above it does not
+ * change; only where the root document is published does. The web's
+ * `IndexRemote`, in the same words.
+ *
+ * Until some device has published it, the account's root lives in the old
+ * double-sealed vault file. So a read finds the index first and, only if there
+ * is none, makes it from the old file — here, on the read, because the write
+ * that would otherwise create it may never come: a device already holding
+ * everything sees nothing to publish. The old file is only ever read, and a
+ * device that cannot open its newer copy refuses rather than seeding the index
+ * from one it knows is stale.
+ */
+class IndexRemote(
+    private val controller: SharedBackupController<VaultState>,
+    private val legacy: RemoteVaultStore?,
+) : RemoteVaultStore {
+
+    override suspend fun read(): RemoteRevision? {
+        readIndex()?.let { return it }
+        val old = legacy?.read() ?: return null
+        return try {
+            val created = controller.createDataset(INDEX_DATASET_ID, old.state)
+            RemoteRevision(created.value, created.revisionId)
+        } catch (cause: Exception) {
+            throw unavailable(cause)
+        }
+    }
+
+    override suspend fun write(
+        state: VaultState,
+        expectedVersion: String?,
+        createOnly: Boolean,
+    ): String = try {
+        if (readIndex() == null) {
+            controller.createDataset(INDEX_DATASET_ID, state).revisionId
+        } else {
+            controller.syncDataset(
+                INDEX_DATASET_ID,
+                sharedDatasetMutator(read = { state }, apply = { merged -> merged }),
+            ).revisionId
+        }
+    } catch (cause: RemoteUnavailableException) {
+        throw cause
+    } catch (cause: Exception) {
+        throw unavailable(cause)
+    }
+
+    private suspend fun readIndex(): RemoteRevision? {
+        try {
+            val result = controller.loadDataset(INDEX_DATASET_ID)
+            return RemoteRevision(result.value, result.revisionId)
+        } catch (cause: Exception) {
+            if (!isMissing(cause)) throw unavailable(cause)
+        }
+        return try {
+            // Owned, not merely readable: the index is yours or it is not the index.
+            val adopted = controller.adoptDataset(INDEX_DATASET_ID, requireOwned = true)
+            RemoteRevision(adopted.value, adopted.revisionId)
+        } catch (cause: Exception) {
+            if (!isMissing(cause)) throw unavailable(cause)
+            null
         }
     }
 }

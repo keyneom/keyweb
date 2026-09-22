@@ -22,6 +22,7 @@ import app.keyweb.sharing.AcceptedShare
 import app.keyweb.sharing.KEYWEB_LANDING_URL
 import app.keyweb.sharing.KeywebSharing
 import app.keyweb.sharing.KeywebSharingIdentity
+import app.keyweb.sharing.IndexRemote
 import app.keyweb.sharing.KeywebSharingIdentityStore
 import app.keyweb.sharing.SharingPasskey
 import app.keyweb.sharing.Member
@@ -63,6 +64,7 @@ import app.keyweb.vault.SavedRules
 import app.keyweb.vault.SyncStatus
 import app.keyweb.vault.VaultEnvelopeCipher
 import app.keyweb.vault.VaultState
+import app.keyweb.vault.RemoteVaultStore
 import app.keyweb.vault.VaultOp
 import app.keyweb.vault.datasetOf
 import app.keyweb.vault.VaultSync
@@ -818,6 +820,17 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
     // when it does not — carrying the other forward untouched. See
     // DriveVaultRemote.
 
+    /**
+     * The root document's remote: the index file, with the old vault file
+     * behind it as a read-only source for the one-time move.
+     *
+     * Without sharing there is no identity to wrap an index to, so the root
+     * stays where it was. With it, every write goes to the index and the old
+     * file is never written again.
+     */
+    private fun indexOver(legacy: DriveVaultRemote): RemoteVaultStore =
+        sharingController?.let { IndexRemote(it, legacy) } ?: legacy
+
     /** The recovery secret, sealed by the Keystore, alongside the vault. */
     private suspend fun storedSecret(): ByteArray? {
         val sealed = database.dao().meta(RECOVERY_SECRET_KEY) ?: return null
@@ -989,14 +1002,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 val opens = onFile == null ||
                     runCatching { passkey.open(onFile) }.isSuccess
 
-                remote.attach(
+                remote.attach(indexOver(
                     DriveVaultRemote(
                         client,
                         VaultEnvelopeCipher.forRecoveryCode(secret, existing),
                         passkeyCipher = if (opens) passkey else null,
                         sharingSeed = secret,
                     ),
-                )
+                ))
                 _state.value = _state.value.copy(backupPhoneOnly = !opens)
                 syncNow()
                 showToast(
@@ -1025,7 +1038,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             val probe = DriveVaultRemote(client, VaultEnvelopeCipher.forRecoveryCode(secret))
             val existing = probe.fetchRecoverySealed()
             val passkey = passkeyCipherFor(probe)
-            remote.attach(
+            remote.attach(indexOver(
                 DriveVaultRemote(
                     client,
                     VaultEnvelopeCipher.forRecoveryCode(secret, existing),
@@ -1034,7 +1047,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     // same sharing identity without being handed the code.
                     sharingSeed = secret,
                 ),
-            )
+            ))
             // Said, not silently endured: without it this backup opens only on
             // this phone, and the person cannot know that from anywhere else.
             _state.value = _state.value.copy(backupPhoneOnly = passkey == null)
@@ -1203,14 +1216,14 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
          * works through the recovery code, and the phone says what is missing
          * rather than failing setup over it.
          */
-        remote.attach(
+        remote.attach(indexOver(
             DriveVaultRemote(
                 client,
                 VaultEnvelopeCipher.forRecoveryCode(secret, existing),
                 passkeyCipher = establishPasskey(client),
                 sharingSeed = secret,
             ),
-        )
+        ))
         // Publish immediately, so "backup is on" is true the moment it is said
         // rather than at some later sync.
         syncNow()

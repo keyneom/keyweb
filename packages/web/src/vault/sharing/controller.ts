@@ -144,6 +144,116 @@ export class SharedKeyringRemote implements RemoteVaultStore {
   }
 }
 
+/** The one file that says which keyrings are yours. Same id on every device. */
+export const INDEX_DATASET_ID = "keyweb-index";
+
+/**
+ * The vault's own root: which keyrings exist and which file each lives in.
+ *
+ * A file of the same kind as every keyring — encrypted once, its key wrapped to
+ * you — so there is nothing left that is sealed twice, and no second copy for a
+ * device without the printed code to leave behind. The CRDT above it does not
+ * change at all; only the place the root document is published does.
+ *
+ * ## Moving off the old file
+ *
+ * Until some device has published this index, the account's root lives in the
+ * old double-sealed vault file. So a read finds the index first and, only if
+ * there is none yet, reads the old file once — whatever that device can open of
+ * it — so its contents are merged into this one rather than left behind. Every
+ * write goes to the index, and the old file is never written again: it stays
+ * exactly as it was, a fallback nobody has to maintain.
+ *
+ * The first device to run this publishes the index; every other device then
+ * finds it and never needs the old file, or the code that opened its second
+ * copy, at all.
+ */
+export class IndexRemote implements RemoteVaultStore {
+  readonly #controller: SharingController;
+  readonly #legacy: RemoteVaultStore | null;
+  #exists: boolean | null = null;
+
+  constructor(controller: SharingController, legacy: RemoteVaultStore | null) {
+    this.#controller = controller;
+    this.#legacy = legacy;
+  }
+
+  async read(): Promise<RemoteRevision | null> {
+    const index = await this.#readIndex();
+    if (index) return index;
+    if (!this.#legacy) return null;
+
+    /*
+     * No index anywhere yet: make it from the old file, here, on the read.
+     *
+     * Not on the write that follows, because there may not be one. Handing the
+     * old file's contents back as "the remote" meant a device already holding
+     * all of them saw nothing to publish — the remote apparently had it all —
+     * and the index was never created. Every device would then go on reading
+     * the old file for ever, which is the thing being moved off.
+     *
+     * The old file is only ever read. A device that cannot open it — the
+     * newer copy sealed to a key it lacks — refuses here rather than seeding
+     * the index from a copy it knows is stale; the device that can open it
+     * makes the index, and this one finds it next time.
+     */
+    const legacy = await this.#legacy.read();
+    if (!legacy) return null;
+    try {
+      const created = await this.#controller.createDataset(INDEX_DATASET_ID, legacy.state);
+      this.#exists = true;
+      return { state: created.value, version: created.revisionId };
+    } catch (cause) {
+      throw unavailable(cause);
+    }
+  }
+
+  async write(state: VaultState): Promise<string> {
+    try {
+      if ((await this.#knownToExist()) === false) {
+        const created = await this.#controller.createDataset(INDEX_DATASET_ID, state);
+        this.#exists = true;
+        return created.revisionId;
+      }
+      const result = await this.#controller.syncDataset(INDEX_DATASET_ID, {
+        read: () => state,
+        apply: (merged) => merged,
+      });
+      return result.revisionId;
+    } catch (cause) {
+      throw unavailable(cause);
+    }
+  }
+
+  async #readIndex(): Promise<RemoteRevision | null> {
+    try {
+      const result = await this.#controller.loadDataset(INDEX_DATASET_ID);
+      this.#exists = true;
+      return { state: result.value, version: result.revisionId };
+    } catch (cause) {
+      if (!isMissing(cause)) throw unavailable(cause);
+    }
+    try {
+      // Owned, not merely readable: the index is yours or it is not the index.
+      const adopted = await this.#controller.adoptDataset(INDEX_DATASET_ID, {
+        requireOwned: true,
+      });
+      this.#exists = true;
+      return { state: adopted.value, version: adopted.revisionId };
+    } catch (cause) {
+      if (!isMissing(cause)) throw unavailable(cause);
+      this.#exists = false;
+      return null;
+    }
+  }
+
+  async #knownToExist(): Promise<boolean> {
+    if (this.#exists === null) await this.#readIndex();
+    return this.#exists === true;
+  }
+}
+
+
 /**
  * Is this "we have never established what this dataset is"?
  *
