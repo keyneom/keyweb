@@ -40,6 +40,8 @@ fun UnlockScreen(
     firstRun: Boolean,
     error: String?,
     onUnlock: () -> Unit,
+    /** Why the vault is locked, when it was not somebody pressing Lock. */
+    notice: String? = null,
 ) {
     val statusColors = LocalKeywebStatus.current
 
@@ -83,6 +85,11 @@ fun UnlockScreen(
                 style = MaterialTheme.typography.bodyLarge,
             )
             Spacer(Modifier.height(20.dp))
+
+            if (notice != null && error == null) {
+                StatusLine(Tone.SAFE, notice, "Nothing is lost. Unlock to open your passwords again.")
+                Spacer(Modifier.height(16.dp))
+            }
 
             if (error != null) {
                 StatusLine(Tone.ATTENTION, error, "You can try again below.")

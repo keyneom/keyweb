@@ -42,6 +42,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import app.keyweb.ui.BackupScreen
 import app.keyweb.ui.ImportScreen
 import app.keyweb.ui.ItemDetailScreen
@@ -144,6 +145,12 @@ class MainActivity : FragmentActivity() {
      * model that is already unlocked. Returning from the browser after a file
      * grant comes back this way too.
      */
+    /** Any touch or key on any screen counts as using the app. */
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        viewModel.touched()
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -203,6 +210,27 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         "may still be downloading it — try again in a moment.",
                 )
             }
+    }
+    var lockAfter by remember {
+        mutableStateOf(LockAfter.fromMinutes(prefs.getInt("lock-after-minutes", -1)))
+    }
+    /*
+     * Lock after a while unused.
+     *
+     * Checked each time the app comes back to the front — the check that
+     * matters on a phone, where a backgrounded app runs nothing — and then on
+     * a tick while it stays there, for a phone left on a desk with the screen
+     * held awake.
+     */
+    val idleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(idleOwner, lockAfter) {
+        idleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.lockIfIdle(lockAfter, returning = true)
+            while (true) {
+                delay(15_000)
+                viewModel.lockIfIdle(lockAfter, returning = false)
+            }
+        }
     }
     var darkOverride by rememberSaveable {
         mutableStateOf(
@@ -360,6 +388,11 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
+                // Coming back to a locked app lands on the list, not on the
+                // password somebody left showing.
+                LaunchedEffect(ui.phase) {
+                    if (ui.phase == VaultPhase.LOCKED) route = Route.List
+                }
                 if (ui.phase != VaultPhase.READY) {
                     // Opening the app is the request; this saves asking twice.
                     // Keyed on the flag, which the ViewModel clears as it acts,
@@ -372,6 +405,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         firstRun = ui.firstRun,
                         error = ui.error,
                         onUnlock = { viewModel.unlock(activity) },
+                        notice = ui.lockedNotice,
                     )
                     return@Box
                 }
@@ -660,6 +694,11 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     is Route.Settings -> SettingsScreen(
                         largeText = largeText,
                         darkMode = darkOverride,
+                        lockAfter = lockAfter,
+                        onLockAfter = {
+                            lockAfter = it
+                            prefs.edit().putInt("lock-after-minutes", it.minutes).apply()
+                        },
                         onLargeText = {
                             largeText = it
                             prefs.edit().putBoolean("large-text", it).apply()

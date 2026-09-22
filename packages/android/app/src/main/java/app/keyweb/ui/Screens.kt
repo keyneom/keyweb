@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import app.keyweb.LockAfter
 import app.keyweb.vault.Fields
 import app.keyweb.vault.PasswordRules
 import app.keyweb.vault.SavedRules
@@ -1605,6 +1606,8 @@ fun SettingsScreen(
     onImport: () -> Unit,
     onScanCodes: () -> Unit = {},
     onLock: () -> Unit = {},
+    lockAfter: LockAfter = LockAfter.DEFAULT,
+    onLockAfter: (LockAfter) -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
     /** Save the vault sealed so the printed code opens it. */
     onSaveBackupFile: () -> Unit = {},
@@ -1716,6 +1719,19 @@ fun SettingsScreen(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SecondaryButton("Lock now", onLock)
+
+            Spacer(Modifier.height(16.dp))
+            Text("Lock by itself", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "When nobody has touched Keyweb for this long, it locks, and opening it again " +
+                    "needs your face, fingerprint or PIN.",
+                color = statusColors.muted,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            for (choice in LockAfter.entries) {
+                ChoiceButton(choice.label, lockAfter == choice) { onLockAfter(choice) }
+            }
 
             /*
              * A diagnostic, in the open rather than behind a gesture.

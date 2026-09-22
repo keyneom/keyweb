@@ -244,6 +244,8 @@ data class VaultUiState(
     /** True when this device has no vault yet, so unlocking means setting up. */
     val firstRun: Boolean = false,
     val error: String? = null,
+    /** Why the lock screen is showing, when Keyweb locked itself. */
+    val lockedNotice: String? = null,
     val vault: VaultState = emptyVault(),
     val status: SyncStatus = SyncStatus(),
     val items: List<ItemRecord> = emptyList(),
@@ -585,6 +587,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             if (liveKeyrings(current).isEmpty()) {
                 current = engine.putKeyring(keyringId = "personal", name = "Just mine")
             }
+            idle.touch()
             publish(current, phase = VaultPhase.READY)
 
             // A file picked before the window closed, attached now that it is
@@ -604,6 +607,35 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
+    }
+
+    private val idle = IdleClock { android.os.SystemClock.elapsedRealtime() }
+
+    /** Someone touched the app. */
+    fun touched() = idle.touch()
+
+    /**
+     * Lock if nobody has used the app for [after].
+     *
+     * [returning] is the check made as the app comes back to the front. Then
+     * the fingerprint is asked for straight away, as on any other opening; the
+     * tick while the app sits unattended on screen locks without raising a
+     * prompt nobody is there to answer.
+     *
+     * While locked the clock is kept current, so the time spent on the lock
+     * screen is never counted against the next unlock.
+     */
+    fun lockIfIdle(after: LockAfter, returning: Boolean) {
+        if (_state.value.phase != VaultPhase.READY) {
+            idle.touch()
+            return
+        }
+        if (!idle.expired(after)) return
+        lock()
+        _state.value = _state.value.copy(
+            promptOnEntry = returning,
+            lockedNotice = "Keyweb locked itself after ${after.words} without being used.",
+        )
     }
 
     /** Drop the decrypted vault. The Keystore window may still be open, but
