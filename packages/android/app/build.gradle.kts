@@ -144,7 +144,7 @@ dependencies {
     // and the link-carried key exchange. A port of this would have to stay
     // byte-compatible with the web's copy forever, and the whole point of the
     // library is that it already is.
-    implementation("com.keyneom:sync-kit-android:0.4.4")
+    implementation("com.keyneom:sync-kit-android:0.5.0")
 
     // Being a Credential Manager provider. Only the provider half is used --
     // Keyweb answers requests, it does not make them -- and the service it

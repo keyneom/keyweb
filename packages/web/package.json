@@ -17,7 +17,7 @@
     "fixture:kdbx-parity": "vite-node scripts/emit-kdbx-parity-fixture.ts"
   },
   "dependencies": {
-    "@keyneom/sync-kit": "^0.4.4",
+    "@keyneom/sync-kit": "^0.5.0",
     "@keyweb/vault-core": "*",
     "@keyweb/vault-idb": "*",
     "hash-wasm": "^4.12.0",
