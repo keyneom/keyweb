@@ -184,4 +184,13 @@ describe("where the wrapped identity is kept", () => {
     // while the next device to sign in found nothing and made its own.
     expect(local.records.size).toBe(0);
   });
+
+  it("takes the account's newer record for next time, after a recovery elsewhere", async () => {
+    await identity(store).getOrCreate();
+    const stored = (await remote.load("keyweb"))!;
+    await remote.save({ ...stored, nonce: "replaced" } as never);
+    await store.load("keyweb");
+    await store.refreshed;
+    expect(((await local.load("keyweb")) as { nonce: string }).nonce).toBe("replaced");
+  });
 });

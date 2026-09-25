@@ -44,6 +44,8 @@ import {
   createKeywebSharingController,
   createSharingIdentity,
   KEYWEB_RECOVERY_APP_ID,
+  recoverSharingIdentityWithCode,
+  type RecoveryCoverage,
   sharingIdentityStore,
   unlockRecoveryIdentity,
   KeywebSharing,
@@ -103,6 +105,21 @@ function deviceNode(): string {
 
 export type VaultPhase = "checking" | "locked" | "unlocking" | "ready" | "unsupported";
 
+/** Your printed code as a key of yours on every keyring, as the screen shows it. */
+export type RecoveryKeys = {
+  /** This device has been given the printed code. */
+  holdsCode: boolean;
+  /** Recovery keys are on for this account. */
+  on: boolean;
+  /** Where the code protects you, one entry per file. */
+  coverage: RecoveryCoverage[];
+  /** False until the first look, so the screen doesn't say "off" too early. */
+  checked: boolean;
+};
+
+const NO_RECOVERY_KEYS: RecoveryKeys = { holdsCode: false, on: false, coverage: [], checked: false };
+const RECOVERY_KEYS_EVERY_MS = 10 * 60_000;
+
 export type VaultApi = {
   phase: VaultPhase;
   /** True when this device has no vault yet, so unlocking means setting up. */
@@ -156,6 +173,15 @@ export type VaultApi = {
   recoveryNeedsCode: boolean;
   /** Prove the existing code, then keep the recovery copy current from here. */
   adoptRecoveryCode(code: string): Promise<void>;
+  /** Your printed code as a key of yours on every keyring. */
+  recoveryKeys: RecoveryKeys;
+  /**
+   * Put your recovery key on your keyrings, turning it on for the account.
+   * Every other device of yours carries on by itself from then on.
+   */
+  turnOnRecoveryKeys(): Promise<void>;
+  /** Make a recovery code in this browser, for an account that has none. */
+  makeRecoveryCode(): Promise<void>;
   /**
    * What the signed-in Google account holds, without opening any of it.
    *
@@ -319,6 +345,9 @@ export function useVault(): VaultApi {
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
   /** This backup already has a recovery code, and it is not on this device. */
   const [recoveryNeedsCode, setRecoveryNeedsCode] = useState(false);
+  const [recoveryKeys, setRecoveryKeys] = useState<RecoveryKeys>(NO_RECOVERY_KEYS);
+  /** When the recovery keys were last looked after, so a sync doesn't do it every time. */
+  const recoveryCheckedRef = useRef(0);
   const syncRef = useRef<VaultSync | null>(null);
   const lockRef = useRef<(() => void) | null>(null);
   const storageRef = useRef<IndexedDbVaultStorage | null>(null);
@@ -410,6 +439,39 @@ export function useVault(): VaultApi {
     return adopted;
   }, []);
 
+  /** The printed code's secret, if this browser has been given it. */
+  const readSecret = useCallback(async (): Promise<Uint8Array | null> => {
+    const storage = storageRef.current;
+    const cipher = cipherRef.current;
+    if (!storage || !cipher) return null;
+    const sealed = await storage.readMeta("recovery-secret");
+    if (!sealed) return null;
+    return Uint8Array.from((await cipher.openOp(sealed)) as unknown as number[]);
+  }, []);
+
+  /**
+   * Keep your recovery key on your keyrings, and say where it is.
+   *
+   * After a sync, like the local lock below, and no more than every ten
+   * minutes: it reads each keyring's list of keys, which is a request per
+   * keyring, and nothing about it changes from one save to the next.
+   */
+  const refreshRecoveryKeys = useCallback(
+    async (turnOn?: boolean) => {
+      const engine = sharingRef.current;
+      if (!engine) return;
+      const secret = await readSecret();
+      if (!secret) {
+        setRecoveryKeys({ ...NO_RECOVERY_KEYS, checked: true });
+        return;
+      }
+      recoveryCheckedRef.current = Date.now();
+      const coverage = await engine.protectWithRecoveryCode(secret, turnOn);
+      setRecoveryKeys({ holdsCode: true, on: coverage.length > 0, coverage, checked: true });
+    },
+    [readSecret],
+  );
+
   /**
    * Let the printed code open this browser's copy from now on.
    *
@@ -450,12 +512,15 @@ export function useVault(): VaultApi {
           // Offline, or the sharing key is not unlocked yet.
         }
         await protectThisCopy();
+        if (Date.now() - recoveryCheckedRef.current > RECOVERY_KEYS_EVERY_MS) {
+          await refreshRecoveryKeys().catch(() => undefined);
+        }
         if (changed) setState(await sync.state());
         setStatus({ ...sync.status() });
       },
       () => setStatus({ ...sync.status() }),
     );
-  }, [adoptShared, protectThisCopy]);
+  }, [adoptShared, protectThisCopy, refreshRecoveryKeys]);
 
   /** Shared tail of unlock and restore: start the engine on an opened copy. */
   const start = useCallback(
@@ -601,15 +666,38 @@ export function useVault(): VaultApi {
       const sync = syncRef.current;
       if (!sync) throw new Error("Unlock Keyweb first.");
       const secret = parseRecoveryCode(code);
+      const storage = storageRef.current;
+      const cipher = cipherRef.current;
+
+      /*
+       * Checked against what the code is for now: the lock on you, or your
+       * recovery key on the index. Either proves it is your code, and either
+       * is enough to keep. The old file's recovery copy is only the fallback,
+       * for an account that has neither yet.
+       */
+      const mine = identityRef.current
+        ? (await identityRef.current.getOrCreate()).publicKey.keyId
+        : null;
+      const viaLock = await unlockRecoveryIdentity(sharingIdentityStore(), secret).catch(() => null);
+      const provedByLock = viaLock !== null && viaLock.publicKey.keyId === mine;
+      const provedByKey =
+        !provedByLock && (await sharingRef.current?.recoveryKeyOpensWith(secret)) === true;
+      if (provedByLock || provedByKey) {
+        if (storage && cipher) {
+          await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
+        }
+        setRecoveryNeedsCode(false);
+        await refreshRecoveryKeys();
+        return;
+      }
+
       const probe = new GoogleDriveRemote({ clientId: CLIENT_ID, cipher: passthroughCipher });
       const sealed = await probe.fetchRecoverySealed();
-      if (!sealed) throw new InvalidRecoveryCode("This backup has no recovery copy yet.");
+      if (!sealed) throw new InvalidRecoveryCode("That code doesn't open anything in this Google account.");
       const viaCode = await createRecoveryCipher(secret, sealed);
       // Throws if the code is wrong, which is the whole point of the check.
       await viaCode.openState(sealed);
 
-      const storage = storageRef.current;
-      const cipher = cipherRef.current;
       if (storage && cipher) {
         await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
         if (sealed) await storage.writeMeta("recovery-envelope", sealed);
@@ -620,8 +708,47 @@ export function useVault(): VaultApi {
       remoteRef.current?.setRecoveryCipher(viaCode);
       await sync.sync();
     },
-    [],
+    [refreshRecoveryKeys],
   );
+
+  /**
+   * Turn recovery keys on for this account, from this device.
+   *
+   * The one deliberate step, because a keyring that allows them is written in
+   * a format Keyweb before 0.2.0-beta.37 can't open: whoever presses it is
+   * saying their other devices are up to date. After this, every device of
+   * theirs adds its part on its own.
+   */
+  const turnOnRecoveryKeys = useCallback(async () => {
+    await refreshRecoveryKeys(true);
+  }, [refreshRecoveryKeys]);
+
+  /**
+   * Make a recovery code, in a browser, for an account that has none.
+   *
+   * Refused when there is already one — a lock the phone wrote, or a
+   * recovery key another device attached — because a second code would
+   * quietly retire the sheet somebody already wrote down. Shown once, like
+   * the phone's, and put on every keyring straight away: an account with no
+   * code has no phone that could be left behind by the newer format.
+   */
+  const makeRecoveryCode = useCallback(async () => {
+    const storage = storageRef.current;
+    const cipher = cipherRef.current;
+    const engine = sharingRef.current;
+    if (!storage || !cipher || !engine) throw new Error("Unlock Keyweb with backup turned on first.");
+    if (await readSecret()) throw new Error("This browser already has your recovery code.");
+    const lock = await sharingIdentityStore().load(KEYWEB_RECOVERY_APP_ID);
+    if (lock || (await engine.hasRecoveryKey())) {
+      throw new Error(
+        "You already have a recovery code, made on another device. Enter it here instead of making a new one.",
+      );
+    }
+    const secret = generateRecoverySecret();
+    await storage.writeMeta("recovery-secret", await cipher.sealOp([...secret] as never));
+    setNewRecoveryCode(formatRecoveryCode(secret));
+    await refreshRecoveryKeys(true);
+  }, [readSecret, refreshRecoveryKeys]);
 
   const describe = useCallback((cause: unknown): string => {
     // A cancelled passkey prompt is the common case and is not an error worth
@@ -762,12 +889,20 @@ export function useVault(): VaultApi {
         const viaCode = sealed ? await createRecoveryCipher(secret, sealed) : null;
         const recovered = viaCode && sealed ? await viaCode.openState(sealed).catch(() => null) : null;
 
-        if (!identity && !recovered) {
+        /*
+         * No lock and no old file: an account whose code was only ever put on
+         * its keyrings as a recovery key. The code opens that key, which signs
+         * a new key of yours in where the lost one was.
+         */
+        const viaRecoveryKey =
+          identity || recovered ? null : await recoverSharingIdentityWithCode(secret);
+
+        if (!identity && !recovered && !viaRecoveryKey) {
           setError("That code doesn't open anything in this Google account.");
           setPhase("locked");
           return;
         }
-        recoveredIdentityRef.current = identity;
+        recoveredIdentityRef.current = identity ?? viaRecoveryKey;
 
         /*
          * Reuse this browser's passkey when it has one.
@@ -970,6 +1105,8 @@ export function useVault(): VaultApi {
     identityRef.current = null;
     setSharing(null);
     setBlockedJoins([]);
+    setRecoveryKeys(NO_RECOVERY_KEYS);
+    recoveryCheckedRef.current = 0;
     setState(emptyVault());
     setPhase("locked");
   }, []);
@@ -1344,6 +1481,9 @@ export function useVault(): VaultApi {
     newRecoveryCode,
     recoveryNeedsCode,
     adoptRecoveryCode,
+    recoveryKeys,
+    turnOnRecoveryKeys,
+    makeRecoveryCode,
     accountContents,
     describeBackupFile,
     backupFiles,

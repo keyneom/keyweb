@@ -544,6 +544,10 @@ export function App() {
           onSaveBackup={vault.saveBackupFile}
           state={vault.state}
           sharing={vault.sharing}
+          recoveryKeys={vault.backupConfigured && vault.sharing ? vault.recoveryKeys : null}
+          onTurnOnRecoveryKeys={vault.turnOnRecoveryKeys}
+          onMakeRecoveryCode={vault.makeRecoveryCode}
+          onAdoptRecoveryCode={vault.adoptRecoveryCode}
         />
       )}
 

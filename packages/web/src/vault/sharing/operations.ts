@@ -7,7 +7,12 @@ import type {
 import { sharingKeyFingerprint } from "@keyneom/sync-kit/sharing/web-crypto";
 import type { SharingDatasetFileV1 } from "@keyneom/sync-kit/sharing";
 import { datasetOf, VAULT_DOCUMENT, type VaultState, type VaultSync } from "@keyweb/vault-core";
-import type { SharingController } from "./controller";
+import { INDEX_DATASET_ID, type SharingController } from "./controller";
+import {
+  protectWithRecoveryCode,
+  participantRecoveryCode,
+  type RecoveryCoverage,
+} from "./recoveryKeys";
 import { buildJoinLink, buildOwnershipLink, buildResponseLink } from "./links";
 import type { SharingIdentityLike } from "./identity";
 
@@ -570,6 +575,62 @@ export class KeywebSharing {
     this.#blocked = this.#blocked.filter((candidate) => candidate.datasetId !== datasetId);
     await this.#store.writeMeta(JOINED_KEY, remaining);
     return keyring.name.value;
+  }
+
+  // ---- Your printed code, as a key of yours on every keyring ----
+
+  /**
+   * Put your recovery key on the index and on every keyring you can write.
+   *
+   * Nothing is changed until it has been turned on once — see
+   * `protectWithRecoveryCode` — and after that every device does its part on
+   * its own. Returns where the code protects you, one entry per file.
+   */
+  async protectWithRecoveryCode(
+    secret: Uint8Array,
+    turnOn?: boolean,
+  ): Promise<RecoveryCoverage[]> {
+    const identity = await this.#identity.getOrCreate();
+    const state = await this.#sync.state();
+    const keyrings = Object.values(state.keyrings)
+      .filter((ring) => !ring.deleted.value)
+      .map((ring) => datasetOf(ring))
+      .filter((datasetId): datasetId is string => Boolean(datasetId));
+    return protectWithRecoveryCode({
+      controller: this.#controller,
+      identity,
+      store: this.#store,
+      datasetIds: [INDEX_DATASET_ID, ...new Set(keyrings)],
+      secret,
+      ...(turnOn === undefined ? {} : { turnOn }),
+    });
+  }
+
+  /**
+   * Does your index already carry a recovery key of yours?
+   *
+   * Then some device of yours made a code, and this one must be given that
+   * code rather than make another.
+   */
+  async hasRecoveryKey(): Promise<boolean> {
+    const identity = await this.#identity.getOrCreate();
+    const { keys } = await this.#controller.getDatasetParticipantKeys(INDEX_DATASET_ID);
+    return keys.some(
+      (key) => key.principalKeyId === identity.publicKey.keyId && key.purpose === "recovery",
+    );
+  }
+
+  /** Does this code open your recovery key on the index? */
+  async recoveryKeyOpensWith(secret: Uint8Array): Promise<boolean> {
+    return this.#controller
+      .openRecoveryKey({
+        datasetId: INDEX_DATASET_ID,
+        code: await participantRecoveryCode(secret),
+      })
+      .then(
+        () => true,
+        () => false,
+      );
   }
 
   // ---- Who has access ----

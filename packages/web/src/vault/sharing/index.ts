@@ -1,8 +1,10 @@
 import { DriveAppDataProtectedSharingIdentityStore } from "@keyneom/sync-kit/sharing/appdata-identity-store";
 import {
+  createProtectedSharingIdentityV1,
   IndexedDbProtectedSharingIdentityStore,
   PasskeyProtectedSharingIdentityProvider,
 } from "@keyneom/sync-kit/sharing/web-passkey";
+import { boundDatasets } from "@keyweb/vault-core";
 import { createWebPasskeyProvider } from "@keyneom/sync-kit/keys/web-passkey";
 import { authorizeGoogle } from "../googleAuth";
 import { keywebRpId } from "../profile";
@@ -13,6 +15,8 @@ import {
   keywebSharingProfile,
   type SharingIdentityLike,
 } from "./identity";
+import { createKeywebSharingController, INDEX_DATASET_ID } from "./controller";
+import { participantRecoveryCode, recoverWithParticipantKey } from "./recoveryKeys";
 
 export * from "./identity";
 
@@ -69,7 +73,60 @@ function createPasskeyIdentity(): PasskeyProtectedSharingIdentityProvider {
   });
 }
 
+/**
+ * Become a participant again from the printed code, with the passkey gone.
+ *
+ * For an account whose code was never written as a lock — one set up in a
+ * browser, with no phone — so the only thing the code opens is the recovery
+ * key on your files. The code is checked against the index first, so a wrong
+ * one asks for no passkey and changes nothing. Then a new passkey is made, a
+ * new key under it, and the recovery key signs that key in wherever the old
+ * one was. Saved last, once the index already names it.
+ *
+ * Null when the code opens no recovery key in this account.
+ */
+export async function recoverSharingIdentityWithCode(
+  secret: Uint8Array,
+): Promise<WebCryptoSharingIdentity | null> {
+  const nobody: SharingIdentityLike = {
+    getOrCreate: () => Promise.reject(new Error("No sharing key is open yet.")),
+    clear: () => undefined,
+  };
+  const probe = createKeywebSharingController(nobody);
+  const code = await participantRecoveryCode(secret);
+  const opens = await probe.openRecoveryKey({ datasetId: INDEX_DATASET_ID, code }).then(
+    () => true,
+    () => false,
+  );
+  if (!opens) return null;
+
+  const passkeyProvider = createWebPasskeyProvider(keywebSharingProfile, { rpId: keywebRpId() });
+  const created = await passkeyProvider.create();
+  const replacement = await createProtectedSharingIdentityV1(
+    KEYWEB_SHARING_APP_ID,
+    created.metadata,
+    created.key,
+  );
+  const controller = createKeywebSharingController({
+    getOrCreate: async () => replacement.identity,
+    clear: () => undefined,
+  });
+  await recoverWithParticipantKey({
+    controller,
+    secret,
+    replacement: replacement.identity,
+    indexDatasetId: INDEX_DATASET_ID,
+    datasetsAfterIndex: async () => {
+      const { value } = await controller.loadDataset(INDEX_DATASET_ID);
+      return [...new Set(boundDatasets(value).map((binding) => binding.datasetId))];
+    },
+  });
+  await sharingIdentityStore().save(replacement.record);
+  return replacement.identity;
+}
+
 export * from "./controller";
 export * from "./links";
 export * from "./operations";
 export * from "./picker";
+export * from "./recoveryKeys";

@@ -162,6 +162,8 @@ export class SharingIdentityMissing extends Error {
 export class KeywebSharingIdentityStore implements ProtectedSharingIdentityStore {
   readonly #local: ProtectedSharingIdentityStore;
   readonly #remote: ProtectedSharingIdentityStore;
+  /** The background look at the account's copy, for tests to wait on. */
+  refreshed: Promise<void> = Promise.resolve();
 
   constructor(options: {
     local: ProtectedSharingIdentityStore;
@@ -173,7 +175,26 @@ export class KeywebSharingIdentityStore implements ProtectedSharingIdentityStore
 
   async load(appId: string): Promise<ProtectedSharingIdentityV1 | null> {
     const cached = (await this.#local.load(appId)) as ProtectedSharingIdentityV1 | null;
-    if (cached) return cached;
+    if (cached) {
+      /*
+       * The copy here, at once — and the account's, for next time.
+       *
+       * The account's record can change under this device: recovering with
+       * the printed code puts a new key in it, and takes the old one off every
+       * keyring. A device that only ever read its own copy would keep offering
+       * the old key for ever. So the account is asked in the background, and a
+       * different answer replaces the copy, which the next start then uses.
+       */
+      this.refreshed = this.#remote
+        .load(appId)
+        .then(async (stored) => {
+          if (stored && JSON.stringify(stored) !== JSON.stringify(cached)) {
+            await this.#local.save(stored as ProtectedSharingIdentityV1);
+          }
+        })
+        .catch(() => undefined);
+      return cached;
+    }
 
     const stored = (await this.#remote.load(appId)) as ProtectedSharingIdentityV1 | null;
     if (stored) {

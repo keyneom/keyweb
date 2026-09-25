@@ -10,7 +10,7 @@ import {
 import { BackIcon } from "../ui/icons";
 import type { Appearance, TextSize } from "../vault/useDisplaySettings";
 import { LOCK_AFTER_CHOICES, type LockAfter } from "../vault/idleLock";
-import type { SharingApi } from "../vault/useVault";
+import type { RecoveryKeys, SharingApi } from "../vault/useVault";
 
 /**
  * The six characters that name you to the people you share with.
@@ -136,6 +136,10 @@ export function Settings({
   onSaveBackup,
   state,
   sharing,
+  recoveryKeys,
+  onTurnOnRecoveryKeys,
+  onMakeRecoveryCode,
+  onAdoptRecoveryCode,
 }: {
   textSize: TextSize;
   appearance: Appearance;
@@ -158,6 +162,11 @@ export function Settings({
   state: VaultState;
   /** Null when this build has no Google account and so cannot share at all. */
   sharing: SharingApi | null;
+  /** Your printed code as a key of yours on every keyring. Null without backup. */
+  recoveryKeys: RecoveryKeys | null;
+  onTurnOnRecoveryKeys: () => Promise<void>;
+  onMakeRecoveryCode: () => Promise<void>;
+  onAdoptRecoveryCode: (code: string) => Promise<void>;
 }) {
   return (
     <>
@@ -209,6 +218,15 @@ export function Settings({
         ]}
         onChange={onTextSize}
       />
+
+      {recoveryKeys && (
+        <RecoveryKeysSection
+          keys={recoveryKeys}
+          onTurnOn={onTurnOnRecoveryKeys}
+          onMake={onMakeRecoveryCode}
+          onAdopt={onAdoptRecoveryCode}
+        />
+      )}
 
       <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
         <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
@@ -618,4 +636,117 @@ function download(text: string, name: string, type: string) {
   // The blob holds the contents in memory until released, and the download
   // has already been handed to the browser by this point.
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * Your recovery code, and which keyrings it can bring back.
+ *
+ * Said as a count of keyrings, not as "on": a key only protects a keyring from
+ * that keyring's next save, and one you can only view waits for its owner, so
+ * "set up" and "protecting you" are different things and only the second is
+ * worth telling anyone.
+ */
+function RecoveryKeysSection({
+  keys,
+  onTurnOn,
+  onMake,
+  onAdopt,
+}: {
+  keys: RecoveryKeys;
+  onTurnOn: () => Promise<void>;
+  onMake: () => Promise<void>;
+  onAdopt: (code: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const run = (action: () => Promise<void>) => async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That didn't work. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const protectedCount = keys.coverage.filter((entry) => entry.status === "protected").length;
+  const waiting = keys.coverage.filter((entry) => entry.status === "waiting-for-owner").length;
+  const viewOnly = keys.coverage.filter((entry) => entry.status === "view-only").length;
+  const failed = keys.coverage.filter((entry) => entry.status === "failed").length;
+
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: "0 0 1.75rem" }}>
+      <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
+        Your recovery code
+      </legend>
+      {!keys.checked ? (
+        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: 0 }}>
+          Checking what your recovery code can bring back…
+        </p>
+      ) : !keys.holdsCode ? (
+        <>
+          <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+            If you lose your face, fingerprint or PIN, your printed recovery code brings your
+            passwords back. Type it here once so this browser can keep it working — or, if you
+            have never had one, make one.
+          </p>
+          <label className="field">
+            <span>Your recovery code</span>
+            <div className="box">
+              <input
+                className="mono"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                placeholder="H7K2-9MNP-4RTV-8XZ3-QWC6-JD5F-P2TM-6BKX"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </label>
+          <div className="stack">
+            <button
+              type="button"
+              className="btn sec big"
+              disabled={busy || code.trim().length === 0}
+              onClick={run(() => onAdopt(code))}
+            >
+              {busy ? "Checking…" : "Use this code"}
+            </button>
+            <button type="button" className="btn sec big" disabled={busy} onClick={run(onMake)}>
+              I've never had one — make my recovery code
+            </button>
+          </div>
+        </>
+      ) : !keys.on ? (
+        <>
+          <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
+            Let your recovery code bring back every keyring by itself — including ones other
+            people share with you — even if this Google account's copy of your key is ever lost.
+            Update Keyweb on your phone first, and ask anyone you share keyrings with to update
+            theirs: versions before 0.2.0-beta.37 can't open a keyring once this is on.
+          </p>
+          <button type="button" className="btn sec big" disabled={busy} onClick={run(onTurnOn)}>
+            {busy ? "Setting it up…" : "Use my recovery code for every keyring"}
+          </button>
+        </>
+      ) : (
+        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: 0 }}>
+          Your recovery code can bring back {protectedCount} of {keys.coverage.length}{" "}
+          {keys.coverage.length === 1 ? "file" : "files"} — your list of keyrings and the
+          keyrings themselves.
+          {waiting > 0 &&
+            ` ${waiting} shared with you ${waiting === 1 ? "waits" : "wait"} for ${waiting === 1 ? "its" : "their"} owner to turn this on too.`}
+          {viewOnly > 0 &&
+            ` ${viewOnly} you can only view ${viewOnly === 1 ? "isn't" : "aren't"} covered; if you lose your key, ask ${viewOnly === 1 ? "its" : "their"} owner to add you again.`}
+          {failed > 0 && ` ${failed} couldn't be reached just now and will be tried again.`}
+        </p>
+      )}
+      {error && (
+        <p style={{ color: "var(--risk)", fontSize: "0.86em", margin: "0.6rem 0 0" }}>{error}</p>
+      )}
+    </fieldset>
+  );
 }
