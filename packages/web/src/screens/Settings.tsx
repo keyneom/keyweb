@@ -219,7 +219,7 @@ export function Settings({
         onChange={onTextSize}
       />
 
-      {recoveryKeys && (
+      {recoveryKeys?.checked && (
         <RecoveryKeysSection
           keys={recoveryKeys}
           onTurnOn={onTurnOnRecoveryKeys}
@@ -682,11 +682,7 @@ function RecoveryKeysSection({
       <legend style={{ fontWeight: 650, fontSize: "0.95em", padding: 0, marginBottom: "0.15rem" }}>
         Your recovery code
       </legend>
-      {!keys.checked ? (
-        <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: 0 }}>
-          Checking what your recovery code can bring back…
-        </p>
-      ) : !keys.holdsCode ? (
+      {!keys.holdsCode ? (
         <>
           <p style={{ color: "var(--muted)", fontSize: "0.86em", margin: "0 0 0.7rem" }}>
             If you lose your face, fingerprint or PIN, your printed recovery code brings your
