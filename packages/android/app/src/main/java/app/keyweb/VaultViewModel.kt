@@ -126,6 +126,18 @@ enum class BackupStage {
     ON,
 }
 
+/** Your printed code as a key of yours on every keyring, as Settings shows it. */
+data class RecoveryKeysUi(
+    /** This phone has the printed code. */
+    val holdsCode: Boolean = false,
+    /** Recovery keys are on for this account. */
+    val on: Boolean = false,
+    val coverage: List<app.keyweb.sharing.RecoveryCoverage> = emptyList(),
+    /** False until the first look, so Settings doesn't say "off" too early. */
+    val checked: Boolean = false,
+    val busy: Boolean = false,
+)
+
 data class BackupUiState(
     val stage: BackupStage = BackupStage.OFF,
     /** Non-null only in [BackupStage.SHOW_CODE], and never recoverable later. */
@@ -250,6 +262,7 @@ data class VaultUiState(
     val status: SyncStatus = SyncStatus(),
     val items: List<ItemRecord> = emptyList(),
     val backupConfigured: Boolean = false,
+    val recoveryKeys: RecoveryKeysUi = RecoveryKeysUi(),
     val backup: BackupUiState = BackupUiState(),
     /** Rule sets someone named and kept, alongside the built-in presets. */
     val savedRules: List<SavedRules> = emptyList(),
@@ -642,6 +655,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
      *  nothing readable stays in memory. */
     fun lock() {
         passkeyHost = null
+        recoveryCheckedAt = 0L
         dropSecrets()
         _state.value = VaultUiState(phase = VaultPhase.LOCKED, firstRun = false)
     }
@@ -1125,6 +1139,21 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     )
                     return@launch
                 }
+                /*
+                 * No old file is not the same as no code. A lock another
+                 * device wrote, or a recovery key a browser put on the index,
+                 * means a code already exists — and minting a second here
+                 * would retire the sheet somebody already wrote down.
+                 */
+                val codeExists =
+                    runCatching { sharingIdentity?.recoveryLock() != null }.getOrDefault(false) ||
+                        runCatching { sharing?.hasRecoveryKey() == true }.getOrDefault(false)
+                if (codeExists) {
+                    _state.value = _state.value.copy(
+                        backup = BackupUiState(stage = BackupStage.NEEDS_CODE),
+                    )
+                    return@launch
+                }
                 val secret = RecoveryCode.generate()
                 finishSetup(secret, existing = null)
                 _state.value = _state.value.copy(
@@ -1230,7 +1259,34 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
                     VaultEnvelopeCipher.forRecoveryCode(secret, existing).open(existing)
                 }.isSuccess
 
-                if (recovered == null && !opensOld) {
+                /*
+                 * Neither: an account whose code was only ever put on its
+                 * keyrings as a recovery key, by a browser. If this phone is
+                 * already you, opening that key proves the code and nothing
+                 * else is needed. If it isn't — no passkey this phone can use
+                 * — the key signs a new key of yours in where the lost one was.
+                 */
+                val viaKey = recovered == null && !opensOld &&
+                    runCatching { sharing?.recoveryKeyOpensWith(secret) == true }.getOrDefault(false)
+                if (viaKey) {
+                    val alreadyMe = runCatching { sharingIdentity?.get() }.getOrNull() != null
+                    val controller = sharingController
+                    if (!alreadyMe && controller != null) {
+                        sharingIdentity?.recoverWithRecoveryKey { replacement ->
+                            app.keyweb.sharing.recoverWithParticipantKey(
+                                controller = controller,
+                                secret = secret,
+                                replacement = replacement,
+                                indexDatasetId = app.keyweb.sharing.INDEX_DATASET_ID,
+                            ) {
+                                val index = controller.loadDataset(app.keyweb.sharing.INDEX_DATASET_ID).value
+                                app.keyweb.vault.boundDatasets(index).map { it.datasetId }.distinct()
+                            }
+                        }
+                    }
+                }
+
+                if (recovered == null && !opensOld && !viaKey) {
                     throw InvalidRecoveryCode("That code doesn't open anything in this Google account.")
                 }
 
@@ -1334,8 +1390,65 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
             // another device already moved is seen as moved. Quiet on
             // failure: idempotent, and it simply runs again next sync.
             runCatching { sharing?.ensureOwnFiles() }
+            if (System.currentTimeMillis() - recoveryCheckedAt > RECOVERY_KEYS_EVERY_MS) {
+                runCatching { refreshRecoveryKeys(turnOn = null) }
+            }
             refreshReadOnly()
             publish(engine.state())
+        }
+    }
+
+    /** When the recovery keys were last looked after, so a sync doesn't do it every time. */
+    private var recoveryCheckedAt = 0L
+
+    /**
+     * Keep your recovery key on your keyrings, and say where it is.
+     *
+     * After a sync and no more than every ten minutes: it reads each
+     * keyring's list of keys, which is a request per keyring, and nothing about
+     * it changes from one save to the next. The account's copy of your sharing
+     * key is looked at too, so a key replaced by a recovery on another device
+     * is picked up here.
+     */
+    private suspend fun refreshRecoveryKeys(turnOn: Boolean?) {
+        val engine = sharing ?: return
+        recoveryCheckedAt = System.currentTimeMillis()
+        runCatching { sharingIdentity?.refreshFromAccount() }
+        val secret = storedSecret()
+        if (secret == null) {
+            _state.value = _state.value.copy(recoveryKeys = RecoveryKeysUi(checked = true))
+            return
+        }
+        val coverage = engine.keepRecoveryKeys(secret, turnOn)
+        _state.value = _state.value.copy(
+            recoveryKeys = RecoveryKeysUi(
+                holdsCode = true,
+                on = coverage.isNotEmpty(),
+                coverage = coverage,
+                checked = true,
+            ),
+        )
+    }
+
+    /**
+     * Turn recovery keys on for this account, from this phone.
+     *
+     * The one deliberate step: a keyring that allows them can't be opened by
+     * Keyweb before 0.2.0-beta.37, so whoever presses it is saying their other
+     * devices are up to date. Every device of theirs carries on by itself.
+     */
+    fun turnOnRecoveryKeys() {
+        _state.value = _state.value.copy(recoveryKeys = _state.value.recoveryKeys.copy(busy = true))
+        viewModelScope.launch {
+            try {
+                refreshRecoveryKeys(turnOn = true)
+                showToast("Your recovery code now protects your keyrings.")
+            } catch (cause: Exception) {
+                _state.value = _state.value.copy(
+                    recoveryKeys = _state.value.recoveryKeys.copy(busy = false),
+                )
+                showToast(cause.message ?: "Keyweb couldn't set that up. Try again.")
+            }
         }
     }
 
@@ -2684,6 +2797,7 @@ class VaultViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val RECOVERY_SECRET_KEY = "recovery-secret"
+        const val RECOVERY_KEYS_EVERY_MS = 10 * 60_000L
         const val CHOSEN_BACKUP_KEY = "chosen-backup-file"
     }
 }

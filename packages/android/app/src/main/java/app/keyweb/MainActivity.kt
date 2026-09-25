@@ -694,6 +694,8 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     is Route.Settings -> SettingsScreen(
                         largeText = largeText,
                         darkMode = darkOverride,
+                        recoveryKeys = ui.recoveryKeys.takeIf { ui.backupConfigured },
+                        onTurnOnRecoveryKeys = viewModel::turnOnRecoveryKeys,
                         lockAfter = lockAfter,
                         onLockAfter = {
                             lockAfter = it

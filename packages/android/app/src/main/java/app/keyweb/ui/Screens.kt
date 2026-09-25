@@ -57,6 +57,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.keyweb.LockAfter
+import app.keyweb.RecoveryKeysUi
+import app.keyweb.sharing.RecoveryStatus
 import app.keyweb.vault.Fields
 import app.keyweb.vault.PasswordRules
 import app.keyweb.vault.SavedRules
@@ -1608,6 +1610,9 @@ fun SettingsScreen(
     onLock: () -> Unit = {},
     lockAfter: LockAfter = LockAfter.DEFAULT,
     onLockAfter: (LockAfter) -> Unit = {},
+    /** Your printed code as a key on every keyring. Null without backup. */
+    recoveryKeys: RecoveryKeysUi? = null,
+    onTurnOnRecoveryKeys: () -> Unit = {},
     onExport: (csv: Boolean) -> Unit = {},
     /** Save the vault sealed so the printed code opens it. */
     onSaveBackupFile: () -> Unit = {},
@@ -1731,6 +1736,10 @@ fun SettingsScreen(
             )
             for (choice in LockAfter.entries) {
                 ChoiceButton(choice.label, lockAfter == choice) { onLockAfter(choice) }
+            }
+
+            if (recoveryKeys != null && recoveryKeys.checked && recoveryKeys.holdsCode) {
+                RecoveryKeysSection(recoveryKeys, onTurnOnRecoveryKeys)
             }
 
             /*
@@ -1972,6 +1981,60 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * Your recovery code, and which keyrings it can bring back.
+ *
+ * Said as a count, not as "on": a key protects a keyring only from its next
+ * save, and one you can only view waits for its owner, so "set up" and
+ * "protecting you" differ and only the second is worth telling anyone.
+ */
+@Composable
+private fun RecoveryKeysSection(keys: RecoveryKeysUi, onTurnOn: () -> Unit) {
+    val statusColors = LocalKeywebStatus.current
+    Spacer(Modifier.height(24.dp))
+    Text("Your recovery code", style = MaterialTheme.typography.labelLarge)
+    if (!keys.on) {
+        Text(
+            "Let your recovery code bring back every keyring by itself — including ones " +
+                "other people share with you — even if this Google account's copy of your key " +
+                "is ever lost. Update Keyweb on your other devices first, and ask anyone you " +
+                "share keyrings with to update theirs: versions before 0.2.0-beta.37 can't open " +
+                "a keyring once this is on.",
+            color = statusColors.muted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        SecondaryButton(
+            if (keys.busy) "Setting it up…" else "Use my recovery code for every keyring",
+            onTurnOn,
+        )
+        return
+    }
+    val count = { status: RecoveryStatus -> keys.coverage.count { it.status == status } }
+    val protected = count(RecoveryStatus.PROTECTED)
+    val waiting = count(RecoveryStatus.WAITING_FOR_OWNER)
+    val viewOnly = count(RecoveryStatus.VIEW_ONLY)
+    val failed = count(RecoveryStatus.FAILED)
+    val total = keys.coverage.size
+    val text = buildString {
+        append(
+            "Your recovery code can bring back $protected of $total " +
+                "${if (total == 1) "file" else "files"} — your list of keyrings and the keyrings themselves.",
+        )
+        if (waiting > 0) {
+            append(" $waiting shared with you ${if (waiting == 1) "waits for its" else "wait for their"} owner to turn this on too.")
+        }
+        if (viewOnly > 0) {
+            append(
+                " $viewOnly you can only view ${if (viewOnly == 1) "isn't" else "aren't"} covered; " +
+                    "if you lose your key, ask ${if (viewOnly == 1) "its" else "their"} owner to add you again.",
+            )
+        }
+        if (failed > 0) append(" $failed couldn't be reached just now and will be tried again.")
+    }
+    Text(text, color = statusColors.muted, style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable

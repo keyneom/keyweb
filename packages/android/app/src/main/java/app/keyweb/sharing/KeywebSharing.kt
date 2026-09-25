@@ -6,6 +6,8 @@ import app.keyweb.vault.VAULT_DOCUMENT
 import app.keyweb.vault.VaultState
 import app.keyweb.vault.VaultSync
 import app.keyweb.vault.datasetOf
+import com.keyneom.synckit.crypto.SyncKitJson
+import com.keyneom.synckit.sharing.SharedBackupAdditionalKeyV1
 import com.keyneom.synckit.sharing.SharedBackupController
 import com.keyneom.synckit.sharing.SharedBackupOwnershipTransferV1
 import com.keyneom.synckit.sharing.SharingDatasetFileV1
@@ -42,6 +44,9 @@ private const val PENDING_KEY = "sharing:pending-invites"
 private const val JOINED_KEY = "sharing:joined-datasets"
 private const val MEMBER_EMAILS_KEY = "sharing:member-emails"
 private const val ROLES_KEY = "sharing:roles"
+
+/** The recovery key this device attaches, once made. Same name as the web's. */
+private const val RECOVERY_KEY_META = "participant-recovery-key"
 
 /**
  * Datasets someone other than this person holds the key to.
@@ -697,6 +702,56 @@ class KeywebSharing(
         val emails = memberEmails().toMutableMap()
         emails[keyId] = email
         writeMeta(MEMBER_EMAILS_KEY, json.encodeToString(MemberEmails, emails))
+    }
+
+    // ---- Your printed code, as a key of yours on every keyring ----
+
+    /**
+     * Put your recovery key on the index and every keyring you can write.
+     *
+     * Named apart from the top-level [protectWithRecoveryCode] it calls: a
+     * member with the same name would shadow it and call itself.
+     */
+    suspend fun keepRecoveryKeys(secret: ByteArray, turnOn: Boolean? = null): List<RecoveryCoverage> {
+        val me = identity.getOrCreate()
+        val keyrings = sync.state().keyrings.values
+            .filter { !it.deleted.value }
+            .mapNotNull { datasetOf(it) }
+            .distinct()
+        return protectWithRecoveryCode(
+            controller = controller,
+            identity = me,
+            memory = recoveryMemory,
+            datasetIds = listOf(INDEX_DATASET_ID) + keyrings,
+            secret = secret,
+            turnOn = turnOn,
+        )
+    }
+
+    /** Your index already carries a recovery key of yours: some device made a code. */
+    suspend fun hasRecoveryKey(): Boolean {
+        val me = identity.getOrCreate().publicKey.keyId
+        return controller.getDatasetParticipantKeys(INDEX_DATASET_ID).keys
+            .any { it.principalKeyId == me && it.purpose == "recovery" }
+    }
+
+    /** This code opens your recovery key on the index. */
+    suspend fun recoveryKeyOpensWith(secret: ByteArray): Boolean =
+        runCatching { controller.openRecoveryKey(INDEX_DATASET_ID, participantRecoveryCode(secret)) }.isSuccess
+
+    private val recoveryMemory = object : RecoveryKeyMemory {
+        override suspend fun remembered(): SharedBackupAdditionalKeyV1? =
+            readMeta(RECOVERY_KEY_META)?.let {
+                runCatching {
+                    SyncKitJson.instance.decodeFromString(SharedBackupAdditionalKeyV1.serializer(), it)
+                }.getOrNull()
+            }
+
+        override suspend fun remember(key: SharedBackupAdditionalKeyV1) =
+            writeMeta(
+                RECOVERY_KEY_META,
+                SyncKitJson.instance.encodeToString(SharedBackupAdditionalKeyV1.serializer(), key),
+            )
     }
 
     private suspend fun readMeta(key: String): String? = dao.meta(key)?.takeIf { it.isNotBlank() }

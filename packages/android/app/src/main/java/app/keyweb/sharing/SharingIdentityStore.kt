@@ -118,6 +118,18 @@ class KeywebSharingIdentityStore(
         remote.delete(appId)
         local.delete(appId)
     }
+
+    /**
+     * Take the account's record in place of this device's copy, if it changed.
+     *
+     * Recovering with the printed code elsewhere puts a new key in the
+     * account and takes the old one off every keyring; a device that only
+     * ever read its own copy would keep offering the old key for ever.
+     */
+    suspend fun refresh(appId: String) {
+        val stored = remote.load(appId) ?: return
+        if (stored != local.load(appId)) local.save(stored)
+    }
 }
 
 /**
@@ -282,6 +294,34 @@ class KeywebSharingIdentity(
         cached = identity
         identity
     }
+
+    /** Pick up a key replaced on another device, for the next unlock. */
+    suspend fun refreshFromAccount() {
+        (store as? KeywebSharingIdentityStore)?.refresh(appId)
+    }
+
+    /**
+     * Become a participant again through the recovery key on your files.
+     *
+     * For an account the code never wrote a lock for. A new passkey and a new
+     * key under it; [rotate] has the recovery key sign that key in where the
+     * lost one was, acting as the new key throughout — which is why it is
+     * held here before [rotate] runs. Saved only once the rotation has landed,
+     * so a failure leaves the account's record as it was.
+     */
+    suspend fun recoverWithRecoveryKey(rotate: suspend (SharingIdentity) -> Unit): SharingIdentity =
+        gate.withLock {
+            val created = passkey.create(appId)
+            cached = created.identity
+            try {
+                rotate(created.identity)
+            } catch (cause: Exception) {
+                cached = null
+                throw cause
+            }
+            store.save(created.record)
+            created.identity
+        }
 
     /**
      * The lock the printed code opens, as it stands in the account.
