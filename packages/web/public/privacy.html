@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2B3F53" />
+    <title>Privacy policy — Keyweb</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f4f2ed;
+        --ink: #16202b;
+        --muted: #5b6672;
+        --line: #dcd8cf;
+        --accent: #2b3f53;
+        --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --paper: #11161c;
+          --ink: #e9ecef;
+          --muted: #93a0ad;
+          --line: #2c3742;
+          --accent: #8fb3d4;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--ui);
+        font-size: 17px;
+        line-height: 1.55;
+      }
+      main {
+        max-width: 40rem;
+        margin: 0 auto;
+        padding: 2.5rem 1.25rem 4rem;
+      }
+      .back {
+        margin: 0 0 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.35rem;
+      }
+      .updated {
+        color: var(--muted);
+        margin: 0 0 1.75rem;
+      }
+      h2 {
+        font-size: 1.05rem;
+        font-weight: 650;
+        margin: 2rem 0 0.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--line);
+      }
+      p,
+      li {
+        margin: 0 0 0.85rem;
+      }
+      ul {
+        margin: 0 0 0.85rem;
+        padding-left: 1.2rem;
+      }
+      a {
+        color: var(--accent);
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="back"><a href="./">Keyweb</a></p>
+      <h1>Privacy policy</h1>
+      <p class="updated">28 September 2026</p>
+
+      <p>
+        Keyweb keeps your passwords, notes and sign-in codes on your devices. If you turn on
+        backup, it also keeps an encrypted copy in your Google Drive, so another device signed in
+        to the same Google account can open the same vault. Sharing a keyring works the same way:
+        the file sits in your Drive, encrypted for the people you add.
+      </p>
+      <p>
+        There is no Keyweb account, and no Keyweb server that stores the vault. This page is part
+        of the website. The Android app does the same job and is covered by the same policy.
+      </p>
+
+      <h2>On your device</h2>
+      <p>
+        The vault is stored in this browser, or in the app's private storage on Android. It is
+        scrambled with a key held by your face, fingerprint, PIN or recovery code. Without one of
+        those, the copy on the device cannot be read. Keyweb never receives the face or the
+        fingerprint. The device checks them, and only then releases the key.
+      </p>
+      <p>
+        A few preferences sit beside the vault and are not part of it: text size, light or dark,
+        how long Keyweb waits before locking, sort order, and which Drive file this browser is
+        using.
+      </p>
+      <p>
+        A sign-in code you scan is read on the device. The camera picture is not uploaded. The
+        password you type to open a KeePass file is used once, to copy from that file, and is not
+        kept. Keyweb does not write back to the KeePass file.
+      </p>
+      <p>
+        The Android app turns off Android's backup of app data, so the vault is not included in
+        Google's backup of the phone. A Drive file you chose to make is a separate copy. On
+        launch, the Android app also asks GitHub whether a newer version has been published.
+        That request tells GitHub the device's IP address and that Keyweb is installed. It does
+        not include the vault or a Google account.
+      </p>
+
+      <h2>Google Drive</h2>
+      <p>
+        Backup and sharing are optional. When you use them, Keyweb asks Google for two permissions
+        and no others.
+      </p>
+      <ul>
+        <li>
+          <strong>Files Keyweb creates, and files you pick</strong> (<code>drive.file</code>).
+          Keyweb cannot browse the rest of your Drive. It creates a folder named Keyweb and a file
+          named <code>keyweb-vault-v1.json</code>. That file is the same sealed vault the device
+          holds. Shared keyrings go in a folder named Keyweb shared keyrings. Each one is encrypted
+          for the people on that keyring, not with the key that opens everything else. A KeePass
+          file, or a keyring someone has shared with you, stays out of reach until you choose it
+          in Google's file picker.
+        </li>
+        <li>
+          <strong>A hidden folder only this app can use</strong> (<code>drive.appdata</code>). It
+          holds your sharing key, wrapped so only your own devices can open it. A second browser or
+          phone signed in to the same Google account reads that copy, which is how both devices
+          count as the same person when a keyring is shared. The folder does not appear in your
+          Drive file list. It is not your passwords.
+        </li>
+      </ul>
+      <p>
+        Keyweb also reads the name, size and last-changed time of those files, so two of your
+        devices can tell which copy is newer. Google stores the files. Google can see the folder
+        names, the file names, and which Google accounts a shared file is shared with. Google
+        cannot read the passwords inside. There is nowhere else for them to be sent.
+      </p>
+      <p>
+        While you are signed in, Keyweb holds a short-lived access token in memory and sends it
+        only to Google.
+      </p>
+
+      <h2>Email addresses</h2>
+      <p>
+        To share a keyring you type the other person's email address. Keyweb gives that address to
+        Google Drive, which is how Drive can hand them the file. Keyweb remembers it on your
+        device so the screen can show a name. That list is not part of the encrypted file in
+        Drive, and it is not sent anywhere else.
+      </p>
+      <p>
+        Keyweb also asks Google for the email address of the account you signed in with. If Google
+        returns one, it is written on the link you send, so the other person can see who it came
+        from. The keyring is tied to a key, not to that address. If Google does not return an
+        address, the link has none.
+      </p>
+      <p>
+        You send the link yourself. It does not contain passwords. It can contain your email and
+        the keyring's name, as labels, and the public keys the share needs. Anyone you send it to
+        can read those labels, and so can anyone they pass it to. Opening the link loads this
+        site, so the address of the link is part of that request.
+      </p>
+
+      <h2>Filling in a password</h2>
+      <p>
+        On Android, if you turn autofill on, Keyweb types a password into the app or site you are
+        signing in to. That is the only place it goes.
+      </p>
+
+      <h2>This website</h2>
+      <p>
+        Keyweb does not sell information, show ads, or send the vault to an analytics or crash
+        service. The site is hosted on GitHub Pages. Loading it is a request to GitHub, which
+        receives the ordinary facts of that request, such as your IP address. The vault is not
+        part of the request.
+      </p>
+
+      <h2>Taking access away</h2>
+      <p>
+        You can delete a Drive backup from Settings. Google keeps a deleted Drive file in the bin
+        for about thirty days.
+      </p>
+      <p>
+        Clearing this site's data, or uninstalling the Android app, removes the copy on that
+        device. It does not remove files already in Drive.
+      </p>
+      <p>
+        You can withdraw Keyweb's permission from your Google Account settings. After that, Keyweb
+        cannot reach Drive. Files already there stay until you delete them.
+      </p>
+
+      <h2>Google's rules for this data</h2>
+      <p>
+        Keyweb's use and transfer to any other app of information received from Google APIs will
+        adhere to the
+        <a href="https://developers.google.com/terms/api-services-user-data-policy"
+          >Google API Services User Data Policy</a
+        >, including the Limited Use requirements. That information is used to keep the backup you
+        asked for and to share the keyrings you ask to share. It is not used for advertising, and
+        it is not sold.
+      </p>
+
+      <h2>Terms of use</h2>
+      <p>
+        This page says what happens to information. What Keyweb does not promise, including if a
+        vault is lost or broken into, is the <a href="terms.html">terms of use</a>.
+      </p>
+
+      <h2>Changes</h2>
+      <p>The date at the top of this page changes when the page changes.</p>
+
+      <h2>Questions</h2>
+      <p>
+        <a href="https://github.com/keyneom/keyweb/issues">github.com/keyneom/keyweb</a>
+      </p>
+    </main>
+  </body>
+</html>

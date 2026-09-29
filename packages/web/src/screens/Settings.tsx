@@ -273,6 +273,12 @@ export function Settings({
         ]}
         onChange={onAppearance}
       />
+
+      <p className="fineprint">
+        <a href="privacy.html">Privacy policy</a>
+        {" · "}
+        <a href="terms.html">Terms of use</a>
+      </p>
     </>
   );
 }

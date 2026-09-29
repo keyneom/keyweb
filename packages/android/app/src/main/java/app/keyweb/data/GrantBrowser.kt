@@ -100,9 +100,9 @@ object GrantBrowser {
         choose(AndroidEnvironment(activity), url)
 
     /** Puts the grant URL on the clipboard so it can be opened by hand. */
-    fun copyLink(context: Context, url: String = GRANT_URL) {
+    fun copyLink(context: Context, url: String = GRANT_URL, label: String = "Keyweb grant link") {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        clipboard?.setPrimaryClip(ClipData.newPlainText("Keyweb grant link", url))
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, url))
     }
 
     /**

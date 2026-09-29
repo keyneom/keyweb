@@ -107,7 +107,7 @@ class MainActivity : FragmentActivity() {
          * every other password manager does.
          */
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        setContent { KeywebApp(viewModel, this) }
+        setContent { KeywebApp(viewModel, this, ::openPage) }
         consumeLink(intent)
     }
 
@@ -127,6 +127,13 @@ class MainActivity : FragmentActivity() {
         val url = intent?.data?.toString() ?: return
         intent.data = null
         setIntent(intent)
+        // The policy and the terms share the App Link host. They are pages,
+        // not shares, and have to open in a browser or the app reports a
+        // broken invitation.
+        if (LegalPages.isPage(url)) {
+            openPage(url)
+            return
+        }
         viewModel.openShareLink(url)
     }
 
@@ -151,6 +158,16 @@ class MainActivity : FragmentActivity() {
         viewModel.touched()
     }
 
+    /** A hosted page, in a browser, never back into this App Link. */
+    private fun openPage(url: String) {
+        if (!GrantBrowser.open(this, url)) {
+            GrantBrowser.copyLink(this, url, "Keyweb")
+            viewModel.showToast(
+                "Keyweb couldn't open a browser. The link is copied — paste it into any browser.",
+            )
+        }
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -159,7 +176,11 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
+private fun KeywebApp(
+    viewModel: VaultViewModel,
+    activity: FragmentActivity,
+    onOpenPage: (String) -> Unit,
+) {
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("keyweb", Context.MODE_PRIVATE)
@@ -406,6 +427,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                         error = ui.error,
                         onUnlock = { viewModel.unlock(activity) },
                         notice = ui.lockedNotice,
+                        onOpenPage = onOpenPage,
                     )
                     return@Box
                 }
@@ -692,6 +714,7 @@ private fun KeywebApp(viewModel: VaultViewModel, activity: FragmentActivity) {
                     )
 
                     is Route.Settings -> SettingsScreen(
+                        onOpenPage = onOpenPage,
                         largeText = largeText,
                         darkMode = darkOverride,
                         recoveryKeys = ui.recoveryKeys.takeIf { ui.backupConfigured },

@@ -13,11 +13,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.keyweb.LegalPages
 import app.keyweb.VaultPhase
 
 /**
@@ -42,6 +44,7 @@ fun UnlockScreen(
     onUnlock: () -> Unit,
     /** Why the vault is locked, when it was not somebody pressing Lock. */
     notice: String? = null,
+    onOpenPage: (String) -> Unit = {},
 ) {
     val statusColors = LocalKeywebStatus.current
 
@@ -57,6 +60,7 @@ fun UnlockScreen(
                     "Set a PIN, pattern, password or fingerprint in your phone's settings, " +
                         "then come back. Without one, there is no safe place to keep the key.",
                 )
+                LegalFooter(firstRun, onOpenPage)
                 return@Column
             }
 
@@ -116,7 +120,27 @@ fun UnlockScreen(
                 )
             }
 
+            LegalFooter(firstRun, onOpenPage)
             Spacer(Modifier.height(24.dp).align(Alignment.CenterHorizontally))
         }
+    }
+}
+
+@Composable
+private fun LegalFooter(firstRun: Boolean, onOpenPage: (String) -> Unit) {
+    val statusColors = LocalKeywebStatus.current
+    Spacer(Modifier.height(20.dp))
+    if (firstRun) {
+        Text(
+            "Setting up Keyweb means you agree to these terms.",
+            color = statusColors.muted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    TextButton(onClick = { onOpenPage(LegalPages.PRIVACY) }) {
+        Text("Privacy policy", style = MaterialTheme.typography.bodyLarge)
+    }
+    TextButton(onClick = { onOpenPage(LegalPages.TERMS) }) {
+        Text("Terms of use", style = MaterialTheme.typography.bodyLarge)
     }
 }

@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import app.keyweb.LegalPages
 import app.keyweb.LockAfter
 import app.keyweb.RecoveryKeysUi
 import app.keyweb.sharing.RecoveryStatus
@@ -1630,6 +1631,7 @@ fun SettingsScreen(
     sharingKey: String? = null,
     canShare: Boolean = false,
     onShowSharingKey: () -> Unit = {},
+    onOpenPage: (String) -> Unit = {},
 ) {
     val statusColors = LocalKeywebStatus.current
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -1978,6 +1980,14 @@ fun SettingsScreen(
             ChoiceButton("Match my phone", darkMode == null) { onDarkMode(null) }
             ChoiceButton("Always light", darkMode == false) { onDarkMode(false) }
             ChoiceButton("Always dark", darkMode == true) { onDarkMode(true) }
+
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { onOpenPage(LegalPages.PRIVACY) }) {
+                Text("Privacy policy", style = MaterialTheme.typography.bodyLarge)
+            }
+            TextButton(onClick = { onOpenPage(LegalPages.TERMS) }) {
+                Text("Terms of use", style = MaterialTheme.typography.bodyLarge)
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

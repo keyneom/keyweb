@@ -70,6 +70,12 @@ export function Unlock({
           If you saved a Keyweb backup file, your recovery code opens it here.
         </p>
         <BackupFileEntry busy={false} onOpen={onRestoreFromFile} />
+        <p className="fineprint">
+          {firstRun && <>Setting up Keyweb means you agree to these terms. </>}
+          <a href="privacy.html">Privacy policy</a>
+          {" · "}
+          <a href="terms.html">Terms of use</a>
+        </p>
       </section>
     );
   }
@@ -291,6 +297,12 @@ export function Unlock({
           </span>
         </p>
       )}
+      <p className="fineprint">
+        {firstRun && <>Setting up Keyweb means you agree to these terms. </>}
+        <a href="privacy.html">Privacy policy</a>
+        {" · "}
+        <a href="terms.html">Terms of use</a>
+      </p>
     </section>
   );
 }

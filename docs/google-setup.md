@@ -59,6 +59,14 @@ never have.
   Anyone not listed gets a hard "access blocked" error that reads like a bug in
   Keyweb rather than a console setting. Every family member used to test sharing
   must be added here first.
+- Publishing to production needs a privacy-policy URL on **Branding**, on the
+  same host as the app. Both requested scopes (`drive.file` and `drive.appdata`)
+  are non-sensitive, so this is not the sensitive-scope review. The page is
+  `packages/web/public/privacy.html`, served at
+  `https://keyneom.github.io/keyweb/privacy.html`. Application home page:
+  `https://keyneom.github.io/keyweb/`. The unlock screen links to it. Terms of
+  use, which are what limit liability, are optional on that screen:
+  `https://keyneom.github.io/keyweb/terms.html`.
 
 ## Credentials
 
