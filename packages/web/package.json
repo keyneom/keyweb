@@ -33,7 +33,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "fake-indexeddb": "^6.0.0",
     "typescript": "^5.9.2",
-    "vite": "^8.2.2",
+    "vite": "^8.3.4",
     "vite-node": "^6.0.0",
     "vitest": "^4.1.9"
   }
